@@ -1,10 +1,17 @@
 // Cosmgrid-Agent 主入口
 // v0.3：启动时调 initSchema() 建表（tauri-plugin-sql）
 // v0.4.3：加全局 Token Plan 阈值告警条（60s 拉一次，超阈值显示在顶部）
+// v0.5：加首次启动 4 步引导（OnboardingModal）
 import { useState, useEffect } from "react";
 import { AlertTriangle, Bot, KeyRound, MessageSquare, LayoutTemplate, Coins, FolderKanban, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { initSchema, seedBuiltInTemplates, tokenPlans as dbTokenPlans, type TokenPlan } from "@/lib/db";
+import {
+  initSchema,
+  seedBuiltInTemplates,
+  tokenPlans as dbTokenPlans,
+  apiCredentials as dbCredentials,
+  type TokenPlan,
+} from "@/lib/db";
 import { planUsageLevel, type UsageLevel } from "@/lib/llm/plan-thresholds";
 import { cn } from "@/lib/utils";
 import { ChatPage } from "@/pages/ChatPage";
@@ -13,6 +20,7 @@ import { TemplatesPage } from "@/pages/TemplatesPage";
 import { TokenPlansPage } from "@/pages/TokenPlansPage";
 import { ProjectsPage } from "@/pages/ProjectsPage";
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
+import { OnboardingModal } from "@/pages/OnboardingModal";
 
 type PageKey = "chat" | "providers" | "templates" | "tokenPlans" | "projects";
 
@@ -38,6 +46,8 @@ function App() {
   const [plans, setPlans] = useState<TokenPlan[]>([]);
   // 用户主动关闭告警（不持久化，刷新后再次出现，避免"永远静音"）
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  // 首次启动引导：拉一次 provider 数量判断要不要弹
+  const [providerCount, setProviderCount] = useState(0);
 
   useEffect(() => {
     void initSchema()
@@ -45,6 +55,19 @@ function App() {
       .then(() => setDbReady(true))
       .catch((err: unknown) => setDbError(err instanceof Error ? err.message : "数据库初始化失败"));
   }, []);
+
+  // 启动后拉一次 provider 数量（用于 OnboardingModal 触发判断）
+  useEffect(() => {
+    if (!dbReady) return;
+    void dbCredentials.list().then((c) => setProviderCount(c.length));
+  }, [dbReady]);
+
+  // 用户在引导里跳到对应页后，providers 列表可能更新——再拉一次
+  useEffect(() => {
+    if (page === "providers") {
+      void dbCredentials.list().then((c) => setProviderCount(c.length));
+    }
+  }, [page]);
 
   // Token Plan 阈值监控：启动 + 每 60s 拉一次
   useEffect(() => {
@@ -83,6 +106,12 @@ function App() {
 
   return (
     <div className="flex h-screen bg-background text-foreground">
+      {/* 首次启动引导弹窗（v0.5）—— 没 provider 时自动弹，用户关掉后不再骚扰 */}
+      <OnboardingModal
+        providerCount={providerCount}
+        onNavigate={(p) => setPage(p)}
+      />
+
       {/* 侧栏 */}
       <aside className="w-56 border-r flex flex-col p-3 gap-1 bg-muted/30">
         <div className="px-2 py-3 mb-2">
