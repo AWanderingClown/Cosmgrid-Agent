@@ -1,7 +1,7 @@
 // ProjectDetailPage - 项目详情页（7.6 多 AI 协作面板 / 4.10 接力 / 7.12 检查点）
-// 阶段时间线 + 阶段对话（复用 ChatPage 的 streamText 模式）+ 检查点 CRUD + 接力包生成
+// 阶段时间线 + 阶段对话（复用 ChatPage 的 streamWithFallback 模式）+ 检查点 CRUD + 接力包生成
+// v0.4.1：阶段对话改用 streamWithFallback，按 stage.workRole 找模板里的 fallback；UsageEvent 落盘
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { streamText } from "ai";
 import {
   ArrowLeft,
   Bot,
@@ -18,6 +18,7 @@ import {
   Square,
   Trash2,
   User,
+  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -45,6 +46,7 @@ import { WORK_ROLES } from "@/lib/api";
 import {
   projects as dbProjects,
   projectStages as dbStages,
+  projectTemplateRoles as dbTemplateRoles,
   checkpoints as dbCheckpoints,
   handoffPackets as dbHandoffs,
   conversations as dbConversations,
@@ -53,6 +55,7 @@ import {
   apiCredentials as dbCredentials,
   type Project,
   type ProjectStage,
+  type ProjectTemplateRole,
   type Checkpoint,
   type HandoffPacket,
   type Model,
@@ -60,8 +63,9 @@ import {
   type DbMessage,
 } from "@/lib/db";
 import { getApiKey } from "@/lib/keystore";
-import { getLanguageModel } from "@/lib/llm/provider-factory";
+import { streamWithFallback, toModelEndpoint } from "@/lib/llm/chat-fallback";
 import { generateCheckpointDraft } from "@/lib/llm/checkpoint-generator";
+import { getLanguageModel } from "@/lib/llm/provider-factory";
 
 // ============ 静态映射 ============
 
@@ -103,7 +107,7 @@ function formatCost(v: number): string {
   return `¥${v.toFixed(2)}`;
 }
 
-// ============ 阶段内对话组件（复用 ChatPage streamText 模式）============
+// ============ 阶段内对话组件（复用 ChatPage streamWithFallback 模式）============
 
 interface StageChatProps {
   stage: ProjectStage;
@@ -111,6 +115,7 @@ interface StageChatProps {
   credential: ApiCredential;
   apiKey: string;
   conversationId: string;
+  fallback: { model: Model; credential: ApiCredential; apiKey: string } | null;
 }
 
 const ChatBubble = memo(function ChatBubble({
@@ -152,11 +157,12 @@ const ChatBubble = memo(function ChatBubble({
   );
 });
 
-function StageChat({ stage, model, credential, apiKey, conversationId }: StageChatProps) {
+function StageChat({ stage, model, credential, apiKey, conversationId, fallback }: StageChatProps) {
   const [history, setHistory] = useState<DbMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [streamErr, setStreamErr] = useState<string | null>(null);
+  const [switchNotice, setSwitchNotice] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   async function loadHistory() {
@@ -174,6 +180,7 @@ function StageChat({ stage, model, credential, apiKey, conversationId }: StageCh
     if (!text || streaming) return;
     setDraft("");
     setStreamErr(null);
+    setSwitchNotice(null);
     setStreaming(true);
 
     // 持久化 user 消息
@@ -204,50 +211,67 @@ function StageChat({ stage, model, credential, apiKey, conversationId }: StageCh
     const controller = new AbortController();
     abortRef.current = controller;
 
+    // 构造端点（toModelEndpoint 内部校验 provider.type 缺省并抛错）
+    let primary;
     try {
-      if (!model.provider?.type) {
-        throw new Error("模型缺少 provider 类型信息，请重新添加 Provider");
-      }
-      const languageModel = getLanguageModel(
-        model.provider.type,
-        model.name,
-        apiKey,
-        credential.baseUrl,
-      );
-      const result = streamText({
-        model: languageModel,
-        messages: [...history, userMsg].map((m) => ({
+      primary = toModelEndpoint(model, credential, apiKey);
+    } catch (err) {
+      setStreamErr(err instanceof Error ? err.message : "构造模型端点失败");
+      setStreaming(false);
+      return;
+    }
+
+    // fallback 是 ProjectTemplateRole.fallbackModelId 对应的模型（无则单元素链）
+    const chain = fallback
+      ? [
+          primary,
+          toModelEndpoint(fallback.model, fallback.credential, fallback.apiKey),
+        ]
+      : [primary];
+
+    let full = "";
+    try {
+      await streamWithFallback(
+        chain,
+        [...history, userMsg].map((m) => ({
           role: m.role as "user" | "assistant" | "system",
           content: m.content,
         })),
-        abortSignal: controller.signal,
-      });
-
-      let full = "";
-      for await (const delta of result.textStream) {
-        full += delta;
-        setHistory((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, content: full } : m)),
-        );
-      }
-      const usage = await result.usage;
-
-      // 流式结束 → 入库真实消息
-      const finalAssistant = await dbMessages.create({
-        conversationId,
-        role: "assistant",
-        content: full,
-        modelId: stage.modelId,
-        inputTokens: usage?.inputTokens ?? 0,
-        outputTokens: usage?.outputTokens ?? 0,
-        cost: 0,
-      });
-      // 更新 stage token 用量
-      await dbStages.update(stage.id, {
-        inputTokens: stage.inputTokens + (usage?.inputTokens ?? 0),
-        outputTokens: stage.outputTokens + (usage?.outputTokens ?? 0),
-      });
-      setHistory((prev) => prev.map((m) => (m.id === assistantId ? finalAssistant : m)));
+        {
+          onDelta: (delta) => {
+            full += delta;
+            setHistory((prev) =>
+              prev.map((m) => (m.id === assistantId ? { ...m, content: full } : m)),
+            );
+          },
+          onSwitched: (_from, to, reason) => {
+            // 区分"出错切"和"cooldown 跳过"给用户更准的提示
+            const reasonText = reason.kind === "cooldown" ? "（熔断跳过）" : `（${reason.category}）`;
+            setSwitchNotice(`主模型不可用${reasonText}，已自动切到 ${to.displayLabel ?? to.modelName}`);
+          },
+          onUsage: async (usage, usedEndpoint) => {
+            // 流式结束 → 入库真实消息（用实际调用的端点 id，不再手动反向 lookup）
+            const finalAssistant = await dbMessages.create({
+              conversationId,
+              role: "assistant",
+              content: full,
+              modelId: usedEndpoint.modelId,
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+              cost: 0,
+            });
+            // 更新 stage token 用量
+            await dbStages.update(stage.id, {
+              inputTokens: stage.inputTokens + usage.inputTokens,
+              outputTokens: stage.outputTokens + usage.outputTokens,
+            });
+            setHistory((prev) => prev.map((m) => (m.id === assistantId ? finalAssistant : m)));
+            // UsageEvent 落库已由 chat-fallback 内部完成（用 usedEndpoint 的真实 modelName/providerId，
+            // 修切 fallback 时还误用 primary 信息的旧 bug）
+          },
+        },
+        { signal: controller.signal, projectId: stage.projectId },
+      );
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
       setStreamErr(err instanceof Error ? err.message : "对话失败");
@@ -263,6 +287,11 @@ function StageChat({ stage, model, credential, apiKey, conversationId }: StageCh
 
   return (
     <div className="border-t bg-background">
+      {switchNotice && (
+        <div className="px-3 py-1.5 bg-amber-50 dark:bg-amber-950/30 text-xs text-amber-700 dark:text-amber-300 flex items-center gap-1 border-b">
+          <Zap className="w-3 h-3" /> {switchNotice}
+        </div>
+      )}
       <div className="max-h-80 overflow-y-auto p-3 space-y-2">
         {history.length === 0 ? (
           <div className="text-center text-xs text-muted-foreground py-4">
@@ -770,6 +799,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
   const [stages, setStages] = useState<ProjectStage[]>([]);
   const [models, setModels] = useState<Model[]>([]);
   const [credentials, setCredentials] = useState<ApiCredential[]>([]);
+  const [templateRoles, setTemplateRoles] = useState<ProjectTemplateRole[]>([]);
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [handoffs, setHandoffs] = useState<HandoffPacket[]>([]);
   const [openStageId, setOpenStageId] = useState<string | null>(null);
@@ -799,6 +829,14 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
       setCredentials(c);
       setCheckpoints(cp);
       setHandoffs(hf);
+      // 项目基于模板时，把模板的"角色→fallback 模型"映射加载进来，
+      // 阶段对话失败时按 stage.workRole 找 fallback
+      if (p.templateId) {
+        const roles = await dbTemplateRoles.listByTemplate(p.templateId);
+        setTemplateRoles(roles);
+      } else {
+        setTemplateRoles([]);
+      }
       setLoadError(null);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "加载失败");
@@ -1024,7 +1062,14 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                     <div className="px-3 pb-2 text-xs text-destructive">{st.errorMessage}</div>
                   )}
                   {isOpen && canChat && m && cred && (
-                    <StageConversationLoader stage={st} model={m} credential={cred} />
+                    <StageConversationLoader
+                      stage={st}
+                      model={m}
+                      credential={cred}
+                      models={models}
+                      credentials={credentials}
+                      templateRoles={templateRoles}
+                    />
                   )}
                   {isOpen && !canChat && (
                     <div className="border-t p-3 text-xs text-muted-foreground">
@@ -1143,13 +1188,24 @@ function StageConversationLoader({
   stage,
   model,
   credential,
+  models,
+  credentials,
+  templateRoles,
 }: {
   stage: ProjectStage;
   model: Model;
   credential: ApiCredential;
+  models: Model[];
+  credentials: ApiCredential[];
+  templateRoles: ProjectTemplateRole[];
 }) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
+  const [fallback, setFallback] = useState<{
+    model: Model;
+    credential: ApiCredential;
+    apiKey: string;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1175,10 +1231,25 @@ function StageConversationLoader({
           return;
         }
         setApiKey(key);
+
+        // 按 stage.workRole 在模板角色清单里找 fallback 模型
+        const role = templateRoles.find((r) => r.workRole === stage.workRole);
+        if (role && role.fallbackModelId && role.fallbackModelId !== stage.modelId) {
+          const fbModel = models.find((m) => m.id === role.fallbackModelId);
+          if (fbModel) {
+            const fbCred = credentials.find((c) => c.providerId === fbModel.providerId);
+            if (fbCred) {
+              const fbKey = await getApiKey(fbCred.id);
+              if (fbKey) {
+                setFallback({ model: fbModel, credential: fbCred, apiKey: fbKey });
+              }
+            }
+          }
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "加载失败");
       }
-    })();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage.id]);
 
@@ -1201,6 +1272,7 @@ function StageConversationLoader({
       credential={credential}
       apiKey={apiKey}
       conversationId={conversationId}
+      fallback={fallback}
     />
   );
 }

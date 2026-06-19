@@ -33,6 +33,13 @@ export interface ClassifiedLlmError {
   userMessage: string;
   /** 给开发者/日志的技术详情（已脱敏） */
   technicalMessage: string;
+  /**
+   * 是否推荐回退到 fallback 模型
+   * - true: 401/403/404/429/超时/网络/5xx → 切
+   * - false: context_overflow（换模型也救不了）/ unknown（保守，可能是 bug）
+   * chat-fallback 消费这个字段决定要不要切
+   */
+  shouldFallback: boolean;
 }
 
 /**
@@ -112,6 +119,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
       httpStatus: 401,
       userMessage: "API Key 无效或已过期，请在 API 接入页检查",
       technicalMessage: sanitized,
+      shouldFallback: true,
     };
   }
   if (statusCode === 403) {
@@ -120,6 +128,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
       httpStatus: 403,
       userMessage: "API Key 权限不足，请检查账户是否欠费或套餐限制",
       technicalMessage: sanitized,
+      shouldFallback: true,
     };
   }
   if (statusCode === 404) {
@@ -128,6 +137,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
       httpStatus: 404,
       userMessage: "模型不存在或已下线，请检查模型名称",
       technicalMessage: sanitized,
+      shouldFallback: true,
     };
   }
   if (statusCode === 413 || statusCode === 429) {
@@ -138,6 +148,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
         httpStatus: 413,
         userMessage: "对话内容超出模型上下文窗口，请新建对话或缩短历史",
         technicalMessage: sanitized,
+        shouldFallback: false, // 换模型也救不了
       };
     }
     return {
@@ -145,6 +156,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
       httpStatus: 429,
       userMessage: "套餐额度已耗尽或被限流，请稍后重试或检查套餐状态",
       technicalMessage: sanitized,
+      shouldFallback: true,
     };
   }
   if (statusCode !== undefined && statusCode >= 500) {
@@ -153,6 +165,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
       httpStatus: statusCode,
       userMessage: "AI 服务暂时不可用，请稍后重试",
       technicalMessage: sanitized,
+      shouldFallback: true,
     };
   }
 
@@ -164,6 +177,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
       httpStatus: 504,
       userMessage: "请求超时，请检查网络或稍后重试",
       technicalMessage: sanitized,
+      shouldFallback: true,
     };
   }
   if (
@@ -177,6 +191,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
       httpStatus: 502,
       userMessage: "网络连接失败，请检查网络或 Base URL 配置",
       technicalMessage: sanitized,
+      shouldFallback: true,
     };
   }
 
@@ -185,6 +200,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
     httpStatus: 500,
     userMessage: "对话失败，请稍后重试",
     technicalMessage: sanitized,
+    shouldFallback: false, // 保守：unknown 多半是 bug，不浪费 fallback 配额
   };
 }
 
@@ -198,7 +214,8 @@ export function asClassifiedError(error: unknown): ClassifiedLlmError | null {
     typeof error === "object" &&
     "category" in error &&
     "httpStatus" in error &&
-    "userMessage" in error
+    "userMessage" in error &&
+    "shouldFallback" in error
   ) {
     return error as ClassifiedLlmError;
   }

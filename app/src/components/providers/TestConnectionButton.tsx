@@ -52,6 +52,7 @@ export function TestConnectionButton({
           httpStatus: 0,
           userMessage: err instanceof Error ? err.message : "未知错误",
           technicalMessage: String(err),
+          shouldFallback: false,
         },
       });
     } finally {

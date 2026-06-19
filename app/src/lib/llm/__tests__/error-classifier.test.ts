@@ -84,6 +84,7 @@ describe("asClassifiedError", () => {
       httpStatus: 401,
       userMessage: "test",
       technicalMessage: "details",
+      shouldFallback: true,
     };
     expect(asClassifiedError(err)).toBe(err);
   });

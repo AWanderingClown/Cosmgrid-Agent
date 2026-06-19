@@ -1,15 +1,15 @@
 // ChatPage - 对话页
 // v0.3：useChat + /api/chat/stream → 直接用 streamText from 'ai'（不经中间 HTTP server）
+// v0.4.1：改用 streamWithFallback（数组式 fallback 链 + 内置 recordUsageEvent）
 import { memo, useEffect, useRef, useState } from "react";
-import { streamText } from "ai";
-import { Bot, Send, Square, User } from "lucide-react";
+import { Bot, Send, Square, User, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
 import { models as dbModels, apiCredentials as dbCredentials } from "@/lib/db";
 import { getApiKey } from "@/lib/keystore";
-import { getLanguageModel } from "@/lib/llm/provider-factory";
+import { streamWithFallback, toModelEndpoint, type StreamUsage } from "@/lib/llm/chat-fallback";
 
 interface ChatMessage {
   id: string;
@@ -17,10 +17,7 @@ interface ChatMessage {
   content: string;
 }
 
-interface ChatUsage {
-  input: number;
-  output: number;
-}
+type ChatUsage = StreamUsage;
 
 const MessageItem = memo(function MessageItem({
   role,
@@ -70,6 +67,7 @@ export function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [switchNotice, setSwitchNotice] = useState<string | null>(null);
   const [lastUsage, setLastUsage] = useState<ChatUsage | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -144,41 +142,47 @@ export function ChatPage() {
     setMessages([...newMessages, assistantMsg]);
     setIsStreaming(true);
     setStreamError(null);
+    setSwitchNotice(null);
 
     const controller = new AbortController();
     abortRef.current = controller;
 
+    // 构造端点（toModelEndpoint 内部校验 provider.type 缺省并抛错）
+    let primary;
     try {
-      if (!model.provider?.type) {
-        throw new Error("模型缺少 provider 类型信息，请重新添加 Provider");
-      }
-      const languageModel = getLanguageModel(
-        model.provider.type,
-        model.name,
-        apiKey,
-        cred.baseUrl,
+      primary = toModelEndpoint(model, cred, apiKey);
+    } catch (err) {
+      setStreamError(err instanceof Error ? err.message : "构造模型端点失败");
+      setIsStreaming(false);
+      return;
+    }
+
+    // ChatPage 自由对话无项目模板上下文 → 单元素链（无 fallback）。
+    // 想用 fallback 的用户应去项目页（v0.4 核心场景）。
+    const chain = [primary];
+
+    let fullContent = "";
+    try {
+      await streamWithFallback(
+        chain,
+        newMessages.map((m) => ({ role: m.role, content: m.content })),
+        {
+          onDelta: (delta) => {
+            fullContent += delta;
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantId ? { ...m, content: fullContent } : m))
+            );
+          },
+          onSwitched: (_from, to) => {
+            setSwitchNotice(`主模型失败，已自动切到 ${to.displayLabel ?? to.modelName}`);
+          },
+          onUsage: (usage) => {
+            setLastUsage({ inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
+            // UsageEvent 落库已由 chat-fallback 内部完成（解决切 fallback 时写错 modelName 的旧 bug）
+          },
+        },
+        { signal: controller.signal },
       );
-
-      const result = streamText({
-        model: languageModel,
-        messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
-        abortSignal: controller.signal,
-      });
-
-      let fullContent = "";
-      for await (const delta of result.textStream) {
-        fullContent += delta;
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, content: fullContent } : m
-          )
-        );
-      }
-
-      const usage = await result.usage;
-      if (usage) {
-        setLastUsage({ input: usage.inputTokens ?? 0, output: usage.outputTokens ?? 0 });
-      }
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
       setStreamError(err instanceof Error ? err.message : "对话失败");
@@ -242,7 +246,12 @@ export function ChatPage() {
         </select>
         {lastUsage && (
           <span className="text-xs text-muted-foreground whitespace-nowrap">
-            上次：↑{lastUsage.input} ↓{lastUsage.output}
+            上次：↑{lastUsage.inputTokens} ↓{lastUsage.outputTokens}
+          </span>
+        )}
+        {switchNotice && (
+          <span className="text-xs text-amber-600 whitespace-nowrap flex items-center gap-1">
+            <Zap className="w-3 h-3" /> {switchNotice}
           </span>
         )}
       </div>
