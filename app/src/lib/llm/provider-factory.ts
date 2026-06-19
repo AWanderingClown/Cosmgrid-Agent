@@ -43,6 +43,19 @@ REGISTRY.set("google", {
   },
 });
 
+// v0.4.4：openai-compatible 接 GLM / DeepSeek / Qwen / Kimi / 自定义 endpoint
+// 协议走 OpenAI Chat Completions + 流式 SSE，Vercel AI SDK 的 createOpenAI 配 baseUrl 即可
+// 用户在 ApiCredential.baseUrl 填目标 endpoint（如 https://api.deepseek.com/v1）
+REGISTRY.set("openai-compatible", {
+  factory: (modelName, apiKey, baseUrl) => {
+    if (!baseUrl) {
+      throw new Error("openai-compatible provider 必须在凭证的 baseUrl 填 endpoint（如 https://api.deepseek.com/v1）");
+    }
+    const provider = createOpenAI({ apiKey, baseURL: baseUrl });
+    return provider(modelName);
+  },
+});
+
 // LRU 缓存（用 apiKey 后 8 位做 cache key，不用 node:crypto）
 const CACHE_MAX_SIZE = 100;
 const languageModelCache = new Map<string, ReturnType<LanguageModelFactory>>();

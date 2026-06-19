@@ -35,6 +35,9 @@ const DEFAULT_BASE_URLS: Record<ProviderTypeValue, string> = {
   anthropic: "https://api.anthropic.com",
   openai: "https://api.openai.com/v1",
   google: "https://generativelanguage.googleapis.com/v1beta",
+  // openai-compatible 默认空，让用户在 BasicFormFields 自己填
+  // （不同供应商 endpoint 不一样：DeepSeek https://api.deepseek.com/v1 / GLM https://open.bigmodel.cn/api/paas/v4）
+  "openai-compatible": "",
 };
 
 const INITIAL_STATE = {

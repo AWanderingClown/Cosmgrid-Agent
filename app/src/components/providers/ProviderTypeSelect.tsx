@@ -1,4 +1,4 @@
-// Provider 类型下拉（anthropic / openai / google）
+// Provider 类型下拉（anthropic / openai / google / openai-compatible）
 // v0.2 仅支持 3 个原生 provider，v0.3 加 openai-compatible 接 GLM/DeepSeek/Qwen
 import {
   Select,
@@ -13,6 +13,7 @@ export const PROVIDER_TYPES = [
   { value: "anthropic", label: "Anthropic（Claude）" },
   { value: "openai", label: "OpenAI（GPT）" },
   { value: "google", label: "Google（Gemini）" },
+  { value: "openai-compatible", label: "OpenAI 兼容（GLM / DeepSeek / Qwen / 自定义）" },
 ] as const;
 
 export type ProviderTypeValue = (typeof PROVIDER_TYPES)[number]["value"];
