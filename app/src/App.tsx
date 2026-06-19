@@ -1,8 +1,11 @@
 // Cosmgrid-Agent 主入口
 // v0.3：启动时调 initSchema() 建表（tauri-plugin-sql）
+// v0.4.3：加全局 Token Plan 阈值告警条（60s 拉一次，超阈值显示在顶部）
 import { useState, useEffect } from "react";
-import { initSchema, seedBuiltInTemplates } from "@/lib/db";
-import { Bot, KeyRound, MessageSquare, LayoutTemplate, Coins, FolderKanban } from "lucide-react";
+import { AlertTriangle, Bot, KeyRound, MessageSquare, LayoutTemplate, Coins, FolderKanban, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { initSchema, seedBuiltInTemplates, tokenPlans as dbTokenPlans, type TokenPlan } from "@/lib/db";
+import { planUsageLevel, type UsageLevel } from "@/lib/llm/plan-thresholds";
 import { cn } from "@/lib/utils";
 import { ChatPage } from "@/pages/ChatPage";
 import { ProvidersPage } from "@/pages/ProvidersPage";
@@ -32,6 +35,9 @@ function App() {
   const [openProjectId, setOpenProjectId] = useState<string | null>(null);
   const [dbReady, setDbReady] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
+  const [plans, setPlans] = useState<TokenPlan[]>([]);
+  // 用户主动关闭告警（不持久化，刷新后再次出现，避免"永远静音"）
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     void initSchema()
@@ -40,13 +46,30 @@ function App() {
       .catch((err: unknown) => setDbError(err instanceof Error ? err.message : "数据库初始化失败"));
   }, []);
 
-  function openProject(id: string) {
-    setOpenProjectId(id);
-  }
+  // Token Plan 阈值监控：启动 + 每 60s 拉一次
+  useEffect(() => {
+    if (!dbReady) return;
+    void dbTokenPlans.list().then(setPlans);
+    const id = setInterval(() => {
+      void dbTokenPlans.list().then(setPlans);
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [dbReady]);
 
-  function closeProject() {
-    setOpenProjectId(null);
-  }
+  // 切换到 Token Plan 页时立即刷新一次（用户刚改完想看结果）
+  useEffect(() => {
+    if (page === "tokenPlans") {
+      void dbTokenPlans.list().then((p) => {
+        setPlans(p);
+        setDismissedIds(new Set()); // 改了之后清掉静音
+      });
+    }
+  }, [page]);
+
+  const alerts = plans
+    .map((p) => ({ plan: p, level: planUsageLevel(p) }))
+    .filter((x) => x.level !== "ok")
+    .filter((x) => !dismissedIds.has(x.plan.id));
 
   if (!dbReady) {
     return (
@@ -93,28 +116,92 @@ function App() {
         {/* v0.2.1 删除：模型池 disabled 占位按钮（v0.3 实现 ModelsPage）*/}
       </aside>
 
-      {/* 主区域：用 display:none 保留 state（切换 Tab 不重 mount，避免 useChat 重置） */}
-      <main className="flex-1 overflow-hidden">
-        <div className="h-full" style={{ display: page === "chat" ? "block" : "none" }}>
-          <ChatPage />
-        </div>
-        <div className="h-full" style={{ display: page === "providers" ? "block" : "none" }}>
-          <ProvidersPage />
-        </div>
-        <div className="h-full" style={{ display: page === "templates" ? "block" : "none" }}>
-          <TemplatesPage />
-        </div>
-        <div className="h-full" style={{ display: page === "tokenPlans" ? "block" : "none" }}>
-          <TokenPlansPage />
-        </div>
-        <div className="h-full" style={{ display: page === "projects" ? "block" : "none" }}>
-          {openProjectId ? (
-            <ProjectDetailPage projectId={openProjectId} onBack={closeProject} />
-          ) : (
-            <ProjectsPage onOpenProject={openProject} />
-          )}
-        </div>
-      </main>
+      {/* 主区域 */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* 全局 Token Plan 阈值告警条（v0.4.3）—— 顶到最上、不挡 nav */}
+        {alerts.length > 0 && (
+          <div className="border-b bg-amber-50 dark:bg-amber-950/30 px-4 py-2 space-y-1">
+            {alerts.map(({ plan, level }) => (
+              <PlanAlertBar
+                key={plan.id}
+                level={level}
+                planName={plan.name}
+                providerName={plan.provider?.name}
+                ratio={plan.totalQuota ? plan.usedQuota / plan.totalQuota : 0}
+                onJump={() => setPage("tokenPlans")}
+                onDismiss={() => setDismissedIds((prev) => new Set(prev).add(plan.id))}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* 用 display:none 保留 state（切换 Tab 不重 mount，避免 useChat 重置） */}
+        <main className="flex-1 overflow-hidden">
+          <div className="h-full" style={{ display: page === "chat" ? "block" : "none" }}>
+            <ChatPage />
+          </div>
+          <div className="h-full" style={{ display: page === "providers" ? "block" : "none" }}>
+            <ProvidersPage />
+          </div>
+          <div className="h-full" style={{ display: page === "templates" ? "block" : "none" }}>
+            <TemplatesPage />
+          </div>
+          <div className="h-full" style={{ display: page === "tokenPlans" ? "block" : "none" }}>
+            <TokenPlansPage />
+          </div>
+          <div className="h-full" style={{ display: page === "projects" ? "block" : "none" }}>
+            {openProjectId ? (
+              <ProjectDetailPage projectId={openProjectId} onBack={() => setOpenProjectId(null)} />
+            ) : (
+              <ProjectsPage onOpenProject={(id) => setOpenProjectId(id)} />
+            )}
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+/** 告警条单元：套餐名 + 用量比例 + 文案 + 跳转/关闭按钮 */
+function PlanAlertBar({
+  level,
+  planName,
+  providerName,
+  ratio,
+  onJump,
+  onDismiss,
+}: {
+  level: UsageLevel;
+  planName: string;
+  providerName: string | undefined;
+  ratio: number;
+  onJump: () => void;
+  onDismiss: () => void;
+}) {
+  const isCritical = level === "exhausted" || level === "critical";
+  const text = isCritical
+    ? `套餐 ${planName}${providerName ? `（${providerName}）` : ""} 已用 ${(ratio * 100).toFixed(0)}%，建议切到 fallback 模型`
+    : `套餐 ${planName}${providerName ? `（${providerName}）` : ""} 已用 ${(ratio * 100).toFixed(0)}%，接近耗尽`;
+
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between gap-2 text-sm",
+        isCritical ? "text-red-700 dark:text-red-300" : "text-amber-700 dark:text-amber-300",
+      )}
+    >
+      <div className="flex items-center gap-2 min-w-0">
+        <AlertTriangle className="w-4 h-4 shrink-0" />
+        <span className="truncate">{text}</span>
+      </div>
+      <div className="flex items-center gap-1 shrink-0">
+        <Button size="sm" variant="ghost" onClick={onJump}>
+          去查看
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onDismiss} title="关闭（下次用量上涨会重新出现）">
+          <X className="w-3.5 h-3.5" />
+        </Button>
+      </div>
     </div>
   );
 }
