@@ -266,6 +266,28 @@ export async function initSchema(): Promise<void> {
       created_at TEXT NOT NULL
     )
   `);
+
+  // v0.6 项目级长期记忆（4.11 记忆分层 + 5.6 RAG）
+  // 每条记忆 = 一段结构化笔记（决策 / 经验 / 上下文 / 失败教训），
+  // 减少重复解释背景；做 RAG 时按 title/content 检索（不引 Embedding 依赖）
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS project_memories (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      importance INTEGER NOT NULL DEFAULT 50,
+      tags TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    )
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_project_memories_project
+    ON project_memories(project_id, importance DESC)
+  `);
 }
 
 // ============ 内置模板种子数据（4.13.3，只建模板本体，不建角色——角色模型由用户分配） ============
@@ -1762,5 +1784,194 @@ export const usageEvents = {
         ts,
       ]
     );
+  },
+};
+
+// ============ projectMemories CRUD（v0.6 / 5.6 RAG） ============
+
+export type MemoryKind = "decision" | "lesson" | "context" | "preference" | "other";
+
+export const MEMORY_KIND_LABEL: Record<MemoryKind, string> = {
+  decision: "决策",
+  lesson: "经验教训",
+  context: "背景上下文",
+  preference: "偏好",
+  other: "其他",
+};
+
+export interface ProjectMemory {
+  id: string;
+  projectId: string;
+  kind: string;
+  title: string;
+  content: string;
+  importance: number;
+  tags: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ProjectMemoryRow {
+  id: string;
+  project_id: string;
+  kind: string;
+  title: string;
+  content: string;
+  importance: number;
+  tags: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function rowToProjectMemory(r: ProjectMemoryRow): ProjectMemory {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    kind: r.kind,
+    title: r.title,
+    content: r.content,
+    importance: r.importance,
+    tags: r.tags,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+export interface CreateProjectMemoryInput {
+  projectId: string;
+  kind: string;
+  title: string;
+  content: string;
+  importance?: number;
+  tags?: string | null;
+}
+
+export const projectMemories = {
+  async listByProject(projectId: string): Promise<ProjectMemory[]> {
+    const db = await getDb();
+    const rows = await db.select<ProjectMemoryRow[]>(
+      "SELECT * FROM project_memories WHERE project_id = $1 ORDER BY importance DESC, created_at DESC",
+      [projectId],
+    );
+    return rows.map(rowToProjectMemory);
+  },
+
+  async getById(id: string): Promise<ProjectMemory | null> {
+    const db = await getDb();
+    const rows = await db.select<ProjectMemoryRow[]>(
+      "SELECT * FROM project_memories WHERE id = $1",
+      [id],
+    );
+    return rows[0] ? rowToProjectMemory(rows[0]) : null;
+  },
+
+  async create(input: CreateProjectMemoryInput): Promise<ProjectMemory> {
+    const db = await getDb();
+    const id = newId();
+    const ts = now();
+    await db.execute(
+      `INSERT INTO project_memories (id, project_id, kind, title, content, importance, tags, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        id,
+        input.projectId,
+        input.kind,
+        input.title,
+        input.content,
+        input.importance ?? 50,
+        input.tags ?? null,
+        ts,
+        ts,
+      ],
+    );
+    return (await projectMemories.getById(id))!;
+  },
+
+  async update(
+    id: string,
+    input: Partial<CreateProjectMemoryInput>,
+  ): Promise<ProjectMemory> {
+    const db = await getDb();
+    const ts = now();
+    const sets: string[] = ["updated_at = $1"];
+    const vals: unknown[] = [ts];
+    let i = 2;
+    if (input.kind !== undefined) {
+      sets.push(`kind = $${i++}`);
+      vals.push(input.kind);
+    }
+    if (input.title !== undefined) {
+      sets.push(`title = $${i++}`);
+      vals.push(input.title);
+    }
+    if (input.content !== undefined) {
+      sets.push(`content = $${i++}`);
+      vals.push(input.content);
+    }
+    if (input.importance !== undefined) {
+      sets.push(`importance = $${i++}`);
+      vals.push(input.importance);
+    }
+    if (input.tags !== undefined) {
+      sets.push(`tags = $${i++}`);
+      vals.push(input.tags);
+    }
+    vals.push(id);
+    await db.execute(
+      `UPDATE project_memories SET ${sets.join(", ")} WHERE id = $${i}`,
+      vals,
+    );
+    return (await projectMemories.getById(id))!;
+  },
+
+  async delete(id: string): Promise<void> {
+    const db = await getDb();
+    await db.execute("DELETE FROM project_memories WHERE id = $1", [id]);
+  },
+
+  /**
+   * 跨项目检索：根据关键词在所有项目的记忆里做 LIKE 匹配。
+   * 减负实现：不做 Embedding、不接外部 API，纯关键词 + importance 加权排序。
+   * 适合「5 个项目 / 上千条记忆」以内的小白使用规模；规模化时再换向量检索。
+   */
+  async searchAcrossProjects(
+    query: string,
+    options: { limit?: number; excludeProjectId?: string } = {},
+  ): Promise<ProjectMemory[]> {
+    const limit = options.limit ?? 10;
+    const db = await getDb();
+    const q = query.trim();
+    if (!q) return [];
+    // 拆词 + 任何一词命中都行（OR），按 importance + 命中数排
+    const tokens = q
+      .split(/[\s,，、]+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length >= 1)
+      .slice(0, 8);
+    if (tokens.length === 0) return [];
+
+    const likeConditions: string[] = [];
+    const likeParams: unknown[] = [];
+    tokens.forEach((tok, idx) => {
+      const p = `$${idx + 1}`;
+      likeConditions.push(`(title LIKE ${p} OR content LIKE ${p} OR tags LIKE ${p})`);
+      likeParams.push(`%${tok}%`);
+    });
+    const excludeClause = options.excludeProjectId
+      ? `AND project_id != $${likeParams.length + 1}`
+      : "";
+    if (options.excludeProjectId) likeParams.push(options.excludeProjectId);
+
+    const sql = `
+      SELECT *, (${likeConditions.map((c) => `CASE WHEN ${c} THEN 1 ELSE 0 END`).join(" + ")}) AS hits
+      FROM project_memories
+      WHERE (${likeConditions.join(" OR ")})
+      ${excludeClause}
+      ORDER BY (importance / 100.0 + hits * 0.1) DESC, created_at DESC
+      LIMIT $${likeParams.length + 1}
+    `;
+    likeParams.push(limit);
+    const rows = await db.select<ProjectMemoryRow[]>(sql, likeParams);
+    return rows.map(rowToProjectMemory);
   },
 };

@@ -4,6 +4,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
+  BookOpen,
   Bot,
   CheckCircle2,
   Circle,
@@ -66,6 +67,11 @@ import { getApiKey } from "@/lib/keystore";
 import { streamWithFallback, toModelEndpoint } from "@/lib/llm/chat-fallback";
 import { generateCheckpointDraft } from "@/lib/llm/checkpoint-generator";
 import { getLanguageModel } from "@/lib/llm/provider-factory";
+import {
+  projectMemories as dbMemories,
+  MEMORY_KIND_LABEL,
+  type ProjectMemory,
+} from "@/lib/db";
 
 // ============ 静态映射 ============
 
@@ -787,6 +793,133 @@ function HandoffDetailDialog({
   );
 }
 
+// ============ 项目记忆对话框（v0.6 / 5.6 RAG）============
+
+function AddMemoryDialog({
+  open,
+  onOpenChange,
+  projectId,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  projectId: string;
+  onCreated: () => void;
+}) {
+  const [kind, setKind] = useState<"decision" | "lesson" | "context" | "preference" | "other">(
+    "decision",
+  );
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [tags, setTags] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function reset() {
+    setKind("decision");
+    setTitle("");
+    setContent("");
+    setTags("");
+    setError(null);
+  }
+
+  async function handleSave() {
+    if (!title.trim() || !content.trim()) {
+      setError("标题和内容都必填");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await dbMemories.create({
+        projectId,
+        kind,
+        title: title.trim(),
+        content: content.trim(),
+        tags: tags.trim() || null,
+      });
+      reset();
+      onOpenChange(false);
+      onCreated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>添加项目记忆</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 text-sm">
+          {error && (
+            <Alert variant="destructive" className="py-2">
+              <AlertDescription className="text-xs">{error}</AlertDescription>
+            </Alert>
+          )}
+          <div className="space-y-1.5">
+            <Label>类型</Label>
+            <Select value={kind} onValueChange={(v) => setKind(v as typeof kind)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(["decision", "lesson", "context", "preference", "other"] as const).map(
+                  (k) => (
+                    <SelectItem key={k} value={k}>
+                      {MEMORY_KIND_LABEL[k]}
+                    </SelectItem>
+                  ),
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="mem-title">标题 *</Label>
+            <Input
+              id="mem-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="例如：API Key 用 keychain 插件不入库"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="mem-content">内容 *</Label>
+            <Textarea
+              id="mem-content"
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              rows={4}
+              placeholder="这条记忆讲什么 / 为什么这么决定 / 将来哪个项目能用上"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="mem-tags">标签（可选，逗号分隔）</Label>
+            <Input
+              id="mem-tags"
+              value={tags}
+              onChange={(e) => setTags(e.target.value)}
+              placeholder="例如：auth, 减负, v0.3"
+            />
+            <p className="text-xs text-muted-foreground">标签用于跨项目检索时跟项目描述 / 其他记忆匹配</p>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            取消
+          </Button>
+          <Button onClick={() => void handleSave()} disabled={saving}>
+            保存
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ============ 详情页主组件 ============
 
 export interface ProjectDetailPageProps {
@@ -802,22 +935,27 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
   const [templateRoles, setTemplateRoles] = useState<ProjectTemplateRole[]>([]);
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [handoffs, setHandoffs] = useState<HandoffPacket[]>([]);
+  const [memories, setMemories] = useState<ProjectMemory[]>([]);
   const [openStageId, setOpenStageId] = useState<string | null>(null);
   const [createCpOpen, setCreateCpOpen] = useState(false);
   const [viewCp, setViewCp] = useState<Checkpoint | null>(null);
   const [genCp, setGenCp] = useState<Checkpoint | null>(null);
   const [viewHandoff, setViewHandoff] = useState<HandoffPacket | null>(null);
+  const [addMemoryOpen, setAddMemoryOpen] = useState(false);
+  // 跨项目相关记忆（v0.6 RAG：自动从其他项目搜，按项目描述做关键词匹配）
+  const [relatedMemories, setRelatedMemories] = useState<ProjectMemory[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   async function load() {
     try {
-      const [p, s, m, c, cp, hf] = await Promise.all([
+      const [p, s, m, c, cp, hf, mem] = await Promise.all([
         dbProjects.getById(projectId),
         dbStages.listByProject(projectId),
         dbModels.listEnabled(),
         dbCredentials.list(),
         dbCheckpoints.listByProject(projectId),
         dbHandoffs.listByProject(projectId),
+        dbMemories.listByProject(projectId),
       ]);
       if (!p) {
         setLoadError("项目不存在");
@@ -829,6 +967,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
       setCredentials(c);
       setCheckpoints(cp);
       setHandoffs(hf);
+      setMemories(mem);
       // 项目基于模板时，把模板的"角色→fallback 模型"映射加载进来，
       // 阶段对话失败时按 stage.workRole 找 fallback
       if (p.templateId) {
@@ -836,6 +975,22 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
         setTemplateRoles(roles);
       } else {
         setTemplateRoles([]);
+      }
+      // v0.6 跨项目 RAG：用项目名 + 描述搜其他项目相关记忆（减负：不做 Embedding，
+      // 纯关键词 + importance 加权；命中就显示，让用户自己判断是否采纳）
+      const query = [p.name, p.description].filter(Boolean).join(" ");
+      if (query) {
+        try {
+          const related = await dbMemories.searchAcrossProjects(query, {
+            excludeProjectId: projectId,
+            limit: 5,
+          });
+          setRelatedMemories(related);
+        } catch {
+          setRelatedMemories([]);
+        }
+      } else {
+        setRelatedMemories([]);
       }
       setLoadError(null);
     } catch (err) {
@@ -973,6 +1128,84 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
           )}
         </div>
       </div>
+
+      {/* v0.6 跨项目相关记忆（从其他项目搜）*/}
+      {relatedMemories.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold flex items-center gap-2">
+            <BookOpen className="w-4 h-4" /> 其他项目相关记忆（自动检索 {relatedMemories.length} 条）
+          </h2>
+          <div className="grid grid-cols-2 gap-2">
+            {relatedMemories.map((m) => (
+              <Card key={m.id} className="p-3 space-y-1.5 bg-muted/30">
+                <div className="flex items-start justify-between gap-2">
+                  <Badge variant="outline" className="text-xs shrink-0">
+                    {MEMORY_KIND_LABEL[m.kind as keyof typeof MEMORY_KIND_LABEL] ?? m.kind}
+                  </Badge>
+                </div>
+                <div className="font-medium text-sm">{m.title}</div>
+                <div className="text-xs text-muted-foreground line-clamp-2 whitespace-pre-wrap">
+                  {m.content}
+                </div>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* 项目记忆（v0.6 / 5.6 RAG）*/}
+      <section className="space-y-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold flex items-center gap-2">
+            <BookOpen className="w-4 h-4" /> 项目记忆（{memories.length}）
+          </h2>
+          <Button size="sm" variant="outline" onClick={() => setAddMemoryOpen(true)}>
+            <Plus className="w-3.5 h-3.5 mr-1" /> 添加记忆
+          </Button>
+        </div>
+        {memories.length === 0 ? (
+          <Card className="p-6 text-center text-xs text-muted-foreground">
+            还没有项目记忆。加一条决策 / 经验，下次开新项目时自动检索相关条目带入背景
+          </Card>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            {memories.map((m) => (
+              <Card key={m.id} className="p-3 space-y-1.5">
+                <div className="flex items-start justify-between gap-2">
+                  <Badge variant="outline" className="text-xs shrink-0">
+                    {MEMORY_KIND_LABEL[m.kind as keyof typeof MEMORY_KIND_LABEL] ?? m.kind}
+                  </Badge>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive h-6 w-6 p-0 shrink-0"
+                    onClick={() => void dbMemories.delete(m.id).then(() => void load())}
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </Button>
+                </div>
+                <div className="font-medium text-sm">{m.title}</div>
+                <div className="text-xs text-muted-foreground line-clamp-3 whitespace-pre-wrap">
+                  {m.content}
+                </div>
+                {m.tags && (
+                  <div className="flex flex-wrap gap-1">
+                    {m.tags
+                      .split(",")
+                      .map((t) => t.trim())
+                      .filter(Boolean)
+                      .map((t) => (
+                        <Badge key={t} variant="secondary" className="text-xs">
+                          {t}
+                        </Badge>
+                      ))}
+                  </div>
+                )}
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* 阶段时间线 */}
       <section className="space-y-2">
@@ -1177,6 +1410,12 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
         packet={viewHandoff}
         open={viewHandoff !== null}
         onOpenChange={(v) => !v && setViewHandoff(null)}
+      />
+      <AddMemoryDialog
+        open={addMemoryOpen}
+        onOpenChange={setAddMemoryOpen}
+        projectId={projectId}
+        onCreated={() => void load()}
       />
     </div>
   );
