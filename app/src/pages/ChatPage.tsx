@@ -1,8 +1,9 @@
 // ChatPage - 对话页
 // v0.3：useChat + /api/chat/stream → 直接用 streamText from 'ai'（不经中间 HTTP server）
 // v0.4.1：改用 streamWithFallback（数组式 fallback 链 + 内置 recordUsageEvent）
+// v0.4.2：加"🪄 智能推荐"按钮，按主对话角色 auto-pick 最合适模型
 import { memo, useEffect, useRef, useState } from "react";
-import { Bot, Send, Square, User, Zap } from "lucide-react";
+import { Bot, Send, Square, User, Zap, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
@@ -10,6 +11,7 @@ import { type ModelListItem, type CredentialListItem } from "@/lib/api";
 import { models as dbModels, apiCredentials as dbCredentials } from "@/lib/db";
 import { getApiKey } from "@/lib/keystore";
 import { streamWithFallback, toModelEndpoint, type StreamUsage } from "@/lib/llm/chat-fallback";
+import { pickBestModelForRole } from "@/lib/llm/model-capabilities";
 
 interface ChatMessage {
   id: string;
@@ -87,6 +89,7 @@ export function ChatPage() {
           contextWindow: m.contextWindow,
           enabled: m.enabled,
           workRoles: m.workRoles,
+          capabilityScore: m.capabilityScore,
           providerId: m.providerId,
           provider: m.provider,
         }));
@@ -197,6 +200,13 @@ export function ChatPage() {
     abortRef.current?.abort();
   }
 
+  // 🪄 智能推荐：按主对话角色从已启用的模型里选最合适的那个
+  function handleSmartPick() {
+    if (availableModels.length === 0) return;
+    const best = pickBestModelForRole("main_chat", availableModels);
+    if (best) setSelectedModelId(best.id);
+  }
+
   function handleFormSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -244,6 +254,17 @@ export function ChatPage() {
             </option>
           ))}
         </select>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={handleSmartPick}
+          disabled={availableModels.length === 0}
+          title="按主对话角色自动选最合适的模型"
+        >
+          <Sparkles className="w-3.5 h-3.5 mr-1" />
+          智能推荐
+        </Button>
         {lastUsage && (
           <span className="text-xs text-muted-foreground whitespace-nowrap">
             上次：↑{lastUsage.inputTokens} ↓{lastUsage.outputTokens}

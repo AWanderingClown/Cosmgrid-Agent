@@ -49,6 +49,7 @@ export function ProvidersPage() {
           contextWindow: mo.contextWindow,
           enabled: mo.enabled,
           workRoles: mo.workRoles,
+          capabilityScore: mo.capabilityScore,
           providerId: mo.providerId,
           provider: mo.provider,
         }))

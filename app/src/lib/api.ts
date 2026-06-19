@@ -37,6 +37,8 @@ export interface ModelListItem {
   contextWindow: number | null;
   enabled: boolean;
   workRoles: string;
+  /** 能力分 JSON 字符串（喂给 autoAssignModels 做评分） */
+  capabilityScore: string | null;
   providerId: string;
   provider?: { name: string; type: string };
 }
