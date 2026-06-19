@@ -1,7 +1,9 @@
-// ProjectsPage - 项目列表页（7.5 / 4.2）
-// 创建项目（选模板）、显示状态机（pending/active/paused/completed/failed）、删除项目
+// ProjectsPage - 项目列表页（7.5 / 4.2 / 7.9）
+// 创建项目（向导式）+ 状态机显示 + 删除
+// v0.5：升级"新建项目"为 2 步向导（选模板 → 填信息），补 workspacePath 字段
+// 模型分配由模板的 ProjectTemplateRole 决定（v0.3 起步已实现），这里不重复配置
 import { useEffect, useState } from "react";
-import { FolderKanban, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, FolderKanban, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -11,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -57,10 +60,14 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
   const [items, setItems] = useState<Project[]>([]);
   const [templates, setTemplates] = useState<ProjectTemplate[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // 向导状态（v0.5）：2 步——选模板 → 填信息
+  const [step, setStep] = useState<1 | 2>(1);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [workspacePath, setWorkspacePath] = useState("");
   const [templateId, setTemplateId] = useState<string>("");
-  const [saving, setSaving] = useState(false);
 
   async function load() {
     const [p, t] = await Promise.all([dbProjects.list(), dbTemplates.list()]);
@@ -73,10 +80,16 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
   }, []);
 
   function openCreateDialog() {
+    setStep(1);
     setName("");
     setDescription("");
+    setWorkspacePath("");
     setTemplateId(templates[0]?.id ?? "");
     setDialogOpen(true);
+  }
+
+  function closeDialog() {
+    setDialogOpen(false);
   }
 
   async function createProject() {
@@ -87,6 +100,7 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
         name: name.trim(),
         description: description.trim() || null,
         templateId: templateId || null,
+        workspacePath: workspacePath.trim() || null,
       });
       setDialogOpen(false);
       await load();
@@ -100,6 +114,8 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
     await dbProjects.delete(id);
     await load();
   }
+
+  const selectedTemplate = templates.find((t) => t.id === templateId) ?? null;
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-4">
@@ -169,50 +185,106 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>新建项目</DialogTitle>
+            <DialogTitle>新建项目（第 {step} / 2 步）</DialogTitle>
+            <DialogDescription>
+              {step === 1 ? "选个模板做起点" : "填项目基本信息"}
+            </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="project-name">项目名称</Label>
-              <Input
-                id="project-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="例如：电商网站后台"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="project-desc">描述（可选）</Label>
-              <Input
-                id="project-desc"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="简单说说这个项目做什么"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>项目模板</Label>
-              <Select value={templateId} onValueChange={setTemplateId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="选择模板（可选）" />
-                </SelectTrigger>
-                <SelectContent>
-                  {templates.map((t) => (
-                    <SelectItem key={t.id} value={t.id}>
-                      {t.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+
+          {/* 进度条 */}
+          <div className="flex gap-1.5">
+            <div className={cn("h-1 flex-1 rounded-full", step >= 1 ? "bg-primary" : "bg-muted")} />
+            <div className={cn("h-1 flex-1 rounded-full", step >= 2 ? "bg-primary" : "bg-muted")} />
           </div>
+
+          {step === 1 && (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>项目模板</Label>
+                <Select value={templateId} onValueChange={setTemplateId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择模板" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {templates.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selectedTemplate?.description && (
+                  <p className="text-xs text-muted-foreground">{selectedTemplate.description}</p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  模板里的角色→模型分配已经在「项目模板」页里配好了（零点击自动配 + 可手动改），新建项目时会按模板生成对应的阶段。
+                </p>
+              </div>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <Label htmlFor="project-name">项目名称 *</Label>
+                <Input
+                  id="project-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="例如：电商网站后台"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="project-desc">描述（可选）</Label>
+                <Input
+                  id="project-desc"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="简单说说这个项目做什么"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="project-workspace">工作空间路径（可选，以后可改）</Label>
+                <Input
+                  id="project-workspace"
+                  value={workspacePath}
+                  onChange={(e) => setWorkspacePath(e.target.value)}
+                  placeholder="例如：~/projects/ecommerce-app"
+                />
+                <p className="text-xs text-muted-foreground">
+                  这是项目在本机的路径，留空也可以（建完项目后再去详情页补）
+                </p>
+              </div>
+              {selectedTemplate && (
+                <div className="text-xs bg-muted/40 rounded-md p-2.5">
+                  <span className="text-muted-foreground">将使用模板：</span>
+                  <span className="font-medium">{selectedTemplate.name}</span>
+                </div>
+              )}
+            </div>
+          )}
+
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>
-              取消
-            </Button>
-            <Button onClick={() => void createProject()} disabled={saving || !name.trim()}>
-              {saving ? "创建中…" : "创建"}
-            </Button>
+            {step === 1 ? (
+              <>
+                <Button variant="outline" onClick={closeDialog}>
+                  取消
+                </Button>
+                <Button onClick={() => setStep(2)} disabled={!templateId}>
+                  下一步 <ArrowRight className="w-4 h-4 ml-1" />
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => setStep(1)}>
+                  <ArrowLeft className="w-4 h-4 mr-1" /> 上一步
+                </Button>
+                <Button onClick={() => void createProject()} disabled={saving || !name.trim()}>
+                  {saving ? "创建中…" : "创建项目"}
+                  <Check className="w-4 h-4 ml-1" />
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
