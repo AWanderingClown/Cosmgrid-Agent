@@ -1,0 +1,23 @@
+# Cosmgrid-Agent Tauri 项目级 cargo 配置
+# 国内 Rust 镜像（rsproxy.cn）解决 crates.io 拉取慢的问题
+
+[source.crates-io]
+replace-with = "rsproxy-sparse"
+
+[source.rsproxy]
+registry = "https://rsproxy.cn/crates.io-index"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+# 注册表协议默认 sparse（HTTP API，比 git 索引快）
+[registries.rsproxy]
+index = "sparse+https://rsproxy.cn/index/"
+
+[net]
+git-fetch-with-cli = true
+
+# 优化 cargo 行为
+[build]
+# 编译时只针对当前平台（macOS），跳过 windows/linux 平台特定依赖
+target-dir = "target"

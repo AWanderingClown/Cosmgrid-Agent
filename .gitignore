@@ -1,0 +1,47 @@
+# ===== 操作系统 / 编辑器垃圾 =====
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# ===== 依赖 =====
+node_modules/
+
+# ===== 构建产物（会自动重新生成，不入库）=====
+dist/
+dist-ssr/
+build/
+# Rust / Tauri 编译产物
+target/
+src-tauri/gen/schemas/
+
+# ===== 测试 / 覆盖率报告 =====
+coverage/
+*.lcov
+
+# ===== 日志 =====
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ===== 密钥 / 本地环境（绝不入库）=====
+.env
+.env.*
+*.local
+!.env.example
+
+# ===== 本地保留、不入仓库的大目录 =====
+# 第三方开源参考代码（CLAUDE.md 按本地路径引用，仅供参考，不属于本项目）
+/技术参考/
+# 一次性 Tauri 打包验证项目（结论已写进方案文档第 0 节）
+/spike-tauri-sql/
