@@ -1,7 +1,6 @@
-// ProvidersPage - API 接入 + 模型池
-// v0.3：apiFetch → db.ts 直连 SQLite
+// ProvidersPage - 重构为 "Cosmic Cyber" 视觉风格
 import { useEffect, useState } from "react";
-import { Plus, KeyRound, Layers, Trash2 } from "lucide-react";
+import { Plus, KeyRound, Layers, Trash2, Cpu, Globe, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -15,6 +14,7 @@ import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
 import { type ProviderListItem, type CredentialListItem, type ModelListItem, parseWorkRoles } from "@/lib/api";
 import { providers as dbProviders, apiCredentials as dbCredentials, models as dbModels } from "@/lib/db";
 import { deleteApiKey } from "@/lib/keystore";
+import { cn } from "@/lib/utils";
 
 export function ProvidersPage() {
   const [providers, setProviders] = useState<ProviderListItem[]>([]);
@@ -104,156 +104,219 @@ export function ProvidersPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold flex items-center gap-2">
-            <KeyRound className="w-5 h-5" />
-            API 接入
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            管理 Provider、凭证、模型。点 + 添加一个完整配置（含默认模型）
-          </p>
-        </div>
-        <Button onClick={() => setDialogOpen(true)}>
-          <Plus className="w-4 h-4 mr-2" />
-          添加供应商
-        </Button>
-      </div>
+    <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
+      <div className="max-w-6xl mx-auto space-y-10">
+        <header className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-primary">
+              <KeyRound className="w-5 h-5" />
+              <span className="text-[10px] font-bold uppercase tracking-[0.2em]">外部核心集成</span>
+            </div>
+            <h1 className="text-4xl font-black tracking-tight">模型供应商</h1>
+            <p className="text-muted-foreground text-sm max-w-xl">
+              在这里集成全球顶尖的大模型 API。支持 OpenAI, Anthropic, Google 以及任何兼容 OpenAI 协议的自定义端点。
+            </p>
+          </div>
+          <Button
+            onClick={() => setDialogOpen(true)}
+            className="rounded-2xl px-8 h-12 bg-primary shadow-xl shadow-primary/20 hover:scale-105 transition-all font-bold"
+          >
+            <Plus className="w-5 h-5 mr-2" />
+            添加供应商
+          </Button>
+        </header>
 
-      {providers.length === 0 ? (
-        <Card className="p-12 text-center">
-          <p className="text-muted-foreground">还没有添加任何 Provider</p>
-        </Card>
-      ) : (
-        <Accordion type="multiple" className="space-y-2">
-          {providers.map((p) => {
-            const pCreds = credentials.filter((c) => c.providerId === p.id);
-            const pModels = models.filter((m) => m.providerId === p.id);
-            return (
-              <AccordionItem key={p.id} value={p.id} className="border rounded-lg px-4 bg-card">
-                <AccordionTrigger className="hover:no-underline">
-                  <div className="flex items-center gap-3 flex-1">
-                    <span className="font-semibold">{p.name}</span>
-                    <Badge variant="secondary">{p.type}</Badge>
-                    <span className="text-xs text-muted-foreground">
-                      {pCreds.length} 凭证 · {pModels.length} 模型
-                    </span>
-                  </div>
-                </AccordionTrigger>
-                <AccordionContent className="space-y-4 pt-2">
-                  <div>
-                    <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
-                      <KeyRound className="w-3 h-3" /> 凭证
-                    </h4>
-                    {pCreds.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">无凭证</p>
-                    ) : (
-                      <div className="space-y-1">
-                        {pCreds.map((c) => (
-                          <div
-                            key={c.id}
-                            className="flex items-center justify-between text-sm bg-muted/30 rounded px-3 py-2"
-                          >
-                            <div>
-                              <span>{c.name}</span>
-                              <span className="text-xs text-muted-foreground ml-2 font-mono">
-                                {c.baseUrl}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Badge variant={c.enabled ? "default" : "outline"}>
-                                {c.enabled ? "启用" : "禁用"}
-                              </Badge>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => handleDeleteCredential(c.id)}
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
+        {providers.length === 0 ? (
+          <Card className="glass border-dashed p-20 text-center flex flex-col items-center gap-6 rounded-[2.5rem]">
+            <div className="w-20 h-20 bg-muted/30 rounded-[2rem] flex items-center justify-center animate-pulse">
+              <Globe className="w-10 h-10 text-muted-foreground/30" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-xl font-bold">无活跃供应商</h3>
+              <p className="text-sm text-muted-foreground max-w-xs">点击上方按钮，开始连接你的第一个大模型能力中心。</p>
+            </div>
+          </Card>
+        ) : (
+          <Accordion type="multiple" className="space-y-4">
+            {providers.map((p) => {
+              const pCreds = credentials.filter((c) => c.providerId === p.id);
+              const pModels = models.filter((m) => m.providerId === p.id);
+              return (
+                <AccordionItem
+                  key={p.id}
+                  value={p.id}
+                  className="glass border-white/10 rounded-[2rem] px-6 transition-all duration-500 hover:border-primary/20 data-[state=open]:border-primary/30 shadow-sm"
+                >
+                  <AccordionTrigger className="hover:no-underline py-6">
+                    <div className="flex items-center gap-5 flex-1 text-left">
+                      <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-primary/20 to-accent/20 flex items-center justify-center border border-white/5">
+                        <Cpu className="w-6 h-6 text-primary" />
                       </div>
-                    )}
-                  </div>
-
-                  <div>
-                    <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
-                      <Layers className="w-3 h-3" /> 模型
-                    </h4>
-                    {pModels.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">无模型</p>
-                    ) : (
                       <div className="space-y-1">
-                        {pModels.map((m) => {
-                          const roles = parseWorkRoles(m.workRoles);
-                          return (
+                        <div className="flex items-center gap-3">
+                          <span className="text-lg font-bold tracking-tight">{p.name}</span>
+                          <Badge variant="outline" className="bg-white/5 border-white/10 text-[10px] font-bold uppercase tracking-widest h-5">
+                            {p.type}
+                          </Badge>
+                        </div>
+                        <div className="flex items-center gap-3 text-[10px] font-bold text-muted-foreground/50 uppercase tracking-wider">
+                          <span className="flex items-center gap-1">
+                            <KeyRound className="w-3 h-3" /> {pCreds.length} 凭证
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Layers className="w-3 h-3" /> {pModels.length} 模型
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </AccordionTrigger>
+                  <AccordionContent className="pb-8 space-y-8 animate-in fade-in slide-in-from-top-2 duration-500">
+
+                    {/* 凭证部分 */}
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between px-2">
+                        <h4 className="text-xs font-bold uppercase tracking-widest text-primary flex items-center gap-2">
+                          <div className="w-1.5 h-1.5 rounded-full bg-primary" />
+                          API 凭证列表
+                        </h4>
+                      </div>
+                      {pCreds.length === 0 ? (
+                        <div className="bg-white/5 rounded-2xl p-4 text-center border border-dashed border-white/10">
+                          <p className="text-xs text-muted-foreground">该供应商暂无关联凭证</p>
+                        </div>
+                      ) : (
+                        <div className="grid gap-3">
+                          {pCreds.map((c) => (
                             <div
-                              key={m.id}
-                              className="flex items-center justify-between text-sm bg-muted/30 rounded px-3 py-2"
+                              key={c.id}
+                              className="group flex items-center justify-between bg-white/5 border border-white/5 hover:border-white/10 rounded-2xl p-4 transition-all"
                             >
-                              <div className="flex items-center gap-2">
-                                <span className="font-mono">{m.name}</span>
-                                {m.displayName && (
-                                  <span className="text-xs text-muted-foreground">
-                                    ({m.displayName})
-                                  </span>
-                                )}
-                                <div className="flex gap-1">
-                                  {roles.slice(0, 3).map((r) => (
-                                    <Badge key={r} variant="outline" className="text-xs">
-                                      {r}
-                                    </Badge>
-                                  ))}
-                                  {roles.length > 3 && (
-                                    <Badge variant="outline" className="text-xs">
-                                      +{roles.length - 3}
-                                    </Badge>
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-sm">{c.name}</span>
+                                  {c.enabled ? (
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                                  ) : (
+                                    <XCircle className="w-3.5 h-3.5 text-muted-foreground" />
                                   )}
+                                </div>
+                                <div className="text-[10px] font-mono text-muted-foreground/60 bg-black/20 px-2 py-0.5 rounded w-fit">
+                                  {c.baseUrl || "默认端点"}
                                 </div>
                               </div>
                               <div className="flex items-center gap-2">
                                 <Button
                                   variant="ghost"
-                                  size="sm"
-                                  onClick={() => toggleModelEnabled(m)}
-                                >
-                                  {m.enabled ? "禁用" : "启用"}
-                                </Button>
-                                <Button
-                                  variant="ghost"
                                   size="icon"
-                                  onClick={() => handleDeleteModel(m.id)}
+                                  onClick={() => handleDeleteCredential(c.id)}
+                                  className="rounded-xl hover:bg-red-500/10 hover:text-red-500"
                                 >
-                                  <Trash2 className="w-3 h-3" />
+                                  <Trash2 className="w-4 h-4" />
                                 </Button>
                               </div>
                             </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
 
-                  <div className="flex justify-end pt-2 border-t">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDeleteProvider(p.id)}
-                      className="text-destructive"
-                    >
-                      <Trash2 className="w-3 h-3 mr-1" />
-                      删除整个 Provider
-                    </Button>
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-            );
-          })}
-        </Accordion>
-      )}
+                    {/* 模型部分 */}
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between px-2">
+                        <h4 className="text-xs font-bold uppercase tracking-widest text-accent flex items-center gap-2">
+                          <div className="w-1.5 h-1.5 rounded-full bg-accent" />
+                          已同步模型池
+                        </h4>
+                      </div>
+                      {pModels.length === 0 ? (
+                        <div className="bg-white/5 rounded-2xl p-4 text-center border border-dashed border-white/10">
+                          <p className="text-xs text-muted-foreground">该供应商暂无可用模型</p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {pModels.map((m) => {
+                            const roles = parseWorkRoles(m.workRoles);
+                            return (
+                              <div
+                                key={m.id}
+                                className="group flex flex-col justify-between bg-white/5 border border-white/5 hover:border-primary/20 rounded-2xl p-5 transition-all gap-4"
+                              >
+                                <div className="space-y-3">
+                                  <div className="flex items-start justify-between">
+                                    <div className="space-y-1">
+                                      <div className="font-mono text-sm font-bold tracking-tighter truncate max-w-[180px]">
+                                        {m.name}
+                                      </div>
+                                      <div className="text-[10px] font-medium text-muted-foreground/60">
+                                        {m.displayName || "核心原厂模型"}
+                                      </div>
+                                    </div>
+                                    <Badge
+                                      variant={m.enabled ? "default" : "outline"}
+                                      className={cn(
+                                        "text-[9px] uppercase font-black px-1.5 py-0 h-4",
+                                        m.enabled ? "bg-emerald-500/20 text-emerald-500 border-none" : "border-white/10 text-muted-foreground/50"
+                                      )}
+                                    >
+                                      {m.enabled ? "在线" : "离线"}
+                                    </Badge>
+                                  </div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {roles.slice(0, 4).map((r) => (
+                                      <div key={r} className="px-2 py-0.5 bg-black/20 text-[9px] font-bold text-muted-foreground/80 rounded-md uppercase tracking-tight">
+                                        {r}
+                                      </div>
+                                    ))}
+                                    {roles.length > 4 && (
+                                      <div className="px-2 py-0.5 bg-black/20 text-[9px] font-bold text-muted-foreground/40 rounded-md">
+                                        +{roles.length - 4}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex items-center justify-between pt-2 border-t border-white/5">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => toggleModelEnabled(m)}
+                                    className="h-8 text-[10px] font-bold uppercase tracking-widest hover:bg-white/5"
+                                  >
+                                    {m.enabled ? "下线停用" : "恢复上线"}
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleDeleteModel(m.id)}
+                                    className="h-8 w-8 rounded-lg hover:bg-red-500/10 hover:text-red-500"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </Button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex justify-end pt-6 border-t border-white/10">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDeleteProvider(p.id)}
+                        className="text-[10px] font-bold uppercase tracking-widest text-red-500/60 hover:text-red-500 hover:bg-red-500/10 rounded-xl px-4"
+                      >
+                        <AlertCircle className="w-3.5 h-3.5 mr-2" />
+                        彻底删除供应商配置
+                      </Button>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              );
+            })}
+          </Accordion>
+        )}
+      </div>
 
       <AddProviderDialog
         open={dialogOpen}

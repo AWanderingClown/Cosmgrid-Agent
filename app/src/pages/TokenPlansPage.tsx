@@ -1,7 +1,6 @@
-// TokenPlansPage - Token Plan 管理（7.4 / 4.4）
-// 管理订阅套餐的额度、恢复周期、阈值提醒（与 API 接入分离）
+// TokenPlansPage - 重构为 "Cosmic Cyber" 视觉风格
 import { useEffect, useState } from "react";
-import { Plus, Coins, Trash2 } from "lucide-react";
+import { Plus, Coins, Trash2, Gauge, Activity, Calendar, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -28,30 +27,31 @@ import {
   type TokenPlan,
   type Provider,
 } from "@/lib/db";
+import { cn } from "@/lib/utils";
 
 const PLAN_TYPES = [
-  { value: "monthly", label: "月付" },
-  { value: "usage", label: "按量" },
-  { value: "message_count", label: "消息数" },
-  { value: "token_pack", label: "Token 包" },
-  { value: "time_window", label: "时间窗口恢复" },
-  { value: "unknown", label: "未知" },
+  { value: "monthly", label: "月付套餐" },
+  { value: "usage", label: "按量计费" },
+  { value: "message_count", label: "消息包" },
+  { value: "token_pack", label: "Token 资源包" },
+  { value: "time_window", label: "时间窗口重置" },
+  { value: "unknown", label: "其他" },
 ];
 
 const QUOTA_UNITS = [
-  { value: "token", label: "token" },
+  { value: "token", label: "Tokens" },
   { value: "request", label: "请求数" },
   { value: "message", label: "消息数" },
   { value: "usd", label: "美元" },
-  { value: "time", label: "时间" },
+  { value: "time", label: "时长" },
 ];
 
-function statusOf(p: TokenPlan): { label: string; variant: "default" | "secondary" | "destructive" | "outline" } {
-  if (!p.totalQuota) return { label: "未知", variant: "outline" };
+function statusOf(p: TokenPlan): { label: string; color: string } {
+  if (!p.totalQuota) return { label: "监控中", color: "text-blue-400" };
   const ratio = p.usedQuota / p.totalQuota;
-  if (ratio >= 1) return { label: "已耗尽", variant: "destructive" };
-  if (ratio >= 0.8) return { label: "接近耗尽", variant: "secondary" };
-  return { label: "充足", variant: "default" };
+  if (ratio >= 1) return { label: "已耗尽", color: "text-red-500" };
+  if (ratio >= 0.8) return { label: "接近耗尽", color: "text-orange-500" };
+  return { label: "额度充足", color: "text-emerald-400" };
 }
 
 export function TokenPlansPage() {
@@ -78,10 +78,7 @@ export function TokenPlansPage() {
   }, []);
 
   async function handleCreate() {
-    if (!form.providerId || !form.name) {
-      alert("请填写套餐名称并选择 Provider");
-      return;
-    }
+    if (!form.providerId || !form.name) return;
     await dbTokenPlans.create({
       providerId: form.providerId,
       name: form.name,
@@ -96,7 +93,7 @@ export function TokenPlansPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("确定删除这个 Token Plan？")) return;
+    if (!confirm("确定移除此用量计划？")) return;
     await dbTokenPlans.delete(id);
     await load();
   }
@@ -109,164 +106,226 @@ export function TokenPlansPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold flex items-center gap-2">
-            <Coins className="w-5 h-5" />
-            Token Plan
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            管理订阅套餐额度，跟 API 接入分开（同一个 Provider 可以既有 API 又有套餐）
-          </p>
-        </div>
-        <Button onClick={() => setDialogOpen(true)} disabled={providers.length === 0}>
-          <Plus className="w-4 h-4 mr-2" />
-          添加套餐
-        </Button>
-      </div>
+    <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
+      <div className="max-w-6xl mx-auto space-y-8">
+        <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-primary">
+              <Activity className="w-5 h-5" />
+              <span className="text-[10px] font-bold uppercase tracking-[0.2em]">实时监控中</span>
+            </div>
+            <h1 className="text-3xl font-bold tracking-tight">用量资产管理</h1>
+            <p className="text-muted-foreground text-sm max-w-lg">
+              集中监控不同供应商的 API 额度消耗，系统将根据您的计划自动触发告警与模型降级策略。
+            </p>
+          </div>
+          <Button
+            onClick={() => setDialogOpen(true)}
+            disabled={providers.length === 0}
+            className="rounded-xl px-6 h-11 bg-primary shadow-lg shadow-primary/20 hover:scale-105 transition-all"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            新建用量计划
+          </Button>
+        </header>
 
-      {providers.length === 0 && (
-        <p className="text-sm text-amber-600">先去"API 接入"添加至少一个 Provider，才能挂套餐。</p>
-      )}
+        {providers.length === 0 ? (
+          <Card className="glass border-dashed p-12 text-center flex flex-col items-center gap-4 rounded-3xl">
+            <div className="p-4 bg-amber-500/10 rounded-2xl">
+              <ShieldCheck className="w-8 h-8 text-amber-500" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-bold">未检测到活跃供应商</h3>
+              <p className="text-sm text-muted-foreground">请先在「模型供应商」页面配置 API 凭证。</p>
+            </div>
+          </Card>
+        ) : plans.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center glass rounded-3xl border-dashed">
+             <Coins className="w-12 h-12 text-muted-foreground/30 mb-4" />
+             <p className="text-muted-foreground text-sm">暂无活跃的用量计划</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {plans.map((p) => {
+              const st = statusOf(p);
+              const ratio = p.totalQuota ? (p.usedQuota / p.totalQuota) * 100 : 0;
+              const isHigh = ratio >= 80;
 
-      {plans.length === 0 ? (
-        <Card className="p-12 text-center">
-          <p className="text-muted-foreground">还没有添加任何 Token Plan</p>
-        </Card>
-      ) : (
-        <div className="grid grid-cols-2 gap-3">
-          {plans.map((p) => {
-            const st = statusOf(p);
-            const ratio = p.totalQuota ? Math.min(100, (p.usedQuota / p.totalQuota) * 100) : 0;
-            return (
-              <Card key={p.id} className="p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-medium">{p.name}</h3>
-                    <p className="text-xs text-muted-foreground">{p.provider?.name}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant={st.variant}>{st.label}</Badge>
-                    <Button variant="ghost" size="icon" onClick={() => handleDelete(p.id)}>
-                      <Trash2 className="w-3 h-3" />
-                    </Button>
-                  </div>
-                </div>
+              return (
+                <Card key={p.id} className="group glass hover:border-primary/30 transition-all duration-500 rounded-[2rem] overflow-hidden p-0">
+                  <div className="p-6 space-y-6">
+                    <div className="flex items-start justify-between">
+                      <div className="flex gap-4">
+                        <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center group-hover:scale-110 transition-transform duration-500">
+                          <Gauge className="w-6 h-6 text-primary" />
+                        </div>
+                        <div>
+                          <h3 className="text-lg font-bold tracking-tight group-hover:text-primary transition-colors">{p.name}</h3>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">{p.provider?.name}</span>
+                            <div className="w-1 h-1 rounded-full bg-muted-foreground/30" />
+                            <span className={cn("text-[10px] font-bold uppercase", st.color)}>{st.label}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleDelete(p.id)}
+                        className="rounded-xl hover:bg-red-500/10 hover:text-red-500 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
 
-                {p.totalQuota != null && (
-                  <div className="space-y-1">
-                    <Progress value={ratio} />
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span>
-                        已用 {p.usedQuota} / {p.totalQuota} {p.quotaUnit}
-                      </span>
-                      <Input
-                        type="number"
-                        defaultValue={p.usedQuota}
-                        onBlur={(e) => void handleUsedQuotaChange(p, e.target.value)}
-                        className="h-6 w-20 text-xs"
-                      />
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-end px-1">
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-2xl font-mono font-bold tracking-tighter">
+                            {p.usedQuota.toLocaleString()}
+                          </span>
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase">{p.quotaUnit}</span>
+                        </div>
+                        <div className="text-[10px] font-bold text-muted-foreground/60 uppercase">
+                           上限: {p.totalQuota ? p.totalQuota.toLocaleString() : "∞"}
+                        </div>
+                      </div>
+
+                      <div className="relative h-2.5 w-full bg-muted/30 rounded-full overflow-hidden">
+                        <div
+                          className={cn(
+                            "absolute inset-y-0 left-0 rounded-full transition-all duration-1000 ease-out",
+                            isHigh ? "bg-gradient-to-r from-orange-400 to-red-500" : "bg-gradient-to-r from-blue-400 to-primary"
+                          )}
+                          style={{ width: `${Math.min(100, ratio)}%` }}
+                        />
+                        {isHigh && <div className="absolute inset-0 shimmer-bg opacity-30" />}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 pt-2">
+                      <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-muted/50 text-[10px] font-bold text-muted-foreground uppercase border border-white/5">
+                        <Activity className="w-3 h-3" />
+                        {PLAN_TYPES.find((t) => t.value === p.planType)?.label || "自定义"}
+                      </div>
+                      {p.resetRule && (
+                        <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-muted/50 text-[10px] font-bold text-muted-foreground uppercase border border-white/5">
+                          <Calendar className="w-3 h-3" />
+                          重置: {p.resetRule}
+                        </div>
+                      )}
+
+                      <div className="ml-auto flex items-center gap-2">
+                        <span className="text-[10px] font-bold text-muted-foreground/40 uppercase">更新已用</span>
+                        <Input
+                          type="number"
+                          defaultValue={p.usedQuota}
+                          onBlur={(e) => void handleUsedQuotaChange(p, e.target.value)}
+                          className="h-7 w-20 text-[10px] font-mono bg-white/5 border-white/10 rounded-lg focus:ring-primary/20"
+                        />
+                      </div>
                     </div>
                   </div>
-                )}
-
-                <div className="flex gap-2 text-xs text-muted-foreground">
-                  <Badge variant="outline">{PLAN_TYPES.find((t) => t.value === p.planType)?.label ?? p.planType}</Badge>
-                  {p.resetRule && <Badge variant="outline">恢复：{p.resetRule}</Badge>}
-                </div>
-              </Card>
-            );
-          })}
-        </div>
-      )}
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
+        <DialogContent className="glass border-white/10 rounded-[2rem] max-w-md">
           <DialogHeader>
-            <DialogTitle>添加 Token Plan</DialogTitle>
+            <DialogTitle className="text-xl font-bold flex items-center gap-2">
+              <Plus className="w-5 h-5 text-primary" />
+              添加用量计划
+            </DialogTitle>
           </DialogHeader>
-          <div className="space-y-3">
-            <div>
-              <Label>所属 Provider</Label>
+
+          <div className="space-y-5 py-4">
+            <div className="space-y-2">
+              <Label className="text-[10px] font-bold uppercase tracking-widest px-1">所属供应商</Label>
               <Select value={form.providerId} onValueChange={(v) => setForm({ ...form, providerId: v })}>
-                <SelectTrigger>
-                  <SelectValue placeholder="选择 Provider" />
+                <SelectTrigger className="rounded-xl border-white/10 bg-white/5 h-11">
+                  <SelectValue placeholder="选择提供商" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="glass border-white/10 rounded-xl">
                   {providers.map((pr) => (
-                    <SelectItem key={pr.id} value={pr.id}>
-                      {pr.name}
-                    </SelectItem>
+                    <SelectItem key={pr.id} value={pr.id} className="rounded-lg">{pr.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <Label>套餐名称</Label>
+
+            <div className="space-y-2">
+              <Label className="text-[10px] font-bold uppercase tracking-widest px-1">套餐显示名称</Label>
               <Input
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="如 Claude Code Max"
+                placeholder="例如: GPT-4 每月专业版"
+                className="rounded-xl border-white/10 bg-white/5 h-11"
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>套餐类型</Label>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-[10px] font-bold uppercase tracking-widest px-1">计划类型</Label>
                 <Select value={form.planType} onValueChange={(v) => setForm({ ...form, planType: v })}>
-                  <SelectTrigger>
+                  <SelectTrigger className="rounded-xl border-white/10 bg-white/5 h-11">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="glass border-white/10 rounded-xl">
                     {PLAN_TYPES.map((t) => (
-                      <SelectItem key={t.value} value={t.value}>
-                        {t.label}
-                      </SelectItem>
+                      <SelectItem key={t.value} value={t.value} className="rounded-lg">{t.label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
-              <div>
-                <Label>额度单位</Label>
+              <div className="space-y-2">
+                <Label className="text-[10px] font-bold uppercase tracking-widest px-1">计费单位</Label>
                 <Select value={form.quotaUnit} onValueChange={(v) => setForm({ ...form, quotaUnit: v })}>
-                  <SelectTrigger>
+                  <SelectTrigger className="rounded-xl border-white/10 bg-white/5 h-11">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="glass border-white/10 rounded-xl">
                     {QUOTA_UNITS.map((u) => (
-                      <SelectItem key={u.value} value={u.value}>
-                        {u.label}
-                      </SelectItem>
+                      <SelectItem key={u.value} value={u.value} className="rounded-lg">{u.label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>总额度（可空）</Label>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-[10px] font-bold uppercase tracking-widest px-1">总额度上限</Label>
                 <Input
                   type="number"
                   value={form.totalQuota}
                   onChange={(e) => setForm({ ...form, totalQuota: e.target.value })}
-                  placeholder="如 100"
+                  placeholder="留空为无限制"
+                  className="rounded-xl border-white/10 bg-white/5 h-11"
                 />
               </div>
-              <div>
-                <Label>恢复周期（可空）</Label>
+              <div className="space-y-2">
+                <Label className="text-[10px] font-bold uppercase tracking-widest px-1">重置规则</Label>
                 <Input
                   value={form.resetRule}
                   onChange={(e) => setForm({ ...form, resetRule: e.target.value })}
-                  placeholder="如 每月 1 日"
+                  placeholder="例如: 每月1日"
+                  className="rounded-xl border-white/10 bg-white/5 h-11"
                 />
               </div>
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" onClick={() => setDialogOpen(false)} className="rounded-xl h-11">
               取消
             </Button>
-            <Button onClick={handleCreate}>创建</Button>
+            <Button onClick={handleCreate} className="rounded-xl h-11 px-8 bg-primary shadow-lg shadow-primary/20">
+              确认启用
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

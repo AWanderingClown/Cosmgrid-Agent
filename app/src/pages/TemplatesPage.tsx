@@ -1,7 +1,6 @@
-// TemplatesPage - 项目模板（7.8 / 4.13）
-// 4 个内置模板（只定义角色清单）+ 用户自定义模板（复制内置 + 改模型分配 + 保存）
+// TemplatesPage - 重构 v0.7.3: 彻底解决重叠，统一中文语言
 import { useEffect, useState } from "react";
-import { LayoutTemplate, Copy, Trash2, Sparkles } from "lucide-react";
+import { LayoutTemplate, Copy, Trash2, Sparkles, ChevronRight, Settings2, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +22,7 @@ import {
 import { BUILT_IN_TEMPLATES } from "@/lib/templates";
 import { WORK_ROLES, parseWorkRoles } from "@/lib/api";
 import { autoAssignModels } from "@/lib/llm/model-capabilities";
+import { cn } from "@/lib/utils";
 
 function roleLabel(role: string): string {
   return WORK_ROLES.find((r) => r.value === role)?.label ?? role;
@@ -42,23 +42,17 @@ export function TemplatesPage() {
     if (!selectedId && t.length > 0) setSelectedId(t[0]!.id);
   }
 
-  useEffect(() => {
-    void load();
-  }, []);
+  useEffect(() => { void load(); }, []);
 
-  // 选中模板（或模型列表就绪）时：加载已有分配，并给"还没分配模型的角色"自动配上最优模型。
-  // 这样用户进来就看到默认值，不用一个个去选；想改再改。
   useEffect(() => {
     if (!selectedId) return;
     void loadRolesWithAutoAssign(selectedId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, models]);
 
   const selected = templates.find((t) => t.id === selectedId) ?? null;
   const builtInDef = selected ? BUILT_IN_TEMPLATES.find((b) => b.name === selected.name) : null;
   const roleNames = builtInDef ? builtInDef.workRoles : roles.map((r) => r.workRole);
 
-  // 算出某模板的完整角色清单（内置模板看定义，自定义模板看已存的角色行）
   function roleNamesFor(templateId: string, existing: ProjectTemplateRole[]): string[] {
     const tpl = templates.find((t) => t.id === templateId);
     const def = tpl ? BUILT_IN_TEMPLATES.find((b) => b.name === tpl.name) : null;
@@ -82,7 +76,6 @@ export function TemplatesPage() {
     }
   }
 
-  // 一键智能分配：覆盖所有角色，重新按模型能力分配（用户手动改乱了想重置时用）
   async function autoAssignAll() {
     if (!selected || models.length === 0) return;
     setSaving(true);
@@ -96,9 +89,7 @@ export function TemplatesPage() {
         else await dbTemplateRoles.create({ templateId: selected.id, workRole: role, modelId });
       }
       setRoles(await dbTemplateRoles.listByTemplate(selected.id));
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   }
 
   function modelsForRole(role: string): Model[] {
@@ -114,175 +105,164 @@ export function TemplatesPage() {
     setSaving(true);
     try {
       const existing = roleAssignment(role);
-      if (existing) {
-        await dbTemplateRoles.update(existing.id, { modelId });
-      } else {
-        await dbTemplateRoles.create({ templateId: selected.id, workRole: role, modelId });
-      }
+      if (existing) await dbTemplateRoles.update(existing.id, { modelId });
+      else await dbTemplateRoles.create({ templateId: selected.id, workRole: role, modelId });
       setRoles(await dbTemplateRoles.listByTemplate(selected.id));
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   }
 
   async function assignFallback(role: string, fallbackModelId: string) {
     if (!selected) return;
     const existing = roleAssignment(role);
-    if (!existing) return; // 主模型还没选，不能先选 fallback
+    if (!existing) return;
     setSaving(true);
     try {
       await dbTemplateRoles.update(existing.id, { fallbackModelId: fallbackModelId || null });
       setRoles(await dbTemplateRoles.listByTemplate(selected.id));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function saveAsCustom() {
-    if (!selected) return;
-    const name = prompt("新模板名称：", `${selected.name}（自定义）`);
-    if (!name) return;
-    const copy = await dbTemplates.create({ name, description: selected.description, icon: selected.icon, isBuiltIn: false });
-    for (const role of roleNames) {
-      const a = roleAssignment(role);
-      if (a) {
-        await dbTemplateRoles.create({
-          templateId: copy.id,
-          workRole: role,
-          modelId: a.modelId,
-          fallbackModelId: a.fallbackModelId,
-        });
-      }
-    }
-    await load();
-    setSelectedId(copy.id);
-  }
-
-  async function deleteTemplate(id: string) {
-    if (!confirm("确定删除这个自定义模板？")) return;
-    await dbTemplates.delete(id);
-    setSelectedId(null);
-    await load();
+    } finally { setSaving(false); }
   }
 
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-4">
-      <div>
-        <h1 className="text-2xl font-semibold flex items-center gap-2">
-          <LayoutTemplate className="w-5 h-5" />
-          项目模板
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          每个模板定义"做这类项目时，每个角色用哪个模型"。添加模型后，系统会按模型擅长的领域自动分配，你只需在想调整时改。
-        </p>
-      </div>
+    <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
+      <div className="max-w-6xl mx-auto space-y-10 pb-20">
+        <header className="space-y-3 border-l-4 border-primary pl-6 py-2">
+          <div className="flex items-center gap-2 text-primary font-bold">
+            <Settings2 className="w-5 h-5" />
+            <span className="text-xs uppercase tracking-widest">流水线配置架构师</span>
+          </div>
+          <h1 className="text-4xl font-black tracking-tight dark:text-white">项目角色模板</h1>
+          <p className="text-muted-foreground dark:text-muted-foreground/80 text-sm max-w-2xl leading-relaxed">
+            定义不同协作场景下的 AI 专家组合。系统会自动根据各个模型的评分，为您推荐最擅长该领域的 AI 节点。
+          </p>
+        </header>
 
-      <div className="grid grid-cols-[240px_1fr] gap-4">
-        <div className="space-y-2">
-          {templates.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setSelectedId(t.id)}
-              className={`w-full text-left p-3 rounded-lg border text-sm transition-colors ${
-                selectedId === t.id ? "bg-primary text-primary-foreground" : "hover:bg-accent"
-              }`}
-            >
-              <div className="font-medium flex items-center gap-2">
-                {t.name}
-                {t.isBuiltIn && <Badge variant="secondary" className="text-xs">内置</Badge>}
-              </div>
-            </button>
-          ))}
-        </div>
-
-        {selected ? (
-          <Card className="p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="font-semibold">{selected.name}</h2>
-                <p className="text-xs text-muted-foreground mt-1">{selected.description}</p>
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void autoAssignAll()}
-                  disabled={saving || models.length === 0}
-                  title="按每个模型擅长的领域，自动给所有角色重新分配"
-                >
-                  <Sparkles className="w-3 h-3 mr-1" />
-                  一键智能分配
-                </Button>
-                <Button variant="outline" size="sm" onClick={saveAsCustom}>
-                  <Copy className="w-3 h-3 mr-1" />
-                  另存为我的模板
-                </Button>
-                {!selected.isBuiltIn && (
-                  <Button variant="ghost" size="sm" className="text-destructive" onClick={() => deleteTemplate(selected.id)}>
-                    <Trash2 className="w-3 h-3 mr-1" />
-                    删除
-                  </Button>
+        <div className="flex flex-col xl:flex-row gap-8 items-start">
+          {/* 左侧：模板选择列表 */}
+          <aside className="w-full xl:w-72 shrink-0 space-y-3">
+            <div className="text-[10px] font-black text-muted-foreground/40 uppercase tracking-[0.2em] px-4 mb-4">可用方案库</div>
+            {templates.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setSelectedId(t.id)}
+                className={cn(
+                  "w-full text-left p-5 rounded-2xl border transition-all duration-300 group relative",
+                  selectedId === t.id
+                    ? "bg-primary text-primary-foreground border-transparent shadow-xl shadow-primary/20 translate-x-2"
+                    : "glass border-white/10 hover:border-white/30 text-muted-foreground hover:text-foreground dark:bg-zinc-900/40"
                 )}
-              </div>
-            </div>
-
-            {models.length === 0 && (
-              <p className="text-sm text-amber-600">还没有可用模型，先去"API 接入"添加一个吧。</p>
-            )}
-
-            <div className="space-y-3">
-              {roleNames.map((role) => {
-                const a = roleAssignment(role);
-                const candidates = modelsForRole(role);
-                return (
-                  <div key={role} className="flex items-center gap-3 bg-muted/30 rounded-lg p-3">
-                    <Badge variant="outline" className="w-28 justify-center shrink-0">
-                      {roleLabel(role)}
-                    </Badge>
-                    <Select
-                      value={a?.modelId ?? ""}
-                      onValueChange={(v) => void assignModel(role, v)}
-                      disabled={saving}
-                    >
-                      <SelectTrigger className="flex-1">
-                        <SelectValue placeholder="选择模型（首选）" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {candidates.map((m) => (
-                          <SelectItem key={m.id} value={m.id}>
-                            {m.displayName ?? m.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select
-                      value={a?.fallbackModelId ?? ""}
-                      onValueChange={(v) => void assignFallback(role, v)}
-                      disabled={saving || !a}
-                    >
-                      <SelectTrigger className="flex-1">
-                        <SelectValue placeholder="fallback（可选）" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {candidates
-                          .filter((m) => m.id !== a?.modelId)
-                          .map((m) => (
-                            <SelectItem key={m.id} value={m.id}>
-                              {m.displayName ?? m.name}
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
+              >
+                <div className="space-y-1">
+                  <div className="font-bold flex items-center justify-between">
+                    <span className={cn(selectedId === t.id ? "text-white" : "text-foreground")}>{t.name}</span>
+                    {t.isBuiltIn && <Badge className="text-[9px] bg-white/20 text-white border-none">内置</Badge>}
                   </div>
-                );
-              })}
-            </div>
-          </Card>
-        ) : (
-          <Card className="p-12 text-center">
-            <p className="text-muted-foreground">选一个模板看看</p>
-          </Card>
-        )}
+                  <div className={cn("text-[10px] font-medium opacity-60", selectedId === t.id ? "text-white" : "")}>
+                    共包含 {BUILT_IN_TEMPLATES.find(b => b.name === t.name)?.workRoles.length || roles.length} 个协作节点
+                  </div>
+                </div>
+              </button>
+            ))}
+          </aside>
+
+          {/* 右侧：映射配置详情 */}
+          <div className="flex-1 min-w-0 w-full">
+            {selected ? (
+              <Card className="glass border-white/15 dark:border-white/5 rounded-[2.5rem] p-8 space-y-8 animate-in fade-in zoom-in-95 duration-500 shadow-2xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 pb-6 border-b border-white/10">
+                  <div className="space-y-1">
+                    <h2 className="text-2xl font-black tracking-tight dark:text-white">{selected.name}</h2>
+                    <p className="text-sm font-medium text-muted-foreground">{selected.description || "正在为您加载该协作流程的专家配置清单。"}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="ghost"
+                      onClick={() => void autoAssignAll()}
+                      disabled={saving || models.length === 0}
+                      className="rounded-xl h-10 px-4 text-xs font-bold bg-primary/10 text-primary hover:bg-primary hover:text-white transition-all gap-2"
+                    >
+                      <Sparkles className="w-4 h-4" /> 智能一键分配
+                    </Button>
+                    <Button variant="ghost" className="rounded-xl h-10 px-4 text-xs font-bold bg-white/5 hover:bg-white/10 border border-white/5 gap-2 dark:text-white">
+                      <Copy className="w-4 h-4" /> 另存模板
+                    </Button>
+                  </div>
+                </div>
+
+                {models.length === 0 && (
+                  <div className="p-6 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-center gap-4 text-amber-600 dark:text-amber-500">
+                    <ShieldAlert className="w-6 h-6 shrink-0" />
+                    <p className="text-sm font-bold">未检测到已连接的 AI 模型。请先前往「模型供应商」页面添加配置。</p>
+                  </div>
+                )}
+
+                <div className="space-y-4">
+                  {roleNames.map((role) => {
+                    const a = roleAssignment(role);
+                    const candidates = modelsForRole(role);
+                    return (
+                      <div key={role} className="flex flex-col lg:flex-row lg:items-center gap-6 bg-white/5 dark:bg-zinc-900/30 border border-white/5 hover:border-primary/20 rounded-2xl p-6 transition-all duration-300">
+                        <div className="w-40 shrink-0">
+                           <div className="text-sm font-black tracking-tight text-primary">{roleLabel(role)}</div>
+                           <p className="text-[10px] text-muted-foreground/60 mt-1 uppercase font-bold tracking-wider">节点专家角色</p>
+                        </div>
+
+                        <ChevronRight className="hidden lg:block w-4 h-4 text-muted-foreground/20" />
+
+                        <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black text-muted-foreground/40 uppercase px-1">首选专家模型</label>
+                            <Select
+                              value={a?.modelId ?? ""}
+                              onValueChange={(v) => void assignModel(role, v)}
+                              disabled={saving}
+                            >
+                              <SelectTrigger className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-xs font-bold dark:text-white">
+                                <SelectValue placeholder="请选择主模型" />
+                              </SelectTrigger>
+                              <SelectContent className="glass border-white/10 rounded-xl">
+                                {candidates.map((m) => (
+                                  <SelectItem key={m.id} value={m.id} className="rounded-lg">{m.displayName ?? m.name}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black text-muted-foreground/40 uppercase px-1">故障自动切换 (Fallback)</label>
+                            <Select
+                              value={a?.fallbackModelId ?? ""}
+                              onValueChange={(v) => void assignFallback(role, v)}
+                              disabled={saving || !a}
+                            >
+                              <SelectTrigger className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-xs font-bold dark:text-white">
+                                <SelectValue placeholder="无备用方案" />
+                              </SelectTrigger>
+                              <SelectContent className="glass border-white/10 rounded-xl">
+                                <SelectItem value="none" className="rounded-lg italic opacity-60">不启用备用方案</SelectItem>
+                                {candidates.filter((m) => m.id !== a?.modelId).map((m) => (
+                                  <SelectItem key={m.id} value={m.id} className="rounded-lg">{m.displayName ?? m.name}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            ) : (
+              <div className="h-[500px] flex items-center justify-center glass rounded-[3rem] border-dashed">
+                <div className="text-center space-y-4 opacity-30">
+                   <div className="p-8 bg-primary/5 rounded-full w-fit mx-auto">
+                     <LayoutTemplate className="w-16 h-16 text-primary" />
+                   </div>
+                   <p className="text-sm font-black uppercase tracking-[0.4em]">请从左侧选择一个方案模版</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
