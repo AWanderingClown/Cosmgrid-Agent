@@ -56,19 +56,19 @@ export function planUsageLevel(
   return "ok";
 }
 
-/** 给 UI 用的提示文案 + 颜色 */
+/** 给 UI 用的提示文案 + 颜色（v0.7 i18n 化：用 i18n key 替代硬编码中文） */
 export function levelPresentation(level: UsageLevel): {
-  label: string;
+  labelKey: string;
   variant: "default" | "secondary" | "destructive";
 } {
   switch (level) {
     case "exhausted":
-      return { label: "已耗尽", variant: "destructive" };
+      return { labelKey: "tokenPlans.status.exhausted", variant: "destructive" };
     case "critical":
-      return { label: "严重不足", variant: "destructive" };
+      return { labelKey: "tokenPlans.status.critical", variant: "destructive" };
     case "warn":
-      return { label: "接近耗尽", variant: "secondary" };
+      return { labelKey: "tokenPlans.status.warn", variant: "secondary" };
     case "ok":
-      return { label: "充足", variant: "default" };
+      return { labelKey: "tokenPlans.status.ok", variant: "default" };
   }
 }

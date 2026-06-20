@@ -51,20 +51,25 @@ export function parseWorkRoles(json: string): string[] {
   }
 }
 
+/**
+ * Work role 枚举（v0.7 i18n 重构：label/description 移出常量，由 UI 层 t() 翻译）
+ * 历史：v0.6 前 `{ value, label, description }` 都用硬编码中文，UI 切英文会显示中文。
+ * 改后只剩 value 数组，UI 显示用 `t(\`workRoles.${value}\`)` 和 `t(\`workRoles.${value}_desc\`)`。
+ */
 export const WORK_ROLES = [
-  { value: "main_chat", label: "主对话", description: "用户跟 AI 的直接对话" },
-  { value: "planning", label: "计划阶段", description: "任务分解、架构设计" },
-  { value: "review", label: "代码 review", description: "PR/代码审查" },
-  { value: "frontend", label: "前端实现", description: "UI/CSS/组件" },
-  { value: "backend", label: "后端实现", description: "API/DB/服务" },
-  { value: "testing", label: "测试", description: "单测/集成测试" },
-  { value: "final_review", label: "最终审核", description: "完整方案复核" },
-  { value: "data_exploration", label: "数据探索", description: "数据科学项目：探索性分析" },
-  { value: "modeling", label: "建模", description: "数据科学项目：模型训练" },
-  { value: "ios", label: "iOS 实现", description: "移动 App 项目：iOS 端" },
-  { value: "android", label: "Android 实现", description: "移动 App 项目：Android 端" },
-  { value: "direct_generation", label: "直接生成", description: "小型脚本：一次性直出代码" },
-  { value: "general", label: "通用兜底", description: "无明确角色时" },
+  "main_chat",
+  "planning",
+  "review",
+  "frontend",
+  "backend",
+  "testing",
+  "final_review",
+  "data_exploration",
+  "modeling",
+  "ios",
+  "android",
+  "direct_generation",
+  "general",
 ] as const;
 
-export type WorkRole = (typeof WORK_ROLES)[number]["value"];
+export type WorkRole = (typeof WORK_ROLES)[number];

@@ -1,0 +1,520 @@
+{
+  "common": {
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "delete": "Delete",
+    "edit": "Edit",
+    "save": "Save",
+    "create": "Create",
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "optional": "(optional)",
+    "required": "*"
+  },
+  "errorClassifier": {
+    "auth_invalid": "API Key is invalid or expired — please check the Providers page",
+    "auth_forbidden": "API Key lacks permission — check your account for unpaid balance or plan limits",
+    "model_not_found": "Model not found or discontinued — please check the model name",
+    "context_overflow": "Conversation exceeds the model's context window — start a new chat or trim history",
+    "rate_limit": "Plan quota exhausted or rate-limited — wait a moment or check your plan status",
+    "server_error": "AI service temporarily unavailable — please try again later",
+    "timeout": "Request timed out — check your network or try again later",
+    "network": "Network connection failed — check network or Base URL config",
+    "unknown": "Conversation failed — please try again later"
+  },
+  "app": {
+    "brandSubtitle": "Intelligent Core Manager",
+    "sidebar": {
+      "chat": "Chat",
+      "projects": "Projects",
+      "providers": "Providers",
+      "templates": "Templates",
+      "tokenPlans": "Usage",
+      "settings": "Settings"
+    },
+    "alerts": {
+      "goToHandle": "Go to",
+      "dismiss": "Dismiss"
+    }
+  },
+  "chat": {
+    "userLabel": "You",
+    "assistantLabel": "CosmGrid Assistant",
+    "loadError": "Failed to load",
+    "noCredential": "API credential not found",
+    "noApiKey": "API Key missing",
+    "constructError": "Failed to construct model",
+    "switchedTo": "Switched to {{name}}",
+    "requestInterrupted": "Request interrupted",
+    "smartPick": "Smart Pick",
+    "usage": "Usage",
+    "inputTokens": "In: {{count}}",
+    "outputTokens": "Out: {{count}}",
+    "emptyState": {
+      "title": "Awaiting Initialization",
+      "desc": "Head to \"Providers\" first to connect your AI models.",
+      "goToConfig": "Configure"
+    },
+    "ready": "Ready",
+    "inputPlaceholder": "Use {{name}} to chat...",
+    "inputPlaceholderFallback": "Type a message...",
+    "footer": "Secure connection • {{version}} • Powered by CosmGrid",
+    "workPanel": {
+      "title": "Work Panel",
+      "close": "Collapse",
+      "empty": "No model activity in this session yet",
+      "sessionTotal": "Session Usage",
+      "turnLabel": "Turn {{n}}",
+      "primary": "Primary",
+      "fallback": "Fallback",
+      "switchedNote": "Auto-switched on limit",
+      "inTokens": "In",
+      "outTokens": "Out"
+    }
+  },
+  "providers": {
+    "sectionLabel": "External Core Integrations",
+    "title": "Model Providers",
+    "desc": "Connect to the world's leading AI model APIs. Supports OpenAI, Anthropic, Google, and any OpenAI-compatible custom endpoint.",
+    "addButton": "Add Provider",
+    "empty": {
+      "title": "No Active Providers",
+      "desc": "Click the button above to connect your first AI model."
+    },
+    "credentials": "Credentials",
+    "models": "Models",
+    "credentialsList": "API Credentials",
+    "noCredentials": "No credentials yet for this provider",
+    "defaultEndpoint": "Default endpoint",
+    "modelsPool": "Available Models",
+    "noModels": "No models yet for this provider",
+    "defaultModelLabel": "Core Vendor Model",
+    "online": "Online",
+    "offline": "Offline",
+    "disable": "Take Offline",
+    "enable": "Bring Online",
+    "deleteProvider": "Delete this provider? Its credentials and models will also be removed.",
+    "deleteCredential": "Delete this credential?",
+    "deleteModel": "Delete this model?",
+    "deleteFailed": "Delete failed",
+    "updateFailed": "Update failed",
+    "loadFailed": "Failed to load providers",
+    "deleteProviderFull": "Delete Provider Configuration"
+  },
+  "addProvider": {
+    "title": "Add Provider",
+    "desc": "One form creates the Provider, credential, and model together.",
+    "providerName": "Provider Name",
+    "providerNamePlaceholder": "My Claude",
+    "website": "Website",
+    "notes": "Notes",
+    "notesPlaceholder": "API Key from work",
+    "providerType": "Provider Type",
+    "providerTypePlaceholder": "Select Provider",
+    "providerTypes": {
+      "anthropic": "Anthropic",
+      "openai": "OpenAI",
+      "google": "Google",
+      "openai-compatible": "OpenAI Compatible (GLM / DeepSeek / Qwen / Custom)"
+    },
+    "apiKey": "API Key",
+    "apiKeyPlaceholder": "Paste your API key",
+    "show": "Show",
+    "hide": "Hide",
+    "baseUrl": "Base URL",
+    "baseUrlPlaceholder": "https://api.example.com/v1",
+    "testConnection": "Test Connection",
+    "testing": "Testing...",
+    "connectSuccess": "Connected",
+    "connectSuccessWithLatency": "Connected, latency {{ms}}ms",
+    "connectFailed": "Connection failed: {{error}}",
+    "unknownError": "Unknown error",
+    "modelId": "Model ID",
+    "modelIdPlaceholder": "e.g. claude-opus-4-8",
+    "displayName": "Display Name",
+    "displayNamePlaceholder": "e.g. Opus 4.8",
+    "contextWindow": "Context Window",
+    "contextWindowPlaceholder": "e.g. 200000",
+    "workRoles": "Work Roles",
+    "workRolesHint": "Pick at least one",
+    "submitting": "Adding...",
+    "submit": "Add",
+    "fillRequired": "Please fill in all required fields",
+    "addFailed": "Failed to add",
+    "rollbackFailed": "Rollback failed"
+  },
+  "workRoles": {
+    "main_chat": "Main Chat",
+    "main_chat_desc": "Direct conversation with the user",
+    "planning": "Planning",
+    "planning_desc": "Task breakdown and architecture design",
+    "review": "Code Review",
+    "review_desc": "PR and code review",
+    "frontend": "Frontend",
+    "frontend_desc": "UI / CSS / components",
+    "backend": "Backend",
+    "backend_desc": "API / DB / services",
+    "testing": "Testing",
+    "testing_desc": "Unit and integration tests",
+    "final_review": "Final Review",
+    "final_review_desc": "Full-solution sanity check",
+    "data_exploration": "Data Exploration",
+    "data_exploration_desc": "Data science: exploratory analysis",
+    "modeling": "Modeling",
+    "modeling_desc": "Data science: model training",
+    "ios": "iOS",
+    "ios_desc": "Mobile app: iOS side",
+    "android": "Android",
+    "android_desc": "Mobile app: Android side",
+    "direct_generation": "Direct Generation",
+    "direct_generation_desc": "Small script: one-shot code output",
+    "general": "General Fallback",
+    "general_desc": "When no specific role applies"
+  },
+  "memoryKind": {
+    "decision": "Decision",
+    "lesson": "Lesson",
+    "context": "Context",
+    "preference": "Preference",
+    "other": "Other"
+  },
+  "builtinTemplates": {
+    "fullstack_web": {
+      "name": "Full-Stack Web Project",
+      "desc": "main_chat / planning / review / frontend / backend / testing / final_review"
+    },
+    "data_science": {
+      "name": "Data Science Project",
+      "desc": "main_chat / planning / review / data_exploration / modeling / testing / final_review"
+    },
+    "mobile_app": {
+      "name": "Mobile App",
+      "desc": "main_chat / planning / review / ios / android / testing / final_review"
+    },
+    "small_script": {
+      "name": "Small Script",
+      "desc": "main_chat / direct_generation / testing (for one-off scripts)"
+    }
+  },
+  "handoffMarkdown": {
+    "title": "Handoff → {{role}}",
+    "sourceCheckpoint": "_Source checkpoint: {{title}}_",
+    "generatedAt": "_Generated: {{time}}_",
+    "empty": "(empty)"
+  },
+  "templates": {
+    "sectionLabel": "Pipeline Architect",
+    "title": "Project Role Templates",
+    "desc": "Define AI expert combinations for different collaboration scenarios. The system auto-recommends the best-suited AI for each role based on model ratings.",
+    "available": "Available Templates",
+    "builtIn": "Built-in",
+    "noRoles": "No roles assigned",
+    "rolesCount": "{{count}} collaboration nodes",
+    "smartAssign": "Smart Auto-Assign",
+    "saveAs": "Save as Template",
+    "noModels": "No AI models connected. Please go to \"Providers\" first.",
+    "primaryModel": "Primary Model",
+    "primaryModelPlaceholder": "Select primary model",
+    "fallbackModel": "Fallback Model",
+    "fallbackModelPlaceholder": "No backup",
+    "fallbackDisabled": "Don't use a backup",
+    "selectTemplateHint": "Select a template on the left"
+  },
+  "projects": {
+    "sectionLabel": "Active Project Center",
+    "title": "Project Workspace",
+    "desc": "Manage multi-agent collaboration projects. Build on industrial-grade workflow templates to let your AI team automate complex development, review, and deployment tasks.",
+    "createButton": "New Project",
+    "empty": {
+      "title": "Nothing Here Yet",
+      "desc": "Create a new project to launch your first AI automation pipeline."
+    },
+    "noDescription": "No description provided",
+    "currentStage": "Current Stage",
+    "initializing": "Initializing",
+    "template": "Template",
+    "noTemplate": "None",
+    "updatedAt": "Updated {{time}}",
+    "pathConnected": "Path connected",
+    "deleteConfirm": "Delete this project? Its stage history will also be removed.",
+    "createDialog": {
+      "title": "New Project",
+      "step": "Step {{current}} of {{total}}",
+      "selectTemplate": "Pipeline Template",
+      "selectTemplatePlaceholder": "Select template",
+      "templateHint": "The system will auto-assign the best AI agents to the roles and stages defined by the template.",
+      "nameLabel": "Project Name",
+      "namePlaceholder": "Enter a recognizable project name",
+      "descLabel": "Project Description",
+      "descPlaceholder": "(optional) Briefly describe the goal",
+      "workspaceLabel": "Workspace Path",
+      "workspacePlaceholder": "e.g. ~/developer/cosmgrid-project",
+      "next": "Next",
+      "back": "Back",
+      "submit": "Launch Now",
+      "submitting": "Connecting..."
+    }
+  },
+  "projectStatus": {
+    "pending": "Pending",
+    "active": "Active",
+    "paused": "Paused",
+    "completed": "Completed",
+    "failed": "Failed",
+    "running": "Running",
+    "interrupted": "Interrupted",
+    "ready": "Ready"
+  },
+  "stageStatus": {
+    "pending": "Pending Start",
+    "active": "Running",
+    "paused": "Paused",
+    "completed": "Archived",
+    "failed": "System Failure",
+    "ready": "Awaiting Start",
+    "running": "Processing"
+  },
+  "tokenPlans": {
+    "sectionLabel": "Real-time Monitoring",
+    "title": "Usage Plans",
+    "desc": "Centrally monitor API quota usage across providers. The system will auto-trigger alerts and model fallback strategies based on your plans.",
+    "createButton": "New Usage Plan",
+    "emptyNoProvider": {
+      "title": "No Active Providers",
+      "desc": "Please configure an API credential in \"Providers\" first."
+    },
+    "emptyNoPlan": "No active usage plans yet",
+    "monitoring": "Monitoring",
+    "status": {
+      "exhausted": "Exhausted",
+      "critical": "Running Low",
+      "warn": "Almost Used Up",
+      "ok": "Plenty Left"
+    },
+    "limit": "Limit: {{value}}",
+    "limitUnlimited": "Limit: ∞",
+    "custom": "Custom",
+    "reset": "Reset: {{rule}}",
+    "used": "Updated usage",
+    "createDialog": {
+      "title": "Add Usage Plan",
+      "provider": "Provider",
+      "providerPlaceholder": "Select provider",
+      "name": "Plan Display Name",
+      "namePlaceholder": "e.g. GPT-4 Monthly Pro",
+      "type": "Plan Type",
+      "unit": "Billing Unit",
+      "total": "Total Quota",
+      "totalPlaceholder": "Leave blank for unlimited",
+      "resetRule": "Reset Rule",
+      "resetPlaceholder": "e.g. 1st of each month",
+      "confirm": "Enable"
+    },
+    "types": {
+      "monthly": "Monthly",
+      "usage": "Usage-Based",
+      "message_count": "Message Pack",
+      "token_pack": "Token Pack",
+      "time_window": "Time Window Reset",
+      "unknown": "Other"
+    },
+    "units": {
+      "token": "Tokens",
+      "request": "Requests",
+      "message": "Messages",
+      "usd": "USD",
+      "time": "Time"
+    },
+    "deleteConfirm": "Remove this usage plan?"
+  },
+  "settings": {
+    "sectionLabel": "System Settings",
+    "title": "Preferences",
+    "desc": "Manage your interface display, language preferences, and core configuration.",
+    "appearance": {
+      "title": "Appearance",
+      "theme": "Display Theme",
+      "themes": {
+        "light": "Light",
+        "dark": "Dark",
+        "system": "System"
+      },
+      "language": "Interface Language",
+      "languagePlaceholder": "Select language"
+    },
+    "security": {
+      "title": "Security & Local Data",
+      "localDb": {
+        "title": "Local Database",
+        "desc": "All conversations, API credentials, and project data are stored in a local SQLite database."
+      },
+      "manageDb": "Manage Database",
+      "apiKey": {
+        "title": "API Key Storage",
+        "desc": "Keys are encrypted via the OS keychain, with security backed by the underlying OS."
+      },
+      "encrypted": "Encrypted"
+    },
+    "about": {
+      "title": "About CosmGrid",
+      "tagline": "The next-generation multi-agent collaboration workstation, committed to providing the most stable, intuitive, and efficient AI collaboration environment for developers."
+    }
+  },
+  "onboarding": {
+    "title": "First-Time Setup",
+    "stepOf": "Step {{current}} of {{total}}: {{stepTitle}}",
+    "skip": "Skip Guide",
+    "neverShow": "Don't show again",
+    "prev": "Back",
+    "next": "Next",
+    "done": "Got it, let's start",
+    "nextWithTarget": "Next (jump to {{target}})",
+    "nextTarget": {
+      "providers": "Providers",
+      "templates": "Templates",
+      "projects": "Projects"
+    },
+    "steps": {
+      "addApiKey": {
+        "title": "Add Your First API Key",
+        "desc": "Go to \"Providers\", pick a vendor (Anthropic / OpenAI / Google / OpenAI-compatible like GLM/DeepSeek/Qwen), fill in the API Key and your first model."
+      },
+      "addSecondModel": {
+        "title": "Add a Second Model (Recommended)",
+        "desc": "At least 2 models are needed to showcase multi-AI collaboration — e.g. Opus for chat, Gemini for coding, Haiku for testing."
+      },
+      "browseTemplates": {
+        "title": "Browse the 4 Built-in Templates",
+        "desc": "Full-Stack Web / Data Science / Mobile App / Small Scripts — each template auto-assigns the best model to every role."
+      },
+      "createFirstProject": {
+        "title": "Create Your First Project",
+        "desc": "Pick a template, set the project name and workspace path (you can change it later), and you're done."
+      }
+    }
+  },
+  "projectDetail": {
+    "notFound": "Project not found",
+    "coreWorkflow": "Core Workflow",
+    "timeline": "Timeline",
+    "checkpoints": "Checkpoints",
+    "memories": "Memories",
+    "emptyBuffer": "Empty Buffer",
+    "loadError": "Load Failed",
+    "altBot": "Bot",
+    "altUser": "User",
+    "chat": {
+      "userLabel": "You",
+      "assistantLabel": "CosmGrid Assistant",
+      "placeholder": "Command the agent...",
+      "awaiting": "Awaiting Instruction",
+      "endpointFailed": "Endpoint Failed",
+      "streamFailed": "Stream Failed",
+      "failsafeSwitched": "Failsafe: Switched to {{name}}",
+      "switching": "Switching",
+      "apiKeyMissing": "API Key Missing",
+      "initFailed": "Initialization Failed",
+      "syncing": "Synchronizing Environment..."
+    },
+    "stageStatus": {
+      "ready": "Ready",
+      "running": "Running",
+      "active": "Active",
+      "completed": "Completed",
+      "failed": "Failed",
+      "interrupted": "Interrupted",
+      "pending": "Pending"
+    },
+    "projectStatus": {
+      "pending": "Pending",
+      "active": "Running",
+      "paused": "Paused",
+      "completed": "Archived",
+      "failed": "System Failure"
+    },
+    "deleteCheckpoint": "Delete this checkpoint? Associated handoff packets will also be removed.",
+    "systemModel": "System Model",
+    "startSequence": "Start Sequence",
+    "closeLogs": "Close Logs",
+    "viewDialog": "View Dialog",
+    "noRecords": "No Records",
+    "details": "Details",
+    "handoff": "Handoff",
+    "createCheckpoint": {
+      "title": "Create Checkpoint",
+      "selectStage": "Pick a stage to generate from",
+      "selectStagePlaceholder": "Select stage",
+      "regenerate": "Regenerate",
+      "generating": "Generating…",
+      "generatingHint": "AI is drafting the checkpoint from the conversation log…",
+      "selectStageFirst": "Please pick a stage first",
+      "noModelOrCred": "This stage has no usable model or credential — AI generation unavailable",
+      "apiKeyMissing": "API Key not found — please re-add the credential",
+      "generateFailed": "Generation failed",
+      "titleRequired": "Title is required",
+      "saveFailed": "Save failed",
+      "titleLabel": "Title *",
+      "titlePlaceholder": "e.g. Frontend v1 done, ready for backend integration",
+      "cancel": "Cancel",
+      "create": "Create",
+      "saving": "Saving…"
+    },
+    "checkpointDetail": {
+      "createdAt": "Created {{time}}",
+      "empty": "(empty)"
+    },
+    "fields": {
+      "goal": "Goal",
+      "completedSummary": "Completed Summary",
+      "currentContext": "Current Context",
+      "decisions": "Decisions",
+      "failedAttempts": "Failed Attempts",
+      "blockers": "Blockers",
+      "nextSteps": "Next Steps",
+      "doNotRepeat": "Do Not Repeat",
+      "acceptanceCriteria": "Acceptance Criteria"
+    },
+    "placeholders": {
+      "goal": "What this checkpoint aims to achieve",
+      "completedSummary": "What's been done so far",
+      "currentContext": "Key context the next role needs",
+      "decisions": "Why this approach, what was rejected",
+      "failedAttempts": "Things that didn't work",
+      "blockers": "Current blockers",
+      "nextSteps": "What the next role should do",
+      "doNotRepeat": "Never do this again",
+      "acceptanceCriteria": "How we know it's done"
+    },
+    "generateHandoff": {
+      "title": "Generate Handoff",
+      "sourceCheckpoint": "Source checkpoint:",
+      "targetRole": "Target Role",
+      "targetRolePlaceholder": "Pick the next role to hand off to",
+      "hint": "The handoff packet combines all checkpoint fields into markdown and saves it as a handoff_packets record.",
+      "cancel": "Cancel",
+      "generate": "Generate",
+      "generating": "Generating…",
+      "failed": "Generation failed"
+    },
+    "handoffDetail": {
+      "title": "Handoff → {{role}}",
+      "generatedAt": "Generated {{time}}"
+    },
+    "addMemory": {
+      "title": "Add Project Memory",
+      "type": "Type",
+      "titleRequired": "Title and content are both required",
+      "saveFailed": "Save failed",
+      "titleLabel": "Title *",
+      "titlePlaceholder": "e.g. API Keys stored in keychain plugin, not in DB",
+      "contentLabel": "Content *",
+      "contentPlaceholder": "What this memory covers / why the decision / future project use",
+      "tagsLabel": "Tags (optional, comma-separated)",
+      "tagsPlaceholder": "e.g. auth, ux, v0.3",
+      "tagsHint": "Tags help cross-project search match this memory with descriptions / other memories",
+      "cancel": "Cancel",
+      "save": "Save"
+    }
+  }
+}

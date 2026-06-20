@@ -1,20 +1,30 @@
 // ChatPage - 重构为 "Cosmic Cyber" 视觉风格
 import { memo, useEffect, useRef, useState } from "react";
-import { Bot, Send, Square, User, Zap, Sparkles, Cpu, ChevronDown } from "lucide-react";
+import { Bot, Send, Square, User, Zap, Sparkles, Cpu, ChevronDown, PanelRight, X, Activity } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { usePanelResize, ResizeHandle } from "@/components/ui/resize-handle";
 import { cn } from "@/lib/utils";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
 import { models as dbModels, apiCredentials as dbCredentials } from "@/lib/db";
 import { getApiKey } from "@/lib/keystore";
 import { streamWithFallback, toModelEndpoint, type StreamUsage } from "@/lib/llm/chat-fallback";
-import { pickBestModelForRole } from "@/lib/llm/model-capabilities";
+import { pickBestModelForRole, rankFallbackModels } from "@/lib/llm/model-capabilities";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /** 工作面板用：这一轮实际用了哪个模型（展示名） */
+  modelLabel?: string;
+  /** 是否因限额/失败自动切到了备用模型 */
+  switched?: boolean;
+  /** 切到了哪个模型 */
+  switchedTo?: string;
+  /** 这一轮的 token 用量 */
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 type ChatUsage = StreamUsage;
@@ -28,6 +38,7 @@ const MessageItem = memo(function MessageItem({
   text: string;
   isStreaming: boolean;
 }) {
+  const { t } = useTranslation();
   const isAssistant = role === "assistant";
 
   return (
@@ -56,7 +67,7 @@ const MessageItem = memo(function MessageItem({
         <div className="flex-1 space-y-2 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">
-              {isAssistant ? "CosmGrid 助手" : "授权用户"}
+              {isAssistant ? t("chat.assistantLabel") : t("chat.userLabel")}
             </span>
           </div>
           <div
@@ -77,6 +88,7 @@ const MessageItem = memo(function MessageItem({
 });
 
 export function ChatPage() {
+  const { t } = useTranslation();
   const [availableModels, setAvailableModels] = useState<ModelListItem[]>([]);
   const [credentials, setCredentials] = useState<CredentialListItem[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>("");
@@ -86,6 +98,8 @@ export function ChatPage() {
   const [switchNotice, setSwitchNotice] = useState<string | null>(null);
   const [lastUsage, setLastUsage] = useState<ChatUsage | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const workPanel = usePanelResize({ initial: 320, min: 240, max: 560, edge: "left" });
 
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -129,7 +143,7 @@ export function ChatPage() {
         if (ml.length > 0) setSelectedModelId(ml[0]!.id);
         setLoadError(null);
       } catch (err) {
-        setLoadError(err instanceof Error ? err.message : "加载失败");
+        setLoadError(err instanceof Error ? err.message : t("chat.loadError"));
       }
     })();
   }, []);
@@ -140,19 +154,19 @@ export function ChatPage() {
 
     const cred = credentials.find((c) => c.providerId === model.providerId);
     if (!cred) {
-      setStreamError("未找到 API 凭证");
+      setStreamError(t("chat.noCredential"));
       return;
     }
 
     const apiKey = await getApiKey(cred.id);
     if (!apiKey) {
-      setStreamError("API Key 缺失");
+      setStreamError(t("chat.noApiKey"));
       return;
     }
 
     const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content: text };
     const assistantId = crypto.randomUUID();
-    const assistantMsg: ChatMessage = { id: assistantId, role: "assistant", content: "" };
+    const assistantMsg: ChatMessage = { id: assistantId, role: "assistant", content: "", modelLabel: model.displayName ?? model.name };
 
     const newMessages = [...messages, userMsg];
     setMessages([...newMessages, assistantMsg]);
@@ -167,12 +181,27 @@ export function ChatPage() {
     try {
       primary = toModelEndpoint(model, cred, apiKey);
     } catch (err) {
-      setStreamError(err instanceof Error ? err.message : "构造失败");
+      setStreamError(err instanceof Error ? err.message : t("chat.constructError"));
       setIsStreaming(false);
       return;
     }
 
+    // 构造回退链：主模型在前，其余已启用模型按「主对话」能力分 + 优先换厂排序接在后面
+    // （排序规则见 rankFallbackModels，已带单测）。streamWithFallback 会把同一份对话历史
+    // 带给下一个模型，所以限额自动换不丢上下文。
     const chain = [primary];
+    for (const cand of rankFallbackModels(model, availableModels, "main_chat")) {
+      const fbCred = credentials.find((c) => c.providerId === cand.providerId);
+      if (!fbCred) continue;
+      const fbKey = await getApiKey(fbCred.id);
+      if (!fbKey) continue;
+      try {
+        chain.push(toModelEndpoint(cand, fbCred, fbKey));
+      } catch {
+        // 备用模型缺 provider 类型等 → 跳过它，不影响主流程
+      }
+    }
+
     let fullContent = "";
     try {
       await streamWithFallback(
@@ -186,17 +215,25 @@ export function ChatPage() {
             );
           },
           onSwitched: (_from, to) => {
-            setSwitchNotice(`切换至 ${to.displayLabel ?? to.modelName}`);
+            const label = to.displayLabel ?? to.modelName;
+            setSwitchNotice(t("chat.switchedTo", { name: label }));
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantId ? { ...m, switched: true, switchedTo: label, modelLabel: label } : m)),
+            );
           },
-          onUsage: (usage) => {
-            setLastUsage({ inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
+          onUsage: (usage, usedModel) => {
+            const u = { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens };
+            setLastUsage(u);
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantId ? { ...m, usage: u, modelLabel: usedModel.displayLabel ?? usedModel.modelName } : m)),
+            );
           },
         },
         { signal: controller.signal },
       );
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
-      setStreamError(err instanceof Error ? err.message : "请求中断");
+      setStreamError(err instanceof Error ? err.message : t("chat.requestInterrupted"));
       setMessages((prev) => prev.filter((m) => m.id !== assistantId));
     } finally {
       setIsStreaming(false);
@@ -234,7 +271,8 @@ export function ChatPage() {
   }
 
   return (
-    <div className="flex flex-col h-full bg-background/30 backdrop-blur-sm">
+    <div className="flex h-full">
+      <div className="relative flex flex-col h-full flex-1 min-w-0 bg-background/30 backdrop-blur-sm">
       {/* 顶部控制栏 - Premium Glass Effect */}
       <header className="px-6 py-4 flex items-center justify-between border-b border-white/10 glass z-10">
         <div className="flex items-center gap-4">
@@ -267,17 +305,27 @@ export function ChatPage() {
             <div className="p-1 bg-primary/10 rounded-lg group-hover:scale-110 transition-transform">
               <Sparkles className="w-3.5 h-3.5 text-primary" />
             </div>
-            智能推荐
+            {t("chat.smartPick")}
           </Button>
         </div>
 
         <div className="flex items-center gap-4">
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            onClick={() => setPanelOpen((v) => !v)}
+            title={t("chat.workPanel.title")}
+            className={cn("h-9 w-9 rounded-xl", panelOpen ? "bg-primary/10 text-primary" : "hover:bg-white/10")}
+          >
+            <PanelRight className="w-4 h-4" />
+          </Button>
           {lastUsage && (
             <div className="hidden md:flex items-center gap-3 px-3 py-1 bg-muted/30 rounded-full border border-white/5">
-              <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-tighter">用量</span>
+              <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-tighter">{t("chat.usage")}</span>
               <div className="flex gap-2">
-                <span className="text-[10px] font-mono text-blue-400">输入:{lastUsage.inputTokens}</span>
-                <span className="text-[10px] font-mono text-orange-400">输出:{lastUsage.outputTokens}</span>
+                <span className="text-[10px] font-mono text-blue-400">{t("chat.inputTokens", { count: lastUsage.inputTokens })}</span>
+                <span className="text-[10px] font-mono text-orange-400">{t("chat.outputTokens", { count: lastUsage.outputTokens })}</span>
               </div>
             </div>
           )}
@@ -302,13 +350,13 @@ export function ChatPage() {
               <Bot className="w-12 h-12 text-muted-foreground relative z-10" />
             </div>
             <div className="space-y-2">
-              <h2 className="text-2xl font-bold tracking-tight">等待初始化</h2>
+              <h2 className="text-2xl font-bold tracking-tight">{t("chat.emptyState.title")}</h2>
               <p className="text-sm text-muted-foreground max-w-xs mx-auto">
-                请先前往「模型供应商」页面，建立你的 AI 神经连接。
+                {t("chat.emptyState.desc")}
               </p>
             </div>
             <Button variant="outline" className="rounded-2xl border-primary/20 hover:bg-primary/5">
-              前往配置
+              {t("chat.emptyState.goToConfig")}
             </Button>
           </div>
         ) : messages.length === 0 ? (
@@ -317,7 +365,7 @@ export function ChatPage() {
                <div className="absolute -inset-4 bg-primary/20 blur-3xl opacity-50" />
                <img src={cosmgridLogo} className="w-20 h-20 opacity-20 relative" alt="Empty" />
              </div>
-             <p className="text-sm font-bold uppercase tracking-[0.4em] text-muted-foreground/30">准备就绪</p>
+             <p className="text-sm font-bold uppercase tracking-[0.4em] text-muted-foreground/30">{t("chat.ready")}</p>
           </div>
         ) : (
           <div className="pb-32">
@@ -353,7 +401,7 @@ export function ChatPage() {
           <div className="flex-1 relative">
             <input
               name="input"
-              placeholder={selectedModel ? `使用 ${selectedModel.displayName || selectedModel.name} 进行对话...` : "输入消息..."}
+              placeholder={selectedModel ? t("chat.inputPlaceholder", { name: selectedModel.displayName || selectedModel.name }) : t("chat.inputPlaceholderFallback")}
               disabled={isStreaming}
               autoComplete="off"
               className="w-full bg-transparent border-none outline-none focus:outline-none focus:ring-0 text-sm px-6 py-4 placeholder:text-muted-foreground/40 font-medium"
@@ -380,9 +428,93 @@ export function ChatPage() {
           </div>
         </form>
         <p className="text-[10px] text-center mt-4 text-muted-foreground/30 font-bold uppercase tracking-[0.3em] select-none">
-          安全连接 • v0.7.3 • 由 CosmGrid 驱动
+          {t("chat.footer", { version: "v0.7.3" })}
         </p>
       </div>
+      </div>
+
+      {/* 右侧工作面板：多模型工作可视化（默认收起，不影响现有布局；左侧分隔条可拖拽放大） */}
+      {panelOpen && (
+        <>
+        <ResizeHandle onMouseDown={workPanel.onMouseDown} />
+        <aside style={{ width: workPanel.width }} className="shrink-0 glass h-full flex flex-col">
+          <div className="px-5 py-4 flex items-center justify-between border-b border-white/10 shrink-0">
+            <div className="flex items-center gap-2">
+              <Activity className="w-4 h-4 text-primary" />
+              <span className="text-xs font-black uppercase tracking-[0.2em]">{t("chat.workPanel.title")}</span>
+            </div>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              onClick={() => setPanelOpen(false)}
+              title={t("chat.workPanel.close")}
+              className="h-7 w-7 rounded-lg hover:bg-white/10"
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3">
+            {(() => {
+              const turns = messages.filter((m) => m.role === "assistant" && (m.modelLabel || m.usage));
+              if (turns.length === 0) {
+                return (
+                  <div className="text-[11px] text-muted-foreground/40 text-center py-12 uppercase tracking-widest">
+                    {t("chat.workPanel.empty")}
+                  </div>
+                );
+              }
+              const totalIn = turns.reduce((s, m) => s + (m.usage?.inputTokens ?? 0), 0);
+              const totalOut = turns.reduce((s, m) => s + (m.usage?.outputTokens ?? 0), 0);
+              return (
+                <>
+                  <div className="glass rounded-2xl p-4 border border-white/5">
+                    <div className="text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50 mb-2">
+                      {t("chat.workPanel.sessionTotal")}
+                    </div>
+                    <div className="flex gap-4 font-mono text-xs">
+                      <span className="text-blue-400">{t("chat.workPanel.inTokens")} {totalIn.toLocaleString()}</span>
+                      <span className="text-orange-400">{t("chat.workPanel.outTokens")} {totalOut.toLocaleString()}</span>
+                    </div>
+                  </div>
+                  {turns.map((m, i) => (
+                    <div key={m.id} className="glass rounded-2xl p-4 border border-white/5 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] font-black uppercase tracking-widest text-muted-foreground/40">
+                          {t("chat.workPanel.turnLabel", { n: i + 1 })}
+                        </span>
+                        {m.switched ? (
+                          <span className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase bg-accent/15 text-accent border border-accent/20 flex items-center gap-1">
+                            <Zap className="w-2.5 h-2.5" /> {t("chat.workPanel.fallback")}
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase bg-primary/10 text-primary border border-primary/20">
+                            {t("chat.workPanel.primary")}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-xs font-bold">
+                        <Cpu className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                        <span className="truncate">{m.modelLabel ?? "—"}</span>
+                      </div>
+                      {m.switched && (
+                        <div className="text-[10px] text-accent/80">{t("chat.workPanel.switchedNote")}</div>
+                      )}
+                      {m.usage && (
+                        <div className="flex gap-3 font-mono text-[10px] text-muted-foreground/60">
+                          <span>{t("chat.workPanel.inTokens")} {m.usage.inputTokens}</span>
+                          <span>{t("chat.workPanel.outTokens")} {m.usage.outputTokens}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </>
+              );
+            })()}
+          </div>
+        </aside>
+        </>
+      )}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 // 基础字段（供应商名 / 备注 / 官网）
+import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -19,21 +20,22 @@ export function BasicFormFields({
   onNotesChange,
   onWebsiteChange,
 }: BasicFormFieldsProps) {
+  const { t } = useTranslation();
   return (
     <div className="grid grid-cols-2 gap-4">
       <div className="space-y-2">
         <Label htmlFor="providerName">
-          供应商名称<span className="text-destructive ml-1">*</span>
+          {t("addProvider.providerName")}<span className="text-destructive ml-1">*</span>
         </Label>
         <Input
           id="providerName"
           value={providerName}
           onChange={(e) => onProviderNameChange(e.target.value)}
-          placeholder="我的 Claude"
+          placeholder={t("addProvider.providerNamePlaceholder")}
         />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="website">官网</Label>
+        <Label htmlFor="website">{t("addProvider.website")}</Label>
         <Input
           id="website"
           type="url"
@@ -43,12 +45,12 @@ export function BasicFormFields({
         />
       </div>
       <div className="col-span-2 space-y-2">
-        <Label htmlFor="notes">备注</Label>
+        <Label htmlFor="notes">{t("addProvider.notes")}</Label>
         <Input
           id="notes"
           value={notes}
           onChange={(e) => onNotesChange(e.target.value)}
-          placeholder="公司报销的 API Key"
+          placeholder={t("addProvider.notesPlaceholder")}
         />
       </div>
     </div>

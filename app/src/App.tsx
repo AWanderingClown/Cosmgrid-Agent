@@ -2,7 +2,9 @@
 // v0.7.2: 彻底修复响应式布局冲突，回归稳定的 Flex 布局
 import { useState, useEffect } from "react";
 import { AlertTriangle, KeyRound, MessageSquare, LayoutTemplate, Coins, FolderKanban, X, Settings } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import { usePanelResize, ResizeHandle } from "@/components/ui/resize-handle";
 import {
   initSchema,
   seedBuiltInTemplates,
@@ -28,25 +30,25 @@ type PageKey = "chat" | "providers" | "templates" | "tokenPlans" | "projects" | 
 interface NavItem {
   key: PageKey;
   icon: React.ReactNode;
-  label: string;
 }
 
-const NAV_ITEMS: NavItem[] = [
-  { key: "chat", icon: <MessageSquare className="w-4 h-4" />, label: "智能对话" },
-  { key: "projects", icon: <FolderKanban className="w-4 h-4" />, label: "项目工作区" },
-  { key: "providers", icon: <KeyRound className="w-4 h-4" />, label: "模型供应商" },
-  { key: "templates", icon: <LayoutTemplate className="w-4 h-4" />, label: "角色模板" },
-  { key: "tokenPlans", icon: <Coins className="w-4 h-4" />, label: "用量监控" },
-];
-
 function App() {
+  const { t } = useTranslation();
+  const NAV_ITEMS: NavItem[] = [
+    { key: "chat", icon: <MessageSquare className="w-4 h-4" /> },
+    { key: "projects", icon: <FolderKanban className="w-4 h-4" /> },
+    { key: "providers", icon: <KeyRound className="w-4 h-4" /> },
+    { key: "templates", icon: <LayoutTemplate className="w-4 h-4" /> },
+    { key: "tokenPlans", icon: <Coins className="w-4 h-4" /> },
+  ];
   const [page, setPage] = useState<PageKey>("chat");
   const [openProjectId, setOpenProjectId] = useState<string | null>(null);
   const [dbReady, setDbReady] = useState(false);
-  const [dbError, setDbError] = useState<string | null>(null);
+  const [, setDbError] = useState<string | null>(null);
   const [plans, setPlans] = useState<TokenPlan[]>([]);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   const [providerCount, setProviderCount] = useState(0);
+  const sidebar = usePanelResize({ initial: 288, min: 200, max: 460, edge: "right" });
 
   useTheme();
 
@@ -54,7 +56,7 @@ function App() {
     void initSchema()
       .then(() => seedBuiltInTemplates())
       .then(() => setDbReady(true))
-      .catch((err: unknown) => setDbError(err instanceof Error ? err.message : "数据库初始化失败"));
+      .catch((err: unknown) => setDbError(err instanceof Error ? err.message : "Database init failed"));
   }, []);
 
   useEffect(() => {
@@ -98,21 +100,21 @@ function App() {
           <div className="logo-wrap w-20 h-20 animate-pulse">
             <img src={cosmgridLogo} className="logo-base" alt="CosmGrid" />
           </div>
-          <p className="text-sm font-bold tracking-widest text-primary uppercase">正在初始化核心组件...</p>
+          <p className="text-sm font-bold tracking-widest text-primary uppercase">{t("common.loading")}</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen bg-background text-foreground overflow-hidden">
+    <div className="flex h-screen bg-background text-foreground overflow-hidden p-3">
       <OnboardingModal
         providerCount={providerCount}
         onNavigate={(p) => setPage(p)}
       />
 
-      {/* Sidebar - Fixed Width, no-shrink */}
-      <aside className="w-72 glass border-r flex flex-col p-6 gap-2 shrink-0">
+      {/* Sidebar - 可拖拽宽度 */}
+      <aside style={{ width: sidebar.width }} className="glass rounded-3xl overflow-hidden flex flex-col p-6 gap-2 shrink-0">
         <div className="flex flex-col items-center py-10 mb-6 gap-4">
           <div className="logo-wrap w-24 h-24" aria-label="CosmGrid" role="img">
             <img src={cosmgridLogo} className="logo-base" alt="CosmGrid" />
@@ -121,7 +123,7 @@ function App() {
             <h1 className="text-xl font-bold bg-gradient-to-br from-primary to-accent bg-clip-text text-transparent">
               CosmGrid Agent
             </h1>
-            <p className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground font-bold mt-1">智能核心管理层</p>
+            <p className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground font-bold mt-1">{t("app.brandSubtitle")}</p>
           </div>
         </div>
 
@@ -142,7 +144,7 @@ function App() {
               )}
             >
               {item.icon}
-              {item.label}
+              {t(`app.sidebar.${item.key}`)}
             </button>
           ))}
         </nav>
@@ -159,10 +161,12 @@ function App() {
             )}
           >
             <Settings className="w-4 h-4" />
-            <span>设置</span>
+            <span>{t("app.sidebar.settings")}</span>
           </button>
         </div>
       </aside>
+
+      <ResizeHandle onMouseDown={sidebar.onMouseDown} />
 
       {/* Main Content Area - Fluid, handle overflow */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
@@ -189,19 +193,19 @@ function App() {
           <div className="h-full" style={{ display: page === "chat" ? "block" : "none" }}>
             <ChatPage />
           </div>
-          <div className="h-full" style={{ display: page === "providers" ? "block" : "none" }}>
+          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "providers" ? "block" : "none" }}>
             <ProvidersPage />
           </div>
-          <div className="h-full" style={{ display: page === "templates" ? "block" : "none" }}>
+          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "templates" ? "block" : "none" }}>
             <TemplatesPage />
           </div>
-          <div className="h-full" style={{ display: page === "tokenPlans" ? "block" : "none" }}>
+          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "tokenPlans" ? "block" : "none" }}>
             <TokenPlansPage />
           </div>
-          <div className="h-full" style={{ display: page === "settings" ? "block" : "none" }}>
+          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "settings" ? "block" : "none" }}>
             <SettingsPage />
           </div>
-          <div className="h-full" style={{ display: page === "projects" ? "block" : "none" }}>
+          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "projects" ? "block" : "none" }}>
             {openProjectId ? (
               <ProjectDetailPage projectId={openProjectId} onBack={() => setOpenProjectId(null)} />
             ) : (
@@ -217,7 +221,6 @@ function App() {
 function PlanAlertBar({
   level,
   planName,
-  providerName,
   ratio,
   onJump,
   onDismiss,
@@ -229,6 +232,7 @@ function PlanAlertBar({
   onJump: () => void;
   onDismiss: () => void;
 }) {
+  const { t } = useTranslation();
   const isCritical = level === "exhausted" || level === "critical";
   const percentage = (ratio * 100).toFixed(0);
 
@@ -239,30 +243,10 @@ function PlanAlertBar({
         <span className="truncate font-bold uppercase">{planName} ({percentage}%)</span>
       </div>
       <div className="flex items-center gap-1 shrink-0">
-        <Button size="sm" variant="ghost" onClick={onJump} className="h-7 px-3 text-[10px] font-bold uppercase">前往处理</Button>
+        <Button size="sm" variant="ghost" onClick={onJump} className="h-7 px-3 text-[10px] font-bold uppercase">{t("app.alerts.goToHandle")}</Button>
         <Button size="sm" variant="ghost" onClick={onDismiss} className="h-7 w-7 p-0"><X className="w-4 h-4" /></Button>
       </div>
     </div>
-  );
-}
-
-function ThemeToggle() {
-  const { theme, toggleTheme } = useTheme();
-  const isDark = theme === "dark";
-
-  return (
-    <button
-      onClick={toggleTheme}
-      className="w-full flex items-center justify-between px-4 py-2 rounded-xl glass hover:bg-white/10 transition-all text-xs font-bold uppercase tracking-widest text-muted-foreground"
-    >
-      <div className="flex items-center gap-2">
-        {isDark ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
-        <span>{isDark ? "Midnight" : "Daylight"}</span>
-      </div>
-      <div className="w-8 h-4 bg-muted rounded-full relative">
-        <div className={cn("absolute top-1 w-2 h-2 rounded-full transition-all", isDark ? "right-1 bg-primary" : "left-1 bg-muted-foreground")} />
-      </div>
-    </button>
   );
 }
 

@@ -113,13 +113,11 @@ export function inferModelCapabilities(modelName: string): InferredCapabilities 
   const tierScore = TIER_SCORES[tier];
 
   const capabilityScore: Record<string, number> = {};
-  for (const r of WORK_ROLES) {
-    capabilityScore[r.value] = tierScore[roleCategory(r.value)];
+  for (const role of WORK_ROLES) {
+    capabilityScore[role] = tierScore[roleCategory(role)];
   }
 
-  let workRoles = WORK_ROLES.filter((r) => capabilityScore[r.value]! >= WORK_ROLE_THRESHOLD).map(
-    (r) => r.value,
-  );
+  let workRoles = WORK_ROLES.filter((r) => capabilityScore[r]! >= WORK_ROLE_THRESHOLD);
   // 认不出的模型整体没到阈值——至少让它能做主对话和兜底，不然它在模板里永远被忽略
   if (workRoles.length === 0) {
     workRoles = ["main_chat", "general"];
@@ -182,6 +180,44 @@ export function pickBestModelForRole<T extends ScorableModel>(role: string, mode
     }
   }
   return best;
+}
+
+/** 回退链排序用的模型形状：在 ScorableModel 基础上要知道它属于哪个供应商 */
+export interface RankableModel extends ScorableModel {
+  providerId: string;
+}
+
+/**
+ * 痛点 1：主模型限额/失败时，排出"接下来按什么顺序尝试别的模型"的候选链。
+ *
+ * 规则：
+ * 1. 排除主模型自己（按 id）
+ * 2. 优先不同供应商——限额/429 通常是某家 key 或套餐的额度，切同厂兄弟模型救不了
+ * 3. 同一"是否换厂"档内，再按该角色能力分高的排前面
+ * 4. 截断到 limit（默认 3）：够用，且调用方不必为一大堆模型都去解密 API Key
+ *
+ * 纯函数，无副作用——把排序逻辑从 ChatPage 抽出来单独可测。
+ * 调用方拿到顺序后再逐个解析凭证 / apiKey、构造 ModelEndpoint。
+ */
+export function rankFallbackModels<T extends RankableModel>(
+  primary: { id: string; providerId: string },
+  candidates: T[],
+  role: string,
+  limit = 3,
+): T[] {
+  return candidates
+    .filter((m) => m.id !== primary.id)
+    .map((m) => ({
+      m,
+      score: scoreModelForRole(m, role),
+      differentProvider: m.providerId !== primary.providerId,
+    }))
+    .sort((a, b) => {
+      if (a.differentProvider !== b.differentProvider) return a.differentProvider ? -1 : 1;
+      return b.score - a.score;
+    })
+    .slice(0, Math.max(0, limit))
+    .map((x) => x.m);
 }
 
 /** 给一组角色批量自动分配模型，返回 role → modelId 的映射（无候选模型时跳过该角色） */

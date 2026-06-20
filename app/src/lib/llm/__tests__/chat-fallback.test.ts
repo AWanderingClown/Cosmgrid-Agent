@@ -186,7 +186,7 @@ describe("streamWithFallback - 无 fallback", () => {
     const cbs: StreamCallbacks = { onDelta: () => {} };
     await expect(
       streamWithFallback([primary], [{ role: "user", content: "x" }], cbs),
-    ).rejects.toThrow(/冷却|不可用|fallback/);
+    ).rejects.toThrow(/cooling|unavailable|fallback/i);
   });
 });
 
@@ -358,13 +358,13 @@ describe("toModelEndpoint builder", () => {
         { id: "c", baseUrl: "" },
         "k",
       ),
-    ).toThrow(/provider 类型/);
+    ).toThrow(/provider type|re-add/i);
     expect(() =>
       toModelEndpoint(
         { id: "m", name: "x", displayName: null, providerId: "p", provider: { type: "" } },
         { id: "c", baseUrl: "" },
         "k",
       ),
-    ).toThrow(/provider 类型/);
+    ).toThrow(/provider type|re-add/i);
   });
 });

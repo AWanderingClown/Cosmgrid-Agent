@@ -2,31 +2,26 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
-  BookOpen,
-  Bot,
   CheckCircle2,
-  Circle,
   Clock,
+  Cpu,
   Loader2,
   MessageSquare,
-  Pause,
-  Play,
   Plus,
   Send,
   Sparkles,
   Square,
   Trash2,
   User,
+  XCircle,
   Zap,
   Terminal,
-  ChevronRight,
   ShieldCheck,
   BrainCircuit,
   Workflow
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -45,6 +40,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { WORK_ROLES } from "@/lib/api";
 import {
@@ -72,33 +68,42 @@ import { generateCheckpointDraft } from "@/lib/llm/checkpoint-generator";
 import { getLanguageModel } from "@/lib/llm/provider-factory";
 import {
   projectMemories as dbMemories,
-  MEMORY_KIND_LABEL,
+  memoryKindLabel,
   type ProjectMemory,
 } from "@/lib/db";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 
 // ============ 静态映射 ============
 
-const ROLE_LABEL: Record<string, string> = Object.fromEntries(
-  WORK_ROLES.map((r) => [r.value, r.label]),
-);
+// ROLE_LABEL 改成函数（v0.7 i18n 化）— 原本用 r.label 硬编码
+const ROLE_LABEL = (value: string, t: (k: string) => string): string => t(`workRoles.${value}`);
 
-const STAGE_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  pending: { label: "就绪", color: "text-muted-foreground", bg: "bg-muted/10" },
-  running: { label: "处理中", color: "text-primary", bg: "bg-primary/10" },
-  active: { label: "活跃", color: "text-primary", bg: "bg-primary/10" },
-  completed: { label: "已完成", color: "text-emerald-400", bg: "bg-emerald-400/10" },
-  failed: { label: "严重错误", color: "text-red-400", bg: "bg-red-400/10" },
-  interrupted: { label: "已终止", color: "text-amber-400", bg: "bg-amber-400/10" },
+const STAGE_STATUS_COLOR: Record<string, { color: string; bg: string }> = {
+  pending: { color: "text-muted-foreground", bg: "bg-muted/10" },
+  running: { color: "text-primary", bg: "bg-primary/10" },
+  active: { color: "text-primary", bg: "bg-primary/10" },
+  completed: { color: "text-emerald-400", bg: "bg-emerald-400/10" },
+  failed: { color: "text-red-400", bg: "bg-red-400/10" },
+  interrupted: { color: "text-amber-400", bg: "bg-amber-400/10" },
 };
 
-const PROJECT_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  pending: { label: "等待启动", color: "text-blue-400", bg: "bg-blue-400/10" },
-  active: { label: "运行中", color: "text-emerald-400", bg: "bg-emerald-400/10" },
-  paused: { label: "已暂停", color: "text-amber-400", bg: "bg-amber-400/10" },
-  completed: { label: "已归档", color: "text-indigo-400", bg: "bg-indigo-400/10" },
-  failed: { label: "系统故障", color: "text-red-400", bg: "bg-red-400/10" },
+function stageStatusLabel(status: string, t: (k: string) => string): string {
+  const key = ["ready", "running", "active", "completed", "failed", "interrupted", "pending"].includes(status) ? status : "pending";
+  return t(`projectDetail.stageStatus.${key}`);
+}
+
+const PROJECT_STATUS_COLOR: Record<string, { color: string; bg: string }> = {
+  pending: { color: "text-blue-400", bg: "bg-blue-400/10" },
+  active: { color: "text-emerald-400", bg: "bg-emerald-400/10" },
+  paused: { color: "text-amber-400", bg: "bg-amber-400/10" },
+  completed: { color: "text-indigo-400", bg: "bg-indigo-400/10" },
+  failed: { color: "text-red-400", bg: "bg-red-400/10" },
 };
+
+function projectStatusLabel(status: string, t: (k: string) => string): string {
+  const key = ["pending", "active", "paused", "completed", "failed"].includes(status) ? status : "pending";
+  return t(`projectDetail.projectStatus.${key}`);
+}
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleString("zh-CN", { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -119,6 +124,7 @@ const ChatBubble = memo(function ChatBubble({
   text: string;
   isStreaming: boolean;
 }) {
+  const { t } = useTranslation();
   const isAssistant = role === "assistant";
   return (
     <div className={cn(
@@ -130,7 +136,7 @@ const ChatBubble = memo(function ChatBubble({
         isAssistant ? "bg-white dark:bg-zinc-800 border border-primary/20" : "bg-primary text-primary-foreground rotate-[-5deg]"
       )}>
         {isAssistant ? (
-          <img src={cosmgridLogo} className={cn("w-5 h-5", isStreaming && "animate-pulse")} alt="助手" />
+          <img src={cosmgridLogo} className={cn("w-5 h-5", isStreaming && "animate-pulse")} alt={t("projectDetail.altBot")} />
         ) : (
           <User className="w-4 h-4" />
         )}
@@ -138,7 +144,7 @@ const ChatBubble = memo(function ChatBubble({
       <div className="flex-1 space-y-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-[9px] font-black uppercase tracking-widest text-muted-foreground/40">
-            {isAssistant ? "CosmGrid 助手" : "授权用户"}
+            {isAssistant ? t("projectDetail.chat.assistantLabel") : t("projectDetail.chat.userLabel")}
           </span>
         </div>
         <div className={cn("text-xs leading-relaxed whitespace-pre-wrap break-words", isAssistant ? "text-foreground/90" : "text-foreground font-medium")}>
@@ -152,7 +158,17 @@ const ChatBubble = memo(function ChatBubble({
   );
 });
 
+interface StageChatProps {
+  stage: ProjectStage;
+  model: Model;
+  credential: ApiCredential;
+  apiKey: string;
+  conversationId: string;
+  fallback: { model: Model; credential: ApiCredential; apiKey: string } | null;
+}
+
 function StageChat({ stage, model, credential, apiKey, conversationId, fallback }: StageChatProps) {
+  const { t } = useTranslation();
   const [history, setHistory] = useState<DbMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -197,7 +213,7 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
     try {
       primary = toModelEndpoint(model, credential, apiKey);
     } catch (err) {
-      setStreamErr(err instanceof Error ? err.message : "Endpoint Failed");
+      setStreamErr(err instanceof Error ? err.message : t("projectDetail.chat.endpointFailed"));
       setStreaming(false);
       return;
     }
@@ -214,7 +230,7 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
             setHistory((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: full } : m)));
           },
           onSwitched: (_from, to) => {
-            setSwitchNotice(`Failsafe: Switched to ${to.displayLabel || to.modelName}`);
+            setSwitchNotice(t("projectDetail.chat.failsafeSwitched", { name: to.displayLabel || to.modelName }));
           },
           onUsage: async (usage, usedEndpoint) => {
             const finalAssistant = await dbMessages.create({
@@ -231,7 +247,7 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
       );
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
-      setStreamErr(err instanceof Error ? err.message : "Stream Failed");
+      setStreamErr(err instanceof Error ? err.message : t("projectDetail.chat.streamFailed"));
     } finally {
       setStreaming(false);
       abortRef.current = null;
@@ -249,7 +265,7 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
         {history.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full opacity-20 gap-4">
              <MessageSquare className="w-12 h-12" />
-             <p className="text-[10px] font-black uppercase tracking-[0.4em]">Awaiting Instruction</p>
+             <p className="text-[10px] font-black uppercase tracking-[0.4em]">{t("projectDetail.chat.awaiting")}</p>
           </div>
         ) : (
           history.map((m) => (
@@ -272,7 +288,7 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
           <Input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder="Command the agent..."
+            placeholder={t("projectDetail.chat.placeholder")}
             disabled={streaming}
             className="border-none bg-transparent focus-visible:ring-0 text-sm h-10 px-4"
             onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), void handleSend())}
@@ -294,14 +310,20 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
 
 // ============ 项目详情页主组件 ============
 
+export interface ProjectDetailPageProps {
+  projectId: string;
+  onBack: () => void;
+}
+
 export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps) {
+  const { t } = useTranslation();
   const [project, setProject] = useState<Project | null>(null);
   const [stages, setStages] = useState<ProjectStage[]>([]);
   const [models, setModels] = useState<Model[]>([]);
   const [credentials, setCredentials] = useState<ApiCredential[]>([]);
   const [templateRoles, setTemplateRoles] = useState<ProjectTemplateRole[]>([]);
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
-  const [handoffs, setHandoffs] = useState<HandoffPacket[]>([]);
+  const [, setHandoffs] = useState<HandoffPacket[]>([]);
   const [memories, setMemories] = useState<ProjectMemory[]>([]);
   const [openStageId, setOpenStageId] = useState<string | null>(null);
   const [createCpOpen, setCreateCpOpen] = useState(false);
@@ -309,7 +331,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
   const [genCp, setGenCp] = useState<Checkpoint | null>(null);
   const [viewHandoff, setViewHandoff] = useState<HandoffPacket | null>(null);
   const [addMemoryOpen, setAddMemoryOpen] = useState(false);
-  const [relatedMemories, setRelatedMemories] = useState<ProjectMemory[]>([]);
+  const [, setRelatedMemories] = useState<ProjectMemory[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   async function load() {
@@ -323,13 +345,13 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
         dbHandoffs.listByProject(projectId),
         dbMemories.listByProject(projectId),
       ]);
-      if (!p) { setLoadError("项目未找到"); return; }
+      if (!p) { setLoadError(t("projectDetail.notFound")); return; }
       setProject(p); setStages(s); setModels(m); setCredentials(c); setCheckpoints(cp); setHandoffs(hf); setMemories(mem);
       if (p.templateId) setTemplateRoles(await dbTemplateRoles.listByTemplate(p.templateId));
       const query = [p.name, p.description].filter(Boolean).join(" ");
       if (query) setRelatedMemories(await dbMemories.searchAcrossProjects(query, { excludeProjectId: projectId, limit: 3 }).catch(() => []));
       setLoadError(null);
-    } catch (err) { setLoadError(err instanceof Error ? err.message : "Load Failed"); }
+    } catch (err) { setLoadError(err instanceof Error ? err.message : t("projectDetail.loadError")); }
   }
 
   useEffect(() => { void load(); }, [projectId]);
@@ -344,6 +366,20 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
     await load(); setOpenStageId(stage.id);
   }
 
+  async function completeStage(stage: ProjectStage) {
+    await dbStages.update(stage.id, {
+      status: "completed",
+      completedAt: new Date().toISOString(),
+    });
+    await load();
+  }
+
+  async function deleteCheckpoint(id: string) {
+    if (!confirm(t("projectDetail.deleteCheckpoint"))) return;
+    await dbCheckpoints.delete(id);
+    await load();
+  }
+
   const totalCost = stages.reduce((s, st) => s + st.cost, 0);
   const totalTokens = stages.reduce((s, st) => s + st.inputTokens + st.outputTokens, 0);
 
@@ -353,7 +389,11 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
 
   if (!project) return <div className="h-full flex items-center justify-center animate-pulse"><Loader2 className="w-8 h-8 text-primary animate-spin" /></div>;
 
-  const projectStatus = PROJECT_STATUS_CONFIG[project.status] || PROJECT_STATUS_CONFIG.pending;
+  const projectStatusKey = ["pending", "active", "paused", "completed", "failed"].includes(project.status) ? project.status : "pending";
+  const projectStatus = {
+    label: projectStatusLabel(projectStatusKey, t),
+    ...(PROJECT_STATUS_COLOR[projectStatusKey] ?? PROJECT_STATUS_COLOR.pending!),
+  };
 
   return (
     <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
@@ -376,7 +416,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
             <div className="flex flex-wrap items-center gap-6 pt-2">
               <div className="flex flex-col gap-0.5">
                 <span className="text-[9px] font-black text-muted-foreground/40 uppercase tracking-widest">Active Sequence</span>
-                <span className="text-xs font-bold text-primary">{ROLE_LABEL[project.currentStage] || "Initialization"}</span>
+                <span className="text-xs font-bold text-primary">{ROLE_LABEL(project.currentStage, t) || "Initialization"}</span>
               </div>
               <div className="w-px h-8 bg-white/5" />
               <div className="flex flex-col gap-0.5">
@@ -419,7 +459,11 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                 const m = modelMap.get(st.modelId);
                 const isOpen = openStageId === st.id;
                 const cred = m ? credentialMap.get(m.providerId) : undefined;
-                const status = STAGE_STATUS_CONFIG[st.status] || STAGE_STATUS_CONFIG.pending;
+                const stageKey = ["pending", "running", "active", "completed", "failed", "interrupted"].includes(st.status) ? st.status : "pending";
+                const status = {
+                  label: stageStatusLabel(stageKey, t),
+                  ...(STAGE_STATUS_COLOR[stageKey] ?? STAGE_STATUS_COLOR.pending!),
+                };
                 const isRunning = st.status === "running" || st.status === "active";
 
                 return (
@@ -439,7 +483,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                         </div>
                         <div className="space-y-1">
                           <div className="flex items-center gap-2">
-                            <h3 className="text-lg font-bold tracking-tight">{ROLE_LABEL[st.workRole] || st.workRole}</h3>
+                            <h3 className="text-lg font-bold tracking-tight">{ROLE_LABEL(st.workRole, t) || st.workRole}</h3>
                             <div className={cn("px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-tighter border border-current/20", status.color, status.bg)}>
                               {status.label}
                             </div>
@@ -544,7 +588,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                           <div className={cn("px-2 py-0.5 rounded text-[8px] font-black uppercase",
                             m.kind === 'decision' ? 'bg-indigo-500/10 text-indigo-400' : 'bg-accent/10 text-accent'
                           )}>
-                             {MEMORY_KIND_LABEL[m.kind as any] || m.kind}
+                             {memoryKindLabel(m.kind, t)}
                           </div>
                           <button onClick={() => dbMemories.delete(m.id).then(load)} className="opacity-0 group-hover:opacity-100 transition-opacity">
                             <XCircle className="w-3 h-3 text-red-500/50 hover:text-red-500" />
@@ -575,6 +619,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
 // ============ 子组件：对话框与加载器 (保持原有逻辑，注入视觉类名) ============
 
 function StageConversationLoader({ stage, model, credential, models, credentials, templateRoles }: any) {
+  const { t } = useTranslation();
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [fallback, setFallback] = useState<any>(null);
@@ -589,7 +634,7 @@ function StageConversationLoader({ stage, model, credential, models, credentials
         if (!conv) conv = await dbConversations.create({ title, defaultModelId: stage.modelId, projectId: stage.projectId });
         setConversationId(conv.id);
         const key = await getApiKey(credential.id);
-        if (!key) { setError("API Key Missing"); return; }
+        if (!key) { setError(t("projectDetail.chat.apiKeyMissing")); return; }
         setApiKey(key);
         const role = templateRoles.find((r: any) => r.workRole === stage.workRole);
         if (role?.fallbackModelId && role.fallbackModelId !== stage.modelId) {
@@ -602,15 +647,585 @@ function StageConversationLoader({ stage, model, credential, models, credentials
             }
           }
         }
-      } catch (err) { setError(err instanceof Error ? err.message : "Initialization Failed"); }
+      } catch (err) { setError(err instanceof Error ? err.message : t("projectDetail.chat.initFailed")); }
     })();
   }, [stage.id]);
 
   if (error) return <div className="p-4 text-xs font-bold text-red-500 bg-red-500/5">{error}</div>;
-  if (!conversationId || !apiKey) return <div className="p-10 flex items-center justify-center gap-3"><Loader2 className="w-5 h-5 text-primary animate-spin" /><span className="text-xs font-black uppercase tracking-widest opacity-30">Synchronizing Environment...</span></div>;
+  if (!conversationId || !apiKey) return <div className="p-10 flex items-center justify-center gap-3"><Loader2 className="w-5 h-5 text-primary animate-spin" /><span className="text-xs font-black uppercase tracking-widest opacity-30">{t("projectDetail.chat.syncing")}</span></div>;
 
   return <StageChat stage={stage} model={model} credential={credential} apiKey={apiKey} conversationId={conversationId} fallback={fallback} />;
 }
 
-// 导出必要的组件 (此处为了简化，假设所有 Dialog 组件均在外部定义或保持原逻辑但应用新类名)
-// 实际操作中，我也同步优化了 Dialog 的 className。
+// ============ 创建检查点对话框 ============
+
+function CreateCheckpointDialog({
+  open,
+  onOpenChange,
+  projectId,
+  stages,
+  models,
+  credentials,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  projectId: string;
+  stages: ProjectStage[];
+  models: Model[];
+  credentials: ApiCredential[];
+  onCreated: () => void;
+}) {
+  const { t } = useTranslation();
+  const [title, setTitle] = useState("");
+  const [goal, setGoal] = useState("");
+  const [completedSummary, setCompletedSummary] = useState("");
+  const [currentContext, setCurrentContext] = useState("");
+  const [decisions, setDecisions] = useState("");
+  const [failedAttempts, setFailedAttempts] = useState("");
+  const [blockers, setBlockers] = useState("");
+  const [nextSteps, setNextSteps] = useState("");
+  const [doNotRepeat, setDoNotRepeat] = useState("");
+  const [acceptanceCriteria, setAcceptanceCriteria] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // 阶段已经开始过（有进行中/已完成/失败状态）才可能有对话历史，AI 生成才有意义
+  const stagesWithConversation = stages.filter((s) => s.status !== "pending");
+  const [selectedStageId, setSelectedStageId] = useState<string>("");
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+  // 记录"已经自动生成过的阶段 id"，避免每次重渲染都重复触发；对话框关闭时清空，下次打开重新自动生成
+  const autoGeneratedForRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      autoGeneratedForRef.current = null;
+      return;
+    }
+    if (!selectedStageId && stagesWithConversation.length > 0) {
+      setSelectedStageId(stagesWithConversation[stagesWithConversation.length - 1]!.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, stages]);
+
+  // 选好阶段后不需要用户再点一下——直接自动生成草稿，按钮只用来"重新生成"
+  useEffect(() => {
+    if (open && selectedStageId && autoGeneratedForRef.current !== selectedStageId) {
+      autoGeneratedForRef.current = selectedStageId;
+      void handleGenerate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, selectedStageId]);
+
+  function reset() {
+    setTitle("");
+    setGoal("");
+    setCompletedSummary("");
+    setCurrentContext("");
+    setDecisions("");
+    setFailedAttempts("");
+    setBlockers("");
+    setNextSteps("");
+    setDoNotRepeat("");
+    setAcceptanceCriteria("");
+    setError(null);
+    setSelectedStageId("");
+    setGenerateError(null);
+    autoGeneratedForRef.current = null;
+  }
+
+  async function handleGenerate() {
+    const stage = stages.find((s) => s.id === selectedStageId);
+    if (!stage) {
+      setGenerateError(t("projectDetail.createCheckpoint.selectStageFirst"));
+      return;
+    }
+    const model = models.find((m) => m.id === stage.modelId);
+    const credential = model && credentials.find((c) => c.providerId === model.providerId);
+    if (!model || !credential || !model.provider?.type) {
+      setGenerateError(t("projectDetail.createCheckpoint.noModelOrCred"));
+      return;
+    }
+
+    setGenerating(true);
+    setGenerateError(null);
+    try {
+      const convs = await dbConversations.list();
+      const convTitle = `${stage.projectId}:${stage.id}`;
+      const conv = convs.find((c) => c.projectId === stage.projectId && c.title === convTitle);
+      const history = conv ? await dbMessages.listByConversation(conv.id) : [];
+
+      const apiKey = await getApiKey(credential.id);
+      if (!apiKey) {
+        setGenerateError(t("projectDetail.createCheckpoint.apiKeyMissing"));
+        return;
+      }
+
+      const languageModel = getLanguageModel(
+        model.provider.type,
+        model.name,
+        apiKey,
+        credential.baseUrl,
+      );
+      const draft = await generateCheckpointDraft(
+        languageModel,
+        history.map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content })),
+      );
+
+      setTitle(draft.title);
+      setGoal(draft.goal);
+      setCompletedSummary(draft.completedSummary);
+      setCurrentContext(draft.currentContext);
+      setDecisions(draft.decisions);
+      setFailedAttempts(draft.failedAttempts);
+      setBlockers(draft.blockers);
+      setNextSteps(draft.nextSteps);
+      setDoNotRepeat(draft.doNotRepeat);
+      setAcceptanceCriteria(draft.acceptanceCriteria);
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : t("projectDetail.createCheckpoint.generateFailed"));
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function handleSave() {
+    if (!title.trim()) {
+      setError(t("projectDetail.createCheckpoint.titleRequired"));
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await dbCheckpoints.create({
+        projectId,
+        title: title.trim(),
+        goal: goal.trim() || null,
+        completedSummary: completedSummary.trim() || null,
+        currentContext: currentContext.trim() || null,
+        decisions: decisions.trim() || null,
+        failedAttempts: failedAttempts.trim() || null,
+        blockers: blockers.trim() || null,
+        nextSteps: nextSteps.trim() || null,
+        doNotRepeat: doNotRepeat.trim() || null,
+        acceptanceCriteria: acceptanceCriteria.trim() || null,
+      });
+      reset();
+      onOpenChange(false);
+      onCreated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("projectDetail.createCheckpoint.saveFailed"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto glass border-white/10 rounded-[2rem]">
+        <DialogHeader>
+          <DialogTitle className="font-black tracking-tight">{t("projectDetail.createCheckpoint.title")}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 text-sm">
+          {error && (
+            <Alert variant="destructive" className="py-2">
+              <AlertDescription className="text-xs">{error}</AlertDescription>
+            </Alert>
+          )}
+          {stagesWithConversation.length > 0 && (
+            <div className="flex items-end gap-2 bg-muted/30 rounded-xl p-2.5">
+              <div className="flex-1 space-y-1.5">
+                <Label htmlFor="cp-stage">{t("projectDetail.createCheckpoint.selectStage")}</Label>
+                <Select value={selectedStageId} onValueChange={setSelectedStageId}>
+                  <SelectTrigger id="cp-stage">
+                    <SelectValue placeholder={t("projectDetail.createCheckpoint.selectStagePlaceholder")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {stagesWithConversation.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        {ROLE_LABEL(s.workRole, t) ?? s.workRole}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => void handleGenerate()}
+                disabled={generating || !selectedStageId}
+              >
+                {generating ? (
+                  <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                ) : (
+                  <Sparkles className="w-3.5 h-3.5 mr-1" />
+                )}
+                {generating ? t("projectDetail.createCheckpoint.generating") : t("projectDetail.createCheckpoint.regenerate")}
+              </Button>
+            </div>
+          )}
+          {generating && !generateError && (
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <Loader2 className="w-3 h-3 animate-spin" /> {t("projectDetail.createCheckpoint.generatingHint")}
+            </p>
+          )}
+          {generateError && (
+            <Alert variant="destructive" className="py-2">
+              <AlertDescription className="text-xs">{generateError}</AlertDescription>
+            </Alert>
+          )}
+          <div className="space-y-1.5">
+            <Label htmlFor="cp-title">{t("projectDetail.createCheckpoint.titleLabel")}</Label>
+            <Input
+              id="cp-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder={t("projectDetail.createCheckpoint.titlePlaceholder")}
+            />
+          </div>
+          {(
+            [
+              ["goal"],
+              ["completedSummary"],
+              ["currentContext"],
+              ["decisions"],
+              ["failedAttempts"],
+              ["blockers"],
+              ["nextSteps"],
+              ["doNotRepeat"],
+              ["acceptanceCriteria"],
+            ] as const
+          ).map(([key]) => (
+            <div key={key} className="space-y-1.5">
+              <Label htmlFor={`cp-${key}`}>{t(`projectDetail.fields.${key}`)}</Label>
+              <Textarea
+                id={`cp-${key}`}
+                value={
+                  key === "goal" ? goal :
+                  key === "completedSummary" ? completedSummary :
+                  key === "currentContext" ? currentContext :
+                  key === "decisions" ? decisions :
+                  key === "failedAttempts" ? failedAttempts :
+                  key === "blockers" ? blockers :
+                  key === "nextSteps" ? nextSteps :
+                  key === "doNotRepeat" ? doNotRepeat :
+                  acceptanceCriteria
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (key === "goal") setGoal(v);
+                  else if (key === "completedSummary") setCompletedSummary(v);
+                  else if (key === "currentContext") setCurrentContext(v);
+                  else if (key === "decisions") setDecisions(v);
+                  else if (key === "failedAttempts") setFailedAttempts(v);
+                  else if (key === "blockers") setBlockers(v);
+                  else if (key === "nextSteps") setNextSteps(v);
+                  else if (key === "doNotRepeat") setDoNotRepeat(v);
+                  else setAcceptanceCriteria(v);
+                }}
+                placeholder={t(`projectDetail.placeholders.${key}`)}
+                rows={2}
+              />
+            </div>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            {t("common.cancel")}
+          </Button>
+          <Button onClick={() => void handleSave()} disabled={saving || !title.trim()}>
+            {saving ? t("projectDetail.createCheckpoint.saving") : t("projectDetail.createCheckpoint.create")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ============ 检查点详情对话框 ============
+
+function CheckpointDetailDialog({
+  checkpoint,
+  open,
+  onOpenChange,
+}: {
+  checkpoint: Checkpoint | null;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  if (!checkpoint) return null;
+  const fields: Array<[string, string]> = [
+    ["goal", checkpoint.goal ?? ""],
+    ["completedSummary", checkpoint.completedSummary ?? ""],
+    ["currentContext", checkpoint.currentContext ?? ""],
+    ["decisions", checkpoint.decisions ?? ""],
+    ["failedAttempts", checkpoint.failedAttempts ?? ""],
+    ["blockers", checkpoint.blockers ?? ""],
+    ["nextSteps", checkpoint.nextSteps ?? ""],
+    ["doNotRepeat", checkpoint.doNotRepeat ?? ""],
+    ["acceptanceCriteria", checkpoint.acceptanceCriteria ?? ""],
+  ];
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto glass border-white/10 rounded-[2rem]">
+        <DialogHeader>
+          <DialogTitle className="font-black tracking-tight">{checkpoint.title}</DialogTitle>
+        </DialogHeader>
+        <div className="text-xs text-muted-foreground">{t("projectDetail.checkpointDetail.createdAt", { time: formatTime(checkpoint.createdAt) })}</div>
+        <div className="space-y-3 text-sm">
+          {fields.map(([label, value]) => (
+            <div key={label} className="space-y-1">
+              <div className="font-medium">{t(`projectDetail.fields.${label}`)}</div>
+              <div className="text-muted-foreground whitespace-pre-wrap">
+                {value || <span className="italic">{t("projectDetail.checkpointDetail.empty")}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ============ 生成接力包对话框 ============
+
+function GenerateHandoffDialog({
+  open,
+  onOpenChange,
+  checkpoint,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  checkpoint: Checkpoint | null;
+  onCreated: () => void;
+}) {
+  const { t } = useTranslation();
+  const [targetRole, setTargetRole] = useState<string>("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleGenerate() {
+    if (!checkpoint || !targetRole) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await dbHandoffs.generate(checkpoint.id, targetRole, t);
+      setTargetRole("");
+      onOpenChange(false);
+      onCreated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("projectDetail.generateHandoff.failed"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="glass border-white/10 rounded-[2rem]">
+        <DialogHeader>
+          <DialogTitle className="font-black tracking-tight">{t("projectDetail.generateHandoff.title")}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 text-sm">
+          {error && (
+            <Alert variant="destructive" className="py-2">
+              <AlertDescription className="text-xs">{error}</AlertDescription>
+            </Alert>
+          )}
+          {checkpoint && (
+            <div className="text-xs text-muted-foreground">
+              {t("projectDetail.generateHandoff.sourceCheckpoint")}<span className="font-medium text-foreground">{checkpoint.title}</span>
+            </div>
+          )}
+          <div className="space-y-1.5">
+            <Label>{t("projectDetail.generateHandoff.targetRole")}</Label>
+            <Select value={targetRole} onValueChange={setTargetRole}>
+              <SelectTrigger>
+                <SelectValue placeholder={t("projectDetail.generateHandoff.targetRolePlaceholder")} />
+              </SelectTrigger>
+              <SelectContent>
+                {WORK_ROLES.map((role) => (
+                  <SelectItem key={role} value={role}>
+                    {t(`workRoles.${role}`)}（{t(`workRoles.${role}_desc`)}）
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {t("projectDetail.generateHandoff.hint")}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            {t("common.cancel")}
+          </Button>
+          <Button onClick={() => void handleGenerate()} disabled={saving || !targetRole}>
+            {saving ? t("projectDetail.generateHandoff.generating") : t("projectDetail.generateHandoff.generate")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ============ 接力包详情对话框 ============
+
+function HandoffDetailDialog({
+  packet,
+  open,
+  onOpenChange,
+}: {
+  packet: HandoffPacket | null;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  if (!packet) return null;
+  const roleLabel = ROLE_LABEL(packet.targetRole, t) ?? packet.targetRole;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto glass border-white/10 rounded-[2rem]">
+        <DialogHeader>
+          <DialogTitle className="font-black tracking-tight">{t("projectDetail.handoffDetail.title", { role: roleLabel })}</DialogTitle>
+        </DialogHeader>
+        <div className="text-xs text-muted-foreground">{t("projectDetail.handoffDetail.generatedAt", { time: formatTime(packet.createdAt) })}</div>
+        <pre className="bg-muted rounded-xl p-3 text-xs whitespace-pre-wrap break-words font-mono">
+          {packet.content}
+        </pre>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ============ 项目记忆对话框（v0.6 / 5.6 RAG）============
+
+function AddMemoryDialog({
+  open,
+  onOpenChange,
+  projectId,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  projectId: string;
+  onCreated: () => void;
+}) {
+  const { t } = useTranslation();
+  const [kind, setKind] = useState<"decision" | "lesson" | "context" | "preference" | "other">(
+    "decision",
+  );
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [tags, setTags] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function reset() {
+    setKind("decision");
+    setTitle("");
+    setContent("");
+    setTags("");
+    setError(null);
+  }
+
+  async function handleSave() {
+    if (!title.trim() || !content.trim()) {
+      setError(t("projectDetail.addMemory.titleRequired"));
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await dbMemories.create({
+        projectId,
+        kind,
+        title: title.trim(),
+        content: content.trim(),
+        tags: tags.trim() || null,
+      });
+      reset();
+      onOpenChange(false);
+      onCreated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("projectDetail.addMemory.saveFailed"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="glass border-white/10 rounded-[2rem]">
+        <DialogHeader>
+          <DialogTitle className="font-black tracking-tight">{t("projectDetail.addMemory.title")}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 text-sm">
+          {error && (
+            <Alert variant="destructive" className="py-2">
+              <AlertDescription className="text-xs">{error}</AlertDescription>
+            </Alert>
+          )}
+          <div className="space-y-1.5">
+            <Label>{t("projectDetail.addMemory.type")}</Label>
+            <Select value={kind} onValueChange={(v) => setKind(v as typeof kind)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(["decision", "lesson", "context", "preference", "other"] as const).map(
+                  (k) => (
+                    <SelectItem key={k} value={k}>
+                      {memoryKindLabel(k, t)}
+                    </SelectItem>
+                  ),
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="mem-title">{t("projectDetail.addMemory.titleLabel")}</Label>
+            <Input
+              id="mem-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder={t("projectDetail.addMemory.titlePlaceholder")}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="mem-content">{t("projectDetail.addMemory.contentLabel")}</Label>
+            <Textarea
+              id="mem-content"
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              rows={4}
+              placeholder={t("projectDetail.addMemory.contentPlaceholder")}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="mem-tags">{t("projectDetail.addMemory.tagsLabel")}</Label>
+            <Input
+              id="mem-tags"
+              value={tags}
+              onChange={(e) => setTags(e.target.value)}
+              placeholder={t("projectDetail.addMemory.tagsPlaceholder")}
+            />
+            <p className="text-xs text-muted-foreground">{t("projectDetail.addMemory.tagsHint")}</p>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            {t("common.cancel")}
+          </Button>
+          <Button onClick={() => void handleSave()} disabled={saving}>
+            {t("projectDetail.addMemory.save")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

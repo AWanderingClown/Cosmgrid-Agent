@@ -8,6 +8,8 @@ export interface TestConnectionParams {
   modelName: string;
   apiKey: string;
   baseUrl?: string;
+  /** i18n t 函数，让 error.userMessage 跟着当前语言走（v0.7 i18n 化） */
+  t?: (k: string) => string;
 }
 
 export interface TestConnectionResult {
@@ -45,7 +47,7 @@ export async function testConnection(
     return {
       success: false,
       latencyMs: Date.now() - start,
-      error: classifyLlmError(error),
+      error: classifyLlmError(error, params.t),
     };
   }
 }

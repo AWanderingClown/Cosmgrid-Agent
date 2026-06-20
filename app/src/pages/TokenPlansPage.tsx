@@ -1,10 +1,9 @@
 // TokenPlansPage - 重构为 "Cosmic Cyber" 视觉风格
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Plus, Coins, Trash2, Gauge, Activity, Calendar, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import {
   Dialog,
   DialogContent,
@@ -29,32 +28,19 @@ import {
 } from "@/lib/db";
 import { cn } from "@/lib/utils";
 
-const PLAN_TYPES = [
-  { value: "monthly", label: "月付套餐" },
-  { value: "usage", label: "按量计费" },
-  { value: "message_count", label: "消息包" },
-  { value: "token_pack", label: "Token 资源包" },
-  { value: "time_window", label: "时间窗口重置" },
-  { value: "unknown", label: "其他" },
-];
+const PLAN_TYPE_KEYS = ["monthly", "usage", "message_count", "token_pack", "time_window", "unknown"] as const;
+const QUOTA_UNIT_KEYS = ["token", "request", "message", "usd", "time"] as const;
 
-const QUOTA_UNITS = [
-  { value: "token", label: "Tokens" },
-  { value: "request", label: "请求数" },
-  { value: "message", label: "消息数" },
-  { value: "usd", label: "美元" },
-  { value: "time", label: "时长" },
-];
-
-function statusOf(p: TokenPlan): { label: string; color: string } {
-  if (!p.totalQuota) return { label: "监控中", color: "text-blue-400" };
+function statusOf(p: TokenPlan, t: (k: string) => string): { label: string; color: string } {
+  if (!p.totalQuota) return { label: t("tokenPlans.monitoring"), color: "text-blue-400" };
   const ratio = p.usedQuota / p.totalQuota;
-  if (ratio >= 1) return { label: "已耗尽", color: "text-red-500" };
-  if (ratio >= 0.8) return { label: "接近耗尽", color: "text-orange-500" };
-  return { label: "额度充足", color: "text-emerald-400" };
+  if (ratio >= 1) return { label: t("tokenPlans.status.exhausted"), color: "text-red-500" };
+  if (ratio >= 0.8) return { label: t("tokenPlans.status.warn"), color: "text-orange-500" };
+  return { label: t("tokenPlans.status.ok"), color: "text-emerald-400" };
 }
 
 export function TokenPlansPage() {
+  const { t } = useTranslation();
   const [plans, setPlans] = useState<TokenPlan[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -93,7 +79,7 @@ export function TokenPlansPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("确定移除此用量计划？")) return;
+    if (!confirm(t("tokenPlans.deleteConfirm"))) return;
     await dbTokenPlans.delete(id);
     await load();
   }
@@ -112,11 +98,11 @@ export function TokenPlansPage() {
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-primary">
               <Activity className="w-5 h-5" />
-              <span className="text-[10px] font-bold uppercase tracking-[0.2em]">实时监控中</span>
+              <span className="text-[10px] font-bold uppercase tracking-[0.2em]">{t("tokenPlans.sectionLabel")}</span>
             </div>
-            <h1 className="text-3xl font-bold tracking-tight">用量资产管理</h1>
+            <h1 className="text-3xl font-bold tracking-tight">{t("tokenPlans.title")}</h1>
             <p className="text-muted-foreground text-sm max-w-lg">
-              集中监控不同供应商的 API 额度消耗，系统将根据您的计划自动触发告警与模型降级策略。
+              {t("tokenPlans.desc")}
             </p>
           </div>
           <Button
@@ -125,7 +111,7 @@ export function TokenPlansPage() {
             className="rounded-xl px-6 h-11 bg-primary shadow-lg shadow-primary/20 hover:scale-105 transition-all"
           >
             <Plus className="w-4 h-4 mr-2" />
-            新建用量计划
+            {t("tokenPlans.createButton")}
           </Button>
         </header>
 
@@ -135,19 +121,19 @@ export function TokenPlansPage() {
               <ShieldCheck className="w-8 h-8 text-amber-500" />
             </div>
             <div className="space-y-1">
-              <h3 className="font-bold">未检测到活跃供应商</h3>
-              <p className="text-sm text-muted-foreground">请先在「模型供应商」页面配置 API 凭证。</p>
+              <h3 className="font-bold">{t("tokenPlans.emptyNoProvider.title")}</h3>
+              <p className="text-sm text-muted-foreground">{t("tokenPlans.emptyNoProvider.desc")}</p>
             </div>
           </Card>
         ) : plans.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center glass rounded-3xl border-dashed">
              <Coins className="w-12 h-12 text-muted-foreground/30 mb-4" />
-             <p className="text-muted-foreground text-sm">暂无活跃的用量计划</p>
+             <p className="text-muted-foreground text-sm">{t("tokenPlans.emptyNoPlan")}</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {plans.map((p) => {
-              const st = statusOf(p);
+              const st = statusOf(p, t);
               const ratio = p.totalQuota ? (p.usedQuota / p.totalQuota) * 100 : 0;
               const isHigh = ratio >= 80;
 
@@ -187,7 +173,7 @@ export function TokenPlansPage() {
                           <span className="text-[10px] font-bold text-muted-foreground uppercase">{p.quotaUnit}</span>
                         </div>
                         <div className="text-[10px] font-bold text-muted-foreground/60 uppercase">
-                           上限: {p.totalQuota ? p.totalQuota.toLocaleString() : "∞"}
+                           {p.totalQuota ? t("tokenPlans.limit", { value: p.totalQuota.toLocaleString() }) : t("tokenPlans.limitUnlimited")}
                         </div>
                       </div>
 
@@ -206,17 +192,19 @@ export function TokenPlansPage() {
                     <div className="flex flex-wrap gap-2 pt-2">
                       <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-muted/50 text-[10px] font-bold text-muted-foreground uppercase border border-white/5">
                         <Activity className="w-3 h-3" />
-                        {PLAN_TYPES.find((t) => t.value === p.planType)?.label || "自定义"}
+                        {PLAN_TYPE_KEYS.includes(p.planType as typeof PLAN_TYPE_KEYS[number])
+                          ? t(`tokenPlans.types.${p.planType}`)
+                          : t("tokenPlans.custom")}
                       </div>
                       {p.resetRule && (
                         <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-muted/50 text-[10px] font-bold text-muted-foreground uppercase border border-white/5">
                           <Calendar className="w-3 h-3" />
-                          重置: {p.resetRule}
+                          {t("tokenPlans.reset", { rule: p.resetRule })}
                         </div>
                       )}
 
                       <div className="ml-auto flex items-center gap-2">
-                        <span className="text-[10px] font-bold text-muted-foreground/40 uppercase">更新已用</span>
+                        <span className="text-[10px] font-bold text-muted-foreground/40 uppercase">{t("tokenPlans.used")}</span>
                         <Input
                           type="number"
                           defaultValue={p.usedQuota}
@@ -238,16 +226,16 @@ export function TokenPlansPage() {
           <DialogHeader>
             <DialogTitle className="text-xl font-bold flex items-center gap-2">
               <Plus className="w-5 h-5 text-primary" />
-              添加用量计划
+              {t("tokenPlans.createDialog.title")}
             </DialogTitle>
           </DialogHeader>
 
           <div className="space-y-5 py-4">
             <div className="space-y-2">
-              <Label className="text-[10px] font-bold uppercase tracking-widest px-1">所属供应商</Label>
+              <Label className="text-[10px] font-bold uppercase tracking-widest px-1">{t("tokenPlans.createDialog.provider")}</Label>
               <Select value={form.providerId} onValueChange={(v) => setForm({ ...form, providerId: v })}>
                 <SelectTrigger className="rounded-xl border-white/10 bg-white/5 h-11">
-                  <SelectValue placeholder="选择提供商" />
+                  <SelectValue placeholder={t("tokenPlans.createDialog.providerPlaceholder")} />
                 </SelectTrigger>
                 <SelectContent className="glass border-white/10 rounded-xl">
                   {providers.map((pr) => (
@@ -258,38 +246,38 @@ export function TokenPlansPage() {
             </div>
 
             <div className="space-y-2">
-              <Label className="text-[10px] font-bold uppercase tracking-widest px-1">套餐显示名称</Label>
+              <Label className="text-[10px] font-bold uppercase tracking-widest px-1">{t("tokenPlans.createDialog.name")}</Label>
               <Input
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="例如: GPT-4 每月专业版"
+                placeholder={t("tokenPlans.createDialog.namePlaceholder")}
                 className="rounded-xl border-white/10 bg-white/5 h-11"
               />
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label className="text-[10px] font-bold uppercase tracking-widest px-1">计划类型</Label>
+                <Label className="text-[10px] font-bold uppercase tracking-widest px-1">{t("tokenPlans.createDialog.type")}</Label>
                 <Select value={form.planType} onValueChange={(v) => setForm({ ...form, planType: v })}>
                   <SelectTrigger className="rounded-xl border-white/10 bg-white/5 h-11">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="glass border-white/10 rounded-xl">
-                    {PLAN_TYPES.map((t) => (
-                      <SelectItem key={t.value} value={t.value} className="rounded-lg">{t.label}</SelectItem>
+                    {PLAN_TYPE_KEYS.map((k) => (
+                      <SelectItem key={k} value={k} className="rounded-lg">{t(`tokenPlans.types.${k}`)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label className="text-[10px] font-bold uppercase tracking-widest px-1">计费单位</Label>
+                <Label className="text-[10px] font-bold uppercase tracking-widest px-1">{t("tokenPlans.createDialog.unit")}</Label>
                 <Select value={form.quotaUnit} onValueChange={(v) => setForm({ ...form, quotaUnit: v })}>
                   <SelectTrigger className="rounded-xl border-white/10 bg-white/5 h-11">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="glass border-white/10 rounded-xl">
-                    {QUOTA_UNITS.map((u) => (
-                      <SelectItem key={u.value} value={u.value} className="rounded-lg">{u.label}</SelectItem>
+                    {QUOTA_UNIT_KEYS.map((k) => (
+                      <SelectItem key={k} value={k} className="rounded-lg">{t(`tokenPlans.units.${k}`)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -298,21 +286,21 @@ export function TokenPlansPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label className="text-[10px] font-bold uppercase tracking-widest px-1">总额度上限</Label>
+                <Label className="text-[10px] font-bold uppercase tracking-widest px-1">{t("tokenPlans.createDialog.total")}</Label>
                 <Input
                   type="number"
                   value={form.totalQuota}
                   onChange={(e) => setForm({ ...form, totalQuota: e.target.value })}
-                  placeholder="留空为无限制"
+                  placeholder={t("tokenPlans.createDialog.totalPlaceholder")}
                   className="rounded-xl border-white/10 bg-white/5 h-11"
                 />
               </div>
               <div className="space-y-2">
-                <Label className="text-[10px] font-bold uppercase tracking-widest px-1">重置规则</Label>
+                <Label className="text-[10px] font-bold uppercase tracking-widest px-1">{t("tokenPlans.createDialog.resetRule")}</Label>
                 <Input
                   value={form.resetRule}
                   onChange={(e) => setForm({ ...form, resetRule: e.target.value })}
-                  placeholder="例如: 每月1日"
+                  placeholder={t("tokenPlans.createDialog.resetPlaceholder")}
                   className="rounded-xl border-white/10 bg-white/5 h-11"
                 />
               </div>
@@ -321,10 +309,10 @@ export function TokenPlansPage() {
 
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="ghost" onClick={() => setDialogOpen(false)} className="rounded-xl h-11">
-              取消
+              {t("common.cancel")}
             </Button>
             <Button onClick={handleCreate} className="rounded-xl h-11 px-8 bg-primary shadow-lg shadow-primary/20">
-              确认启用
+              {t("tokenPlans.createDialog.confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>

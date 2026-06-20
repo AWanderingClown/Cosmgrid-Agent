@@ -1,0 +1,520 @@
+{
+  "common": {
+    "cancel": "取消",
+    "confirm": "确认",
+    "delete": "删除",
+    "edit": "编辑",
+    "save": "保存",
+    "create": "创建",
+    "loading": "加载中...",
+    "error": "错误",
+    "success": "成功",
+    "optional": "（可选）",
+    "required": "*"
+  },
+  "errorClassifier": {
+    "auth_invalid": "API Key 无效或已过期，请在 API 接入页检查",
+    "auth_forbidden": "API Key 权限不足，请检查账户是否欠费或套餐限制",
+    "model_not_found": "模型不存在或已下线，请检查模型名称",
+    "context_overflow": "对话内容超出模型上下文窗口，请新建对话或缩短历史",
+    "rate_limit": "套餐额度已耗尽或被限流，请稍后重试或检查套餐状态",
+    "server_error": "AI 服务暂时不可用，请稍后重试",
+    "timeout": "请求超时，请检查网络或稍后重试",
+    "network": "网络连接失败，请检查网络或 Base URL 配置",
+    "unknown": "对话失败，请稍后重试"
+  },
+  "app": {
+    "brandSubtitle": "智能核心管理层",
+    "sidebar": {
+      "chat": "智能对话",
+      "projects": "项目工作区",
+      "providers": "模型供应商",
+      "templates": "角色模板",
+      "tokenPlans": "用量监控",
+      "settings": "设置"
+    },
+    "alerts": {
+      "goToHandle": "前往处理",
+      "dismiss": "忽略"
+    }
+  },
+  "chat": {
+    "userLabel": "授权用户",
+    "assistantLabel": "CosmGrid 助手",
+    "loadError": "加载失败",
+    "noCredential": "未找到 API 凭证",
+    "noApiKey": "API Key 缺失",
+    "constructError": "构造失败",
+    "switchedTo": "切换至 {{name}}",
+    "requestInterrupted": "请求中断",
+    "smartPick": "智能推荐",
+    "usage": "用量",
+    "inputTokens": "输入:{{count}}",
+    "outputTokens": "输出:{{count}}",
+    "emptyState": {
+      "title": "等待初始化",
+      "desc": "请先前往「模型供应商」页面，建立你的 AI 神经连接。",
+      "goToConfig": "前往配置"
+    },
+    "ready": "准备就绪",
+    "inputPlaceholder": "使用 {{name}} 进行对话...",
+    "inputPlaceholderFallback": "输入消息...",
+    "footer": "安全连接 • {{version}} • 由 CosmGrid 驱动",
+    "workPanel": {
+      "title": "工作面板",
+      "close": "收起",
+      "empty": "本次会话还没有模型活动记录",
+      "sessionTotal": "本次会话总用量",
+      "turnLabel": "第 {{n}} 轮",
+      "primary": "首选",
+      "fallback": "故障切换",
+      "switchedNote": "限额自动切换",
+      "inTokens": "输入",
+      "outTokens": "输出"
+    }
+  },
+  "providers": {
+    "sectionLabel": "外部核心集成",
+    "title": "模型供应商",
+    "desc": "在这里集成全球顶尖的大模型 API。支持 OpenAI, Anthropic, Google 以及任何兼容 OpenAI 协议的自定义端点。",
+    "addButton": "添加供应商",
+    "empty": {
+      "title": "无活跃供应商",
+      "desc": "点击上方按钮，开始连接你的第一个大模型能力中心。"
+    },
+    "credentials": "凭证",
+    "models": "模型",
+    "credentialsList": "API 凭证列表",
+    "noCredentials": "该供应商暂无关联凭证",
+    "defaultEndpoint": "默认端点",
+    "modelsPool": "已同步模型池",
+    "noModels": "该供应商暂无可用模型",
+    "defaultModelLabel": "核心原厂模型",
+    "online": "在线",
+    "offline": "离线",
+    "disable": "下线停用",
+    "enable": "恢复上线",
+    "deleteProvider": "确定删除这个 Provider？关联的凭证和模型也会被删除",
+    "deleteCredential": "确定删除这个凭证？",
+    "deleteModel": "确定删除这个模型？",
+    "deleteFailed": "删除失败",
+    "updateFailed": "更新失败",
+    "loadFailed": "加载失败",
+    "deleteProviderFull": "彻底删除供应商配置"
+  },
+  "addProvider": {
+    "title": "添加供应商",
+    "desc": "填一次，Provider + 凭证 + Model 一起建好",
+    "providerName": "供应商名称",
+    "providerNamePlaceholder": "我的 Claude",
+    "website": "官网",
+    "notes": "备注",
+    "notesPlaceholder": "公司报销的 API Key",
+    "providerType": "Provider 类型",
+    "providerTypePlaceholder": "选择 Provider",
+    "providerTypes": {
+      "anthropic": "Anthropic",
+      "openai": "OpenAI",
+      "google": "Google",
+      "openai-compatible": "OpenAI 兼容（GLM / DeepSeek / Qwen / 自定义）"
+    },
+    "apiKey": "API Key",
+    "apiKeyPlaceholder": "粘贴你的 API Key",
+    "show": "显示",
+    "hide": "隐藏",
+    "baseUrl": "Base URL",
+    "baseUrlPlaceholder": "https://api.example.com/v1",
+    "testConnection": "测试连接",
+    "testing": "测试中...",
+    "connectSuccess": "连接成功",
+    "connectSuccessWithLatency": "连接成功，延迟 {{ms}}ms",
+    "connectFailed": "连接失败：{{error}}",
+    "unknownError": "未知错误",
+    "modelId": "模型 ID",
+    "modelIdPlaceholder": "例如 claude-opus-4-8",
+    "displayName": "显示名",
+    "displayNamePlaceholder": "例如 Opus 4.8",
+    "contextWindow": "上下文窗口",
+    "contextWindowPlaceholder": "例如 200000",
+    "workRoles": "工作角色",
+    "workRolesHint": "至少选择 1 个工作角色",
+    "submitting": "添加中...",
+    "submit": "添加",
+    "fillRequired": "请填所有必填项",
+    "addFailed": "添加失败",
+    "rollbackFailed": "回滚失败"
+  },
+  "workRoles": {
+    "main_chat": "主对话",
+    "main_chat_desc": "用户跟 AI 的直接对话",
+    "planning": "计划阶段",
+    "planning_desc": "任务分解、架构设计",
+    "review": "代码 review",
+    "review_desc": "PR/代码审查",
+    "frontend": "前端实现",
+    "frontend_desc": "UI/CSS/组件",
+    "backend": "后端实现",
+    "backend_desc": "API/DB/服务",
+    "testing": "测试",
+    "testing_desc": "单测/集成测试",
+    "final_review": "最终审核",
+    "final_review_desc": "完整方案复核",
+    "data_exploration": "数据探索",
+    "data_exploration_desc": "数据科学项目：探索性分析",
+    "modeling": "建模",
+    "modeling_desc": "数据科学项目：模型训练",
+    "ios": "iOS 实现",
+    "ios_desc": "移动 App 项目：iOS 端",
+    "android": "Android 实现",
+    "android_desc": "移动 App 项目：Android 端",
+    "direct_generation": "直接生成",
+    "direct_generation_desc": "小型脚本：一次性直出代码",
+    "general": "通用兜底",
+    "general_desc": "无明确角色时"
+  },
+  "memoryKind": {
+    "decision": "决策",
+    "lesson": "经验教训",
+    "context": "背景上下文",
+    "preference": "偏好",
+    "other": "其他"
+  },
+  "builtinTemplates": {
+    "fullstack_web": {
+      "name": "全栈 Web 项目模板",
+      "desc": "main_chat / planning / review / frontend / backend / testing / final_review"
+    },
+    "data_science": {
+      "name": "数据科学项目模板",
+      "desc": "main_chat / planning / review / data_exploration / modeling / testing / final_review"
+    },
+    "mobile_app": {
+      "name": "移动 App 模板",
+      "desc": "main_chat / planning / review / ios / android / testing / final_review"
+    },
+    "small_script": {
+      "name": "小型脚本模板",
+      "desc": "main_chat / direct_generation / testing（适合一次性脚本生成）"
+    }
+  },
+  "handoffMarkdown": {
+    "title": "接力包 → {{role}}",
+    "sourceCheckpoint": "_原检查点：{{title}}_",
+    "generatedAt": "_生成时间：{{time}}_",
+    "empty": "（未填）"
+  },
+  "templates": {
+    "sectionLabel": "流水线配置架构师",
+    "title": "项目角色模板",
+    "desc": "定义不同协作场景下的 AI 专家组合。系统会自动根据各个模型的评分，为您推荐最擅长该领域的 AI 节点。",
+    "available": "可用方案模板",
+    "builtIn": "内置",
+    "noRoles": "未分配角色",
+    "rolesCount": "共包含 {{count}} 个协作节点",
+    "smartAssign": "智能一键分配",
+    "saveAs": "另存模板",
+    "noModels": "未检测到已连接的 AI 模型。请先前往「模型供应商」页面添加配置。",
+    "primaryModel": "首选专家模型",
+    "primaryModelPlaceholder": "请选择主模型",
+    "fallbackModel": "故障自动切换模型",
+    "fallbackModelPlaceholder": "无备用方案",
+    "fallbackDisabled": "不启用备用方案",
+    "selectTemplateHint": "请从左侧选择一个方案模版"
+  },
+  "projects": {
+    "sectionLabel": "活跃项目管理中心",
+    "title": "项目工作区",
+    "desc": "管理多 Agent 协作项目。基于工业级工作流模板，让 AI 团队自动化完成复杂的开发、审计与部署任务。",
+    "createButton": "新建项目",
+    "empty": {
+      "title": "空空如也",
+      "desc": "创建一个新项目，启动你的第一个 AI 自动化流水线。"
+    },
+    "noDescription": "未提供项目描述",
+    "currentStage": "当前阶段",
+    "initializing": "初始化",
+    "template": "使用模板",
+    "noTemplate": "无",
+    "updatedAt": "最近更新于 {{time}}",
+    "pathConnected": "路径已连接",
+    "deleteConfirm": "确定删除这个项目？已记录的阶段历史也会一起删除。",
+    "createDialog": {
+      "title": "新建项目",
+      "step": "第 {{current}} 步（共 {{total}} 步）",
+      "selectTemplate": "核心流水线模板",
+      "selectTemplatePlaceholder": "选择模板",
+      "templateHint": "系统将根据模板预定义的角色与工作阶段，自动为你分配合适的 AI 智能体组合。",
+      "nameLabel": "项目标识",
+      "namePlaceholder": "输入具有识别性的项目名称",
+      "descLabel": "项目简述",
+      "descPlaceholder": "可选，简单描述核心目标",
+      "workspaceLabel": "工作区路径",
+      "workspacePlaceholder": "例如：~/developer/cosmgrid-project",
+      "next": "下一步",
+      "back": "上一步",
+      "submit": "立即启动",
+      "submitting": "正在连接网络…"
+    }
+  },
+  "projectStatus": {
+    "pending": "待启动",
+    "active": "进行中",
+    "paused": "已暂停",
+    "completed": "已归档",
+    "failed": "失败",
+    "running": "处理中",
+    "interrupted": "已终止",
+    "ready": "就绪"
+  },
+  "stageStatus": {
+    "pending": "等待启动",
+    "active": "运行中",
+    "paused": "已暂停",
+    "completed": "已归档",
+    "failed": "系统故障",
+    "ready": "等待启动",
+    "running": "处理中"
+  },
+  "tokenPlans": {
+    "sectionLabel": "实时监控中",
+    "title": "用量资产管理",
+    "desc": "集中监控不同供应商的 API 额度消耗，系统将根据您的计划自动触发告警与模型降级策略。",
+    "createButton": "新建用量计划",
+    "emptyNoProvider": {
+      "title": "未检测到活跃供应商",
+      "desc": "请先在「模型供应商」页面配置 API 凭证。"
+    },
+    "emptyNoPlan": "暂无活跃的用量计划",
+    "monitoring": "监控中",
+    "status": {
+      "exhausted": "已耗尽",
+      "critical": "严重不足",
+      "warn": "接近耗尽",
+      "ok": "额度充足"
+    },
+    "limit": "上限: {{value}}",
+    "limitUnlimited": "上限: ∞",
+    "custom": "自定义",
+    "reset": "重置: {{rule}}",
+    "used": "更新已用",
+    "createDialog": {
+      "title": "添加用量计划",
+      "provider": "所属供应商",
+      "providerPlaceholder": "选择提供商",
+      "name": "套餐显示名称",
+      "namePlaceholder": "例如: GPT-4 每月专业版",
+      "type": "计划类型",
+      "unit": "计费单位",
+      "total": "总额度上限",
+      "totalPlaceholder": "留空为无限制",
+      "resetRule": "重置规则",
+      "resetPlaceholder": "例如: 每月1日",
+      "confirm": "确认启用"
+    },
+    "types": {
+      "monthly": "月付套餐",
+      "usage": "按量计费",
+      "message_count": "消息包",
+      "token_pack": "Token 资源包",
+      "time_window": "时间窗口重置",
+      "unknown": "其他"
+    },
+    "units": {
+      "token": "Tokens",
+      "request": "请求数",
+      "message": "消息数",
+      "usd": "美元",
+      "time": "时长"
+    },
+    "deleteConfirm": "确定移除此用量计划？"
+  },
+  "settings": {
+    "sectionLabel": "系统设置",
+    "title": "偏好设置",
+    "desc": "在此管理您的界面显示、语言习惯及底层核心配置。",
+    "appearance": {
+      "title": "外观与视觉",
+      "theme": "显示主题",
+      "themes": {
+        "light": "浅色模式",
+        "dark": "深色模式",
+        "system": "跟随系统"
+      },
+      "language": "界面语言",
+      "languagePlaceholder": "选择语言"
+    },
+    "security": {
+      "title": "安全与本地数据",
+      "localDb": {
+        "title": "本地数据库",
+        "desc": "所有的对话、API 凭证和项目数据均存储在本地 SQLite 数据库中。"
+      },
+      "manageDb": "管理数据库",
+      "apiKey": {
+        "title": "API 密钥存储",
+        "desc": "密钥通过操作系统的安全钥匙串进行加密存储，安全性由底层 OS 保障。"
+      },
+      "encrypted": "加密存储中"
+    },
+    "about": {
+      "title": "关于 CosmGrid",
+      "tagline": "下一代多 Agent 协作工作站，致力于为开发者提供最稳定、直观且高效的 AI 协作环境。"
+    }
+  },
+  "onboarding": {
+    "title": "首次启动引导",
+    "stepOf": "第 {{current}} 步 / 共 {{total}} 步：{{stepTitle}}",
+    "skip": "跳过引导",
+    "neverShow": "下次不再弹",
+    "prev": "上一步",
+    "next": "下一步",
+    "done": "我懂了，开始用",
+    "nextWithTarget": "下一步（跳到 {{target}}）",
+    "nextTarget": {
+      "providers": "API 接入",
+      "templates": "模板",
+      "projects": "项目"
+    },
+    "steps": {
+      "addApiKey": {
+        "title": "添加第一个 API Key",
+        "desc": "去「API 接入」选一个供应商（Anthropic / OpenAI / Google / OpenAI 兼容的 GLM/DeepSeek/Qwen），填上 API Key 和第一个模型。"
+      },
+      "addSecondModel": {
+        "title": "再添加一个模型（推荐）",
+        "desc": "至少 2 个模型才能体现「多 AI 协作」——主对话用 Opus、写代码用 Gemini、测试用 Haiku 这种组合。"
+      },
+      "browseTemplates": {
+        "title": "看看 4 个内置模板",
+        "desc": "全栈 Web / 数据科学 / 移动 App / 小型脚本——每个模板都自动给角色配好最优模型。"
+      },
+      "createFirstProject": {
+        "title": "创建第一个项目",
+        "desc": "挑个模板，填项目名 + 工作空间路径（可以以后改），点创建就完事。"
+      }
+    }
+  },
+  "projectDetail": {
+    "notFound": "项目未找到",
+    "coreWorkflow": "核心工作流",
+    "timeline": "时间线",
+    "checkpoints": "检查点",
+    "memories": "记忆",
+    "emptyBuffer": "Empty Buffer",
+    "loadError": "加载失败",
+    "altBot": "助手",
+    "altUser": "用户",
+    "chat": {
+      "userLabel": "授权用户",
+      "assistantLabel": "CosmGrid 助手",
+      "placeholder": "Command the agent...",
+      "awaiting": "Awaiting Instruction",
+      "endpointFailed": "Endpoint Failed",
+      "streamFailed": "Stream Failed",
+      "failsafeSwitched": "Failsafe: Switched to {{name}}",
+      "switching": "切换中",
+      "apiKeyMissing": "API Key Missing",
+      "initFailed": "Initialization Failed",
+      "syncing": "Synchronizing Environment..."
+    },
+    "stageStatus": {
+      "ready": "就绪",
+      "running": "处理中",
+      "active": "活跃",
+      "completed": "已完成",
+      "failed": "严重错误",
+      "interrupted": "已终止",
+      "pending": "待启动"
+    },
+    "projectStatus": {
+      "pending": "等待启动",
+      "active": "运行中",
+      "paused": "已暂停",
+      "completed": "已归档",
+      "failed": "系统故障"
+    },
+    "deleteCheckpoint": "删除这个检查点？关联的接力包也会一起删。",
+    "systemModel": "System Model",
+    "startSequence": "Start Sequence",
+    "closeLogs": "Close Logs",
+    "viewDialog": "View Dialog",
+    "noRecords": "No Records",
+    "details": "Details",
+    "handoff": "Handoff",
+    "createCheckpoint": {
+      "title": "创建检查点",
+      "selectStage": "基于哪个阶段的对话生成？",
+      "selectStagePlaceholder": "选择阶段",
+      "regenerate": "重新生成",
+      "generating": "生成中…",
+      "generatingHint": "AI 正在根据对话记录自动生成检查点草稿…",
+      "selectStageFirst": "请先选择一个阶段",
+      "noModelOrCred": "这个阶段缺少可用的模型或凭证，无法用 AI 生成",
+      "apiKeyMissing": "API Key 未找到，请重新添加凭证",
+      "generateFailed": "生成失败",
+      "titleRequired": "请填写标题",
+      "saveFailed": "保存失败",
+      "titleLabel": "标题 *",
+      "titlePlaceholder": "例如：前端组件 v1 完成，准备交给后端联调",
+      "cancel": "取消",
+      "create": "创建",
+      "saving": "保存中…"
+    },
+    "checkpointDetail": {
+      "createdAt": "创建于 {{time}}",
+      "empty": "（未填）"
+    },
+    "fields": {
+      "goal": "目标（Goal）",
+      "completedSummary": "已完成（Completed Summary）",
+      "currentContext": "当前上下文（Current Context）",
+      "decisions": "决策记录（Decisions）",
+      "failedAttempts": "失败尝试（Failed Attempts）",
+      "blockers": "阻塞项（Blockers）",
+      "nextSteps": "下一步（Next Steps）",
+      "doNotRepeat": "禁止重复（Do Not Repeat）",
+      "acceptanceCriteria": "验收标准（Acceptance Criteria）"
+    },
+    "placeholders": {
+      "goal": "这个检查点要达成什么",
+      "completedSummary": "到现在为止做了什么",
+      "currentContext": "下一个角色需要知道的关键背景",
+      "decisions": "为什么这么选、放弃了哪些方案",
+      "failedAttempts": "试过但行不通的路",
+      "blockers": "当前卡在哪",
+      "nextSteps": "下一个角色具体做什么",
+      "doNotRepeat": "绝对不要再做的事",
+      "acceptanceCriteria": "怎么算「做完了」"
+    },
+    "generateHandoff": {
+      "title": "生成接力包",
+      "sourceCheckpoint": "原检查点：",
+      "targetRole": "目标角色",
+      "targetRolePlaceholder": "选择下一个接手的工作角色",
+      "hint": "接力包会把检查点所有字段拼成 markdown，存一条 handoff_packets 记录。",
+      "cancel": "取消",
+      "generate": "生成",
+      "generating": "生成中…",
+      "failed": "生成失败"
+    },
+    "handoffDetail": {
+      "title": "接力包 → {{role}}",
+      "generatedAt": "生成于 {{time}}"
+    },
+    "addMemory": {
+      "title": "添加项目记忆",
+      "type": "类型",
+      "titleRequired": "标题和内容都必填",
+      "saveFailed": "保存失败",
+      "titleLabel": "标题 *",
+      "titlePlaceholder": "例如：API Key 用 keychain 插件不入库",
+      "contentLabel": "内容 *",
+      "contentPlaceholder": "这条记忆讲什么 / 为什么这么决定 / 将来哪个项目能用上",
+      "tagsLabel": "标签（可选，逗号分隔）",
+      "tagsPlaceholder": "例如：auth, 减负, v0.3",
+      "tagsHint": "标签用于跨项目检索时跟项目描述 / 其他记忆匹配",
+      "cancel": "取消",
+      "save": "保存"
+    }
+  }
+}

@@ -1,5 +1,6 @@
 // API Key 输入控件（带眼睛按钮显示/隐藏）
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Eye, EyeOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,15 +17,16 @@ interface ApiKeyInputProps {
 export function ApiKeyInput({
   value,
   onChange,
-  label = "API Key",
+  label,
   required = false,
   placeholder = "sk-...",
 }: ApiKeyInputProps) {
+  const { t } = useTranslation();
   const [show, setShow] = useState(false);
   return (
     <div className="space-y-2">
       <Label htmlFor="apikey">
-        {label}
+        {label ?? t("addProvider.apiKey")}
         {required && <span className="text-destructive ml-1">*</span>}
       </Label>
       <div className="relative">
@@ -44,7 +46,7 @@ export function ApiKeyInput({
             size="icon"
             className="absolute right-0 top-0 h-full px-3"
             onClick={() => setShow(!show)}
-            aria-label={show ? "隐藏" : "显示"}
+            aria-label={show ? t("addProvider.hide") : t("addProvider.show")}
           >
             {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
           </Button>

@@ -1,5 +1,5 @@
 // Provider 类型下拉（anthropic / openai / google / openai-compatible）
-// v0.2 仅支持 3 个原生 provider，v0.3 加 openai-compatible 接 GLM/DeepSeek/Qwen
+import { useTranslation } from "react-i18next";
 import {
   Select,
   SelectContent,
@@ -10,10 +10,10 @@ import {
 import { Label } from "@/components/ui/label";
 
 export const PROVIDER_TYPES = [
-  { value: "anthropic", label: "Anthropic（Claude）" },
-  { value: "openai", label: "OpenAI（GPT）" },
-  { value: "google", label: "Google（Gemini）" },
-  { value: "openai-compatible", label: "OpenAI 兼容（GLM / DeepSeek / Qwen / 自定义）" },
+  { value: "anthropic", labelKey: "addProvider.providerTypes.anthropic" },
+  { value: "openai", labelKey: "addProvider.providerTypes.openai" },
+  { value: "google", labelKey: "addProvider.providerTypes.google" },
+  { value: "openai-compatible", labelKey: "addProvider.providerTypes.openai-compatible" },
 ] as const;
 
 export type ProviderTypeValue = (typeof PROVIDER_TYPES)[number]["value"];
@@ -24,17 +24,18 @@ interface ProviderTypeSelectProps {
 }
 
 export function ProviderTypeSelect({ value, onChange }: ProviderTypeSelectProps) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-2">
-      <Label>Provider 类型</Label>
+      <Label>{t("addProvider.providerType")}</Label>
       <Select value={value} onValueChange={(v) => onChange(v as ProviderTypeValue)}>
         <SelectTrigger>
-          <SelectValue placeholder="选择 Provider" />
+          <SelectValue placeholder={t("addProvider.providerTypePlaceholder")} />
         </SelectTrigger>
         <SelectContent>
           {PROVIDER_TYPES.map((p) => (
             <SelectItem key={p.value} value={p.value}>
-              {p.label}
+              {t(p.labelKey)}
             </SelectItem>
           ))}
         </SelectContent>

@@ -11,12 +11,14 @@ describe("projectMemories schema 形状", () => {
     expect(typeof db.projectMemories.searchAcrossProjects).toBe("function");
   });
 
-  it("memory kind label 完整", async () => {
+  it("memoryKindLabel 翻译中文（v0.7 i18n 化：原 MEMORY_KIND_LABEL 常量已替换为函数）", async () => {
     const db = await import("../db");
-    expect(db.MEMORY_KIND_LABEL.decision).toBe("决策");
-    expect(db.MEMORY_KIND_LABEL.lesson).toBe("经验教训");
-    expect(db.MEMORY_KIND_LABEL.context).toBe("背景上下文");
-    expect(db.MEMORY_KIND_LABEL.preference).toBe("偏好");
-    expect(db.MEMORY_KIND_LABEL.other).toBe("其他");
+    const tZh = (k: string) =>
+      ({ "memoryKind.decision": "决策", "memoryKind.lesson": "经验教训", "memoryKind.context": "背景上下文", "memoryKind.preference": "偏好", "memoryKind.other": "其他" } as Record<string, string>)[k] ?? k;
+    expect(db.memoryKindLabel("decision", tZh)).toBe("决策");
+    expect(db.memoryKindLabel("lesson", tZh)).toBe("经验教训");
+    expect(db.memoryKindLabel("context", tZh)).toBe("背景上下文");
+    expect(db.memoryKindLabel("preference", tZh)).toBe("偏好");
+    expect(db.memoryKindLabel("other", tZh)).toBe("其他");
   });
 });

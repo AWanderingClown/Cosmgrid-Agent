@@ -1,6 +1,7 @@
 // AddProviderDialog - 添加供应商 + 凭证 + 模型
 // v0.3：apiFetch → db.ts 直连 SQLite，API Key → keystore
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import {
   Dialog,
@@ -36,7 +37,6 @@ const DEFAULT_BASE_URLS: Record<ProviderTypeValue, string> = {
   openai: "https://api.openai.com/v1",
   google: "https://generativelanguage.googleapis.com/v1beta",
   // openai-compatible 默认空，让用户在 BasicFormFields 自己填
-  // （不同供应商 endpoint 不一样：DeepSeek https://api.deepseek.com/v1 / GLM https://open.bigmodel.cn/api/paas/v4）
   "openai-compatible": "",
 };
 
@@ -54,6 +54,7 @@ const INITIAL_STATE = {
 };
 
 export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProviderDialogProps) {
+  const { t } = useTranslation();
   const [providerType, setProviderType] = useState<ProviderTypeValue>(INITIAL_STATE.providerType);
   const [providerName, setProviderName] = useState(INITIAL_STATE.providerName);
   const [website, setWebsite] = useState(INITIAL_STATE.website);
@@ -86,7 +87,7 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!providerName || !apiKey || !modelName || workRoles.length === 0) {
-      setError("请填所有必填项");
+      setError(t("addProvider.fillRequired"));
       return;
     }
     setSubmitting(true);
@@ -109,7 +110,7 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
       // 2. 建 ApiCredential（不存 API Key 到 DB）
       const credential = await dbCredentials.create({
         providerId: provider.id,
-        name: providerName + " 默认凭证",
+        name: `${providerName} Default Credential`,
         baseUrl,
         enabled: true,
         supportsStreaming: true,
@@ -140,7 +141,7 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
       onSuccess?.();
       onOpenChange(false);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "添加失败";
+      const message = err instanceof Error ? err.message : t("addProvider.addFailed");
       try {
         if (createdModelId) await dbModels.delete(createdModelId);
         if (createdCredentialId) {
@@ -149,9 +150,9 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
         }
         if (createdProviderId) await dbProviders.delete(createdProviderId);
       } catch (rollbackErr) {
-        console.error("[AddProviderDialog] 回滚失败:", rollbackErr);
+        console.error("[AddProviderDialog] rollback failed:", rollbackErr);
       }
-      setError(`${message}（已自动回滚）`);
+      setError(`${message} (${t("addProvider.rollbackFailed")})`);
     } finally {
       setSubmitting(false);
     }
@@ -161,9 +162,9 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>添加供应商</DialogTitle>
+          <DialogTitle>{t("addProvider.title")}</DialogTitle>
           <DialogDescription>
-            填一次，Provider + 凭证 + Model 一起建好
+            {t("addProvider.desc")}
           </DialogDescription>
         </DialogHeader>
 
@@ -233,14 +234,14 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
               onClick={() => onOpenChange(false)}
               disabled={submitting}
             >
-              取消
+              {t("common.cancel")}
             </Button>
             <Button
               type="submit"
               disabled={submitting || workRoles.length === 0}
             >
               {submitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              {submitting ? "添加中..." : "添加"}
+              {submitting ? t("addProvider.submitting") : t("addProvider.submit")}
             </Button>
           </DialogFooter>
         </form>

@@ -49,7 +49,7 @@ REGISTRY.set("google", {
 REGISTRY.set("openai-compatible", {
   factory: (modelName, apiKey, baseUrl) => {
     if (!baseUrl) {
-      throw new Error("openai-compatible provider 必须在凭证的 baseUrl 填 endpoint（如 https://api.deepseek.com/v1）");
+      throw new Error("openai-compatible provider requires a baseUrl on the credential (e.g. https://api.deepseek.com/v1)");
     }
     const provider = createOpenAI({ apiKey, baseURL: baseUrl });
     return provider(modelName);
@@ -99,7 +99,7 @@ export function getLanguageModel(
   const entry = REGISTRY.get(providerType);
   if (!entry) {
     throw new Error(
-      `未知 provider 类型: "${providerType}"。已注册: ${listRegisteredProviders().join(", ")}`,
+      `Unknown provider type: "${providerType}". Registered: ${listRegisteredProviders().join(", ")}`,
     );
   }
 

@@ -335,7 +335,26 @@ describe("handoffPackets", () => {
       acceptanceCriteria: "能登录",
       createdByModelId: null, createdAt: "2024-01-01T00:00:00.000Z",
     };
-    const md = renderHandoffMarkdown(cp, "backend");
+    // mock t: 返回 i18nKey 对应的原中文 label（验证 v0.6 行为）
+    const tMock = (k: string, opts?: Record<string, unknown>) => {
+      const map: Record<string, string> = {
+        "handoffMarkdown.title": `接力包 → ${opts?.role ?? ""}`,
+        "handoffMarkdown.sourceCheckpoint": `_原检查点：${opts?.title ?? ""}_`,
+        "handoffMarkdown.generatedAt": `_生成时间：${opts?.time ?? ""}_`,
+        "handoffMarkdown.empty": "（未填）",
+        "projectDetail.fields.goal": "目标（Goal）",
+        "projectDetail.fields.completedSummary": "已完成（Completed Summary）",
+        "projectDetail.fields.currentContext": "当前上下文（Current Context）",
+        "projectDetail.fields.decisions": "决策记录（Decisions）",
+        "projectDetail.fields.failedAttempts": "失败尝试（Failed Attempts）",
+        "projectDetail.fields.blockers": "阻塞项（Blockers）",
+        "projectDetail.fields.nextSteps": "下一步（Next Steps）",
+        "projectDetail.fields.doNotRepeat": "禁止重复（Do Not Repeat）",
+        "projectDetail.fields.acceptanceCriteria": "验收标准（Acceptance Criteria）",
+      };
+      return map[k] ?? k;
+    };
+    const md = renderHandoffMarkdown(cp, "backend", tMock);
     expect(md).toContain("# 接力包 → backend");
     expect(md).toContain("## 目标（Goal）");
     expect(md).toContain("## 已完成（Completed Summary）");
@@ -358,7 +377,24 @@ describe("handoffPackets", () => {
       doNotRepeat: null, acceptanceCriteria: null,
       createdByModelId: null, createdAt: "2024-01-01T00:00:00.000Z",
     };
-    const md = renderHandoffMarkdown(cp, "frontend");
+    const md = renderHandoffMarkdown(cp, "frontend", (k: string) => {
+      const map: Record<string, string> = {
+        "handoffMarkdown.title": "接力包 → {{role}}",
+        "handoffMarkdown.sourceCheckpoint": "_原检查点：{{title}}_",
+        "handoffMarkdown.generatedAt": "_生成时间：{{time}}_",
+        "handoffMarkdown.empty": "（未填）",
+        "projectDetail.fields.goal": "目标（Goal）",
+        "projectDetail.fields.completedSummary": "已完成（Completed Summary）",
+        "projectDetail.fields.currentContext": "当前上下文（Current Context）",
+        "projectDetail.fields.decisions": "决策记录（Decisions）",
+        "projectDetail.fields.failedAttempts": "失败尝试（Failed Attempts）",
+        "projectDetail.fields.blockers": "阻塞项（Blockers）",
+        "projectDetail.fields.nextSteps": "下一步（Next Steps）",
+        "projectDetail.fields.doNotRepeat": "禁止重复（Do Not Repeat）",
+        "projectDetail.fields.acceptanceCriteria": "验收标准（Acceptance Criteria）",
+      };
+      return map[k] ?? k;
+    });
     expect(md).toContain("（未填）");
   });
 
@@ -373,7 +409,14 @@ describe("handoffPackets", () => {
     rows["checkpoints"] = [cpRow];
     rows["handoff_packets"] = [];
 
-    await handoffPackets.generate("cp-1", "backend");
+    await handoffPackets.generate("cp-1", "backend", (k: string, opts?: Record<string, unknown>) => {
+      if (k === "handoffMarkdown.title") return `接力包 → ${opts?.role ?? ""}`;
+      if (k === "handoffMarkdown.sourceCheckpoint") return `_原检查点：${opts?.title ?? ""}_`;
+      if (k === "handoffMarkdown.generatedAt") return `_生成时间：${opts?.time ?? ""}_`;
+      if (k === "handoffMarkdown.empty") return "（未填）";
+      if (k.startsWith("projectDetail.fields.")) return k;
+      return k;
+    });
 
     // execute 至少被调一次（INSERT INTO handoff_packets）
     expect(mockDb.execute).toHaveBeenCalled();
@@ -387,7 +430,7 @@ describe("handoffPackets", () => {
 
   it("generate() checkpoint 不存在时抛错", async () => {
     rows["checkpoints"] = [];
-    await expect(handoffPackets.generate("nope", "backend")).rejects.toThrow(/checkpoint nope 不存在/);
+    await expect(handoffPackets.generate("nope", "backend", (k: string) => k)).rejects.toThrow(/checkpoint nope not found/);
   });
 
   it("listByProject() 返回项目下的所有接力包", async () => {

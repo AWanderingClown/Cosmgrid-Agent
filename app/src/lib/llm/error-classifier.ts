@@ -105,19 +105,25 @@ function extractMessage(error: unknown): string {
 /**
  * 把 LLM 错误分桶成结构化结果
  * @param error - 原始错误（可能是 Vercel AI SDK 的 AIError / fetch 错误 / 任意 Error）
+ * @param t - (可选) i18next t 函数，传了之后 userMessage 会用 t() 翻译
  * @returns 分类结果 + 友好文案
  */
-export function classifyLlmError(error: unknown): ClassifiedLlmError {
+export function classifyLlmError(
+  error: unknown,
+  t?: (k: string) => string,
+): ClassifiedLlmError {
   const rawMessage = extractMessage(error);
   const statusCode = extractStatusCode(error);
   const sanitized = sanitizeError(rawMessage);
+  // 没传 t 时用中文（向后兼容）；传了 t 时用 t() 翻译，缺失 fallback 到 key
+  const msg = (zh: string, key: string) => (t ? (t(key) || zh) : zh);
 
   // 按 HTTP 状态码优先分类
   if (statusCode === 401) {
     return {
       category: "auth_invalid",
       httpStatus: 401,
-      userMessage: "API Key 无效或已过期，请在 API 接入页检查",
+      userMessage: msg("API Key 无效或已过期，请在 API 接入页检查", "errorClassifier.auth_invalid"),
       technicalMessage: sanitized,
       shouldFallback: true,
     };
@@ -126,7 +132,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
     return {
       category: "auth_forbidden",
       httpStatus: 403,
-      userMessage: "API Key 权限不足，请检查账户是否欠费或套餐限制",
+      userMessage: msg("API Key 权限不足，请检查账户是否欠费或套餐限制", "errorClassifier.auth_forbidden"),
       technicalMessage: sanitized,
       shouldFallback: true,
     };
@@ -135,7 +141,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
     return {
       category: "model_not_found",
       httpStatus: 404,
-      userMessage: "模型不存在或已下线，请检查模型名称",
+      userMessage: msg("模型不存在或已下线，请检查模型名称", "errorClassifier.model_not_found"),
       technicalMessage: sanitized,
       shouldFallback: true,
     };
@@ -146,7 +152,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
       return {
         category: "context_overflow",
         httpStatus: 413,
-        userMessage: "对话内容超出模型上下文窗口，请新建对话或缩短历史",
+        userMessage: msg("对话内容超出模型上下文窗口，请新建对话或缩短历史", "errorClassifier.context_overflow"),
         technicalMessage: sanitized,
         shouldFallback: false, // 换模型也救不了
       };
@@ -154,7 +160,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
     return {
       category: "rate_limit",
       httpStatus: 429,
-      userMessage: "套餐额度已耗尽或被限流，请稍后重试或检查套餐状态",
+      userMessage: msg("套餐额度已耗尽或被限流，请稍后重试或检查套餐状态", "errorClassifier.rate_limit"),
       technicalMessage: sanitized,
       shouldFallback: true,
     };
@@ -163,7 +169,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
     return {
       category: "server_error",
       httpStatus: statusCode,
-      userMessage: "AI 服务暂时不可用，请稍后重试",
+      userMessage: msg("AI 服务暂时不可用，请稍后重试", "errorClassifier.server_error"),
       technicalMessage: sanitized,
       shouldFallback: true,
     };
@@ -175,7 +181,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
     return {
       category: "timeout",
       httpStatus: 504,
-      userMessage: "请求超时，请检查网络或稍后重试",
+      userMessage: msg("请求超时，请检查网络或稍后重试", "errorClassifier.timeout"),
       technicalMessage: sanitized,
       shouldFallback: true,
     };
@@ -189,7 +195,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
     return {
       category: "network",
       httpStatus: 502,
-      userMessage: "网络连接失败，请检查网络或 Base URL 配置",
+      userMessage: msg("网络连接失败，请检查网络或 Base URL 配置", "errorClassifier.network"),
       technicalMessage: sanitized,
       shouldFallback: true,
     };
@@ -198,7 +204,7 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
   return {
     category: "unknown",
     httpStatus: 500,
-    userMessage: "对话失败，请稍后重试",
+    userMessage: msg("对话失败，请稍后重试", "errorClassifier.unknown"),
     technicalMessage: sanitized,
     shouldFallback: false, // 保守：unknown 多半是 bug，不浪费 fallback 配额
   };

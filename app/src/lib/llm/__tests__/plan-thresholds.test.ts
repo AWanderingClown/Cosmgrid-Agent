@@ -67,8 +67,8 @@ describe("planUsageLevel", () => {
 });
 
 describe("levelPresentation", () => {
-  it("返回 label + variant", () => {
-    expect(levelPresentation("ok").label).toBe("充足");
+  it("返回 labelKey + variant（v0.7 i18n 化：原 label 改 labelKey）", () => {
+    expect(levelPresentation("ok").labelKey).toBe("tokenPlans.status.ok");
     expect(levelPresentation("warn").variant).toBe("secondary");
     expect(levelPresentation("exhausted").variant).toBe("destructive");
   });

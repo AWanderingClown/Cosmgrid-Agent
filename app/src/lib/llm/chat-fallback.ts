@@ -91,7 +91,7 @@ export function toModelEndpoint(
 ): ModelEndpoint {
   const providerType = model.provider?.type;
   if (!providerType) {
-    throw new Error("模型缺少 provider 类型信息，请重新添加 Provider");
+    throw new Error("Model missing provider type — re-add the provider");
   }
   return {
     modelId: model.id,
@@ -128,7 +128,7 @@ export async function streamWithFallback(
   } = {},
 ): Promise<{ usedModelId: string; switched: boolean }> {
   if (models.length === 0) {
-    throw new Error("streamWithFallback: models 数组不能为空");
+    throw new Error("streamWithFallback: models array cannot be empty");
   }
 
   // 跳过 cooldown 中的模型：从前往后找第一个不在 cooldown 的；前面被跳过的都触发 onSwitched("cooldown")
@@ -141,7 +141,7 @@ export async function streamWithFallback(
     startIdx++;
   }
   if (startIdx >= models.length) {
-    throw new Error("所有模型都在冷却中，请稍后再试");
+    throw new Error("All models are cooling down — please try again later");
   }
 
   let usedIndex = startIdx;
@@ -217,5 +217,5 @@ export async function streamWithFallback(
   }
 
   // 理论上到不了（while 出口要么 return 要么 throw），TypeScript 需要兜底
-  throw new Error("streamWithFallback: 未知状态");
+  throw new Error("streamWithFallback: unknown state");
 }

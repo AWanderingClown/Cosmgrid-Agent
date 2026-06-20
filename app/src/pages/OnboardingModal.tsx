@@ -1,5 +1,5 @@
 // 首次启动引导（v0.5 / 7.11）
-// 4 步引导帮小白用户在 5 分钟内走完"加 API → 看模板 → 建项目"全流程
+// 4 步引导帮用户在 5 分钟内走完"加 API → 看模板 → 建项目"全流程
 //
 // 设计原则（沿用 v0.4 全自动模型分配 / AI 自动生成检查点 的减负思路）：
 // 1. 系统能判断的就自动做（用 useEffect 自动检测有无 provider，决定是否弹窗）
@@ -12,10 +12,10 @@
 // 满足任一就关掉（db 有 provider 视为"已经会用了"，不再骚扰）
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { KeyRound, LayoutTemplate, FolderKanban, Sparkles, CheckCircle2 } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 const STORAGE_KEY = "cosmgrid_onboarded_v1";
 
@@ -26,31 +26,17 @@ interface OnboardingModalProps {
   onNavigate: (page: "providers" | "templates" | "projects") => void;
 }
 
-const STEPS = [
-  {
-    icon: KeyRound,
-    title: "添加第一个 API Key",
-    desc: "去「API 接入」选一个供应商（Anthropic / OpenAI / Google / OpenAI 兼容的 GLM/DeepSeek/Qwen），填上 API Key 和第一个模型。",
-  },
-  {
-    icon: Sparkles,
-    title: "再添加一个模型（推荐）",
-    desc: "至少 2 个模型才能体现「多 AI 协作」——主对话用 Opus、写代码用 Gemini、测试用 Haiku 这种组合。",
-  },
-  {
-    icon: LayoutTemplate,
-    title: "看看 4 个内置模板",
-    desc: "全栈 Web / 数据科学 / 移动 App / 小型脚本——每个模板都自动给角色配好最优模型。",
-  },
-  {
-    icon: FolderKanban,
-    title: "创建第一个项目",
-    desc: "挑个模板，填项目名 + 工作空间路径（可以以后改），点创建就完事。",
-  },
+const STEP_ICONS = [KeyRound, Sparkles, LayoutTemplate, FolderKanban];
+const STEP_KEYS = ["addApiKey", "addSecondModel", "browseTemplates", "createFirstProject"] as const;
+const STEP_TARGETS: Array<"providers" | "templates" | "projects"> = [
+  "providers",
+  "providers",
+  "templates",
+  "projects",
 ];
 
 export function OnboardingModal({ providerCount, onNavigate }: OnboardingModalProps) {
-  // 触发判断：首次（无标记）+ 没 provider → 显示
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState(0);
 
@@ -69,17 +55,20 @@ export function OnboardingModal({ providerCount, onNavigate }: OnboardingModalPr
     localStorage.setItem(STORAGE_KEY, "1");
     setOpen(false);
     if (reason === "jump") {
-      // 跳到当前 step 对应的页
-      const target = ["providers", "providers", "templates", "projects"][step];
-      onNavigate(target as "providers" | "templates" | "projects");
+      onNavigate(STEP_TARGETS[step]!);
     }
   }
 
   if (!open) return null;
 
-  const currentStep = STEPS[step]!;
-  const Icon = currentStep.icon;
-  const isLast = step === STEPS.length - 1;
+  const Icon = STEP_ICONS[step]!;
+  const stepKey = STEP_KEYS[step]!;
+  const isLast = step === STEP_KEYS.length - 1;
+
+  // 下一步按钮的"跳到 X"标签：根据 step 选目标页名
+  const nextTargetLabel = t(
+    `onboarding.nextTarget.${STEP_TARGETS[step]!}`,
+  );
 
   return (
     <div
@@ -91,7 +80,7 @@ export function OnboardingModal({ providerCount, onNavigate }: OnboardingModalPr
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Sparkles className="w-3.5 h-3.5" /> 首次启动引导
+          <Sparkles className="w-3.5 h-3.5" /> {t("onboarding.title")}
         </div>
 
         <div className="flex items-center gap-3">
@@ -100,22 +89,27 @@ export function OnboardingModal({ providerCount, onNavigate }: OnboardingModalPr
           </div>
           <div>
             <h2 className="text-lg font-semibold">
-              第 {step + 1} 步 / 共 {STEPS.length} 步：{currentStep.title}
+              {t("onboarding.stepOf", {
+                current: step + 1,
+                total: STEP_KEYS.length,
+                stepTitle: t(`onboarding.steps.${stepKey}.title`),
+              })}
             </h2>
           </div>
         </div>
 
-        <p className="text-sm text-muted-foreground leading-relaxed">{currentStep.desc}</p>
+        <p className="text-sm text-muted-foreground leading-relaxed">
+          {t(`onboarding.steps.${stepKey}.desc`)}
+        </p>
 
         {/* 进度条 */}
         <div className="flex gap-1.5">
-          {STEPS.map((_, i) => (
+          {STEP_KEYS.map((_, i) => (
             <div
               key={i}
-              className={cn(
-                "h-1 flex-1 rounded-full transition-colors",
-                i <= step ? "bg-primary" : "bg-muted",
-              )}
+              className={`h-1 flex-1 rounded-full transition-colors ${
+                i <= step ? "bg-primary" : "bg-muted"
+              }`}
             />
           ))}
         </div>
@@ -124,24 +118,24 @@ export function OnboardingModal({ providerCount, onNavigate }: OnboardingModalPr
           <Button
             variant="ghost"
             onClick={() => close("skip")}
-            title="下次不再弹"
+            title={t("onboarding.neverShow")}
           >
-            跳过引导
+            {t("onboarding.skip")}
           </Button>
           <div className="flex gap-2">
             {step > 0 && (
               <Button variant="outline" onClick={() => setStep(step - 1)}>
-                上一步
+                {t("onboarding.prev")}
               </Button>
             )}
             {isLast ? (
               <Button onClick={() => close("finish")}>
                 <CheckCircle2 className="w-4 h-4 mr-1" />
-                我懂了，开始用
+                {t("onboarding.done")}
               </Button>
             ) : (
               <Button onClick={() => close("jump")}>
-                下一步（跳到 {currentStep.title.includes("API") ? "API 接入" : currentStep.title.includes("模板") ? "模板" : "项目"}）
+                {t("onboarding.nextWithTarget", { target: nextTargetLabel })}
               </Button>
             )}
           </div>

@@ -303,7 +303,7 @@ export async function seedBuiltInTemplates(): Promise<void> {
       `INSERT INTO project_templates (id, name, description, icon, is_built_in, is_default, created_at, updated_at)
        VALUES ($1,$2,$3,$4,1,0,$5,$6)
        ON CONFLICT(name) WHERE is_built_in = 1 DO NOTHING`,
-      [id, tpl.name, tpl.description, tpl.icon, ts, ts]
+      [id, tpl.name, tpl.descriptionKey, tpl.icon, ts, ts]
     );
   }
 }
@@ -1648,28 +1648,36 @@ export interface CreateHandoffPacketInput {
   content: string;
 }
 
-/** 把 Checkpoint 字段拼成给下一个角色看的 markdown 接力包（纯函数，便于单测） */
-export function renderHandoffMarkdown(cp: Checkpoint, targetRole: string): string {
-  const section = (title: string, value: string | null): string[] => [
-    `## ${title}`,
-    value && value.trim() ? value.trim() : "（未填）",
+/**
+ * 把 Checkpoint 字段拼成给下一个角色看的 markdown 接力包
+ * v0.7 i18n 化：接受 t 函数，让 markdown 标签跟用户当前语言走
+ * （已存的旧 handoff 内容不会被重新翻译——只在新建时用新语言）
+ */
+export function renderHandoffMarkdown(
+  cp: Checkpoint,
+  targetRole: string,
+  t: (k: string, opts?: Record<string, unknown>) => string,
+): string {
+  const section = (fieldKey: string, value: string | null): string[] => [
+    `## ${t(`projectDetail.fields.${fieldKey}`)}`,
+    value && value.trim() ? value.trim() : t("handoffMarkdown.empty"),
     "",
   ];
   const parts: string[] = [];
-  parts.push(`# 接力包 → ${targetRole}`);
+  parts.push(`# ${t("handoffMarkdown.title", { role: targetRole })}`);
   parts.push("");
-  parts.push(`_原检查点：${cp.title}_`);
-  parts.push(`_生成时间：${cp.createdAt}_`);
+  parts.push(t("handoffMarkdown.sourceCheckpoint", { title: cp.title }));
+  parts.push(t("handoffMarkdown.generatedAt", { time: cp.createdAt }));
   parts.push("");
-  parts.push(...section("目标（Goal）", cp.goal));
-  parts.push(...section("已完成（Completed Summary）", cp.completedSummary));
-  parts.push(...section("当前上下文（Current Context）", cp.currentContext));
-  parts.push(...section("决策记录（Decisions）", cp.decisions));
-  parts.push(...section("失败尝试（Failed Attempts）", cp.failedAttempts));
-  parts.push(...section("阻塞项（Blockers）", cp.blockers));
-  parts.push(...section("下一步（Next Steps）", cp.nextSteps));
-  parts.push(...section("禁止重复（Do Not Repeat）", cp.doNotRepeat));
-  parts.push(...section("验收标准（Acceptance Criteria）", cp.acceptanceCriteria));
+  parts.push(...section("goal", cp.goal));
+  parts.push(...section("completedSummary", cp.completedSummary));
+  parts.push(...section("currentContext", cp.currentContext));
+  parts.push(...section("decisions", cp.decisions));
+  parts.push(...section("failedAttempts", cp.failedAttempts));
+  parts.push(...section("blockers", cp.blockers));
+  parts.push(...section("nextSteps", cp.nextSteps));
+  parts.push(...section("doNotRepeat", cp.doNotRepeat));
+  parts.push(...section("acceptanceCriteria", cp.acceptanceCriteria));
   return parts.join("\n").trimEnd() + "\n";
 }
 
@@ -1722,17 +1730,19 @@ export const handoffPackets = {
   /**
    * 把 checkpoint 字段拼成 markdown，生成一条 handoff_packets 记录。
    * checkpoint 不存在时抛错。
+   * v0.7 i18n 化：接受 t 函数让内容跟当前语言走
    */
   async generate(
     checkpointId: string,
     targetRole: string,
+    t: (k: string, opts?: Record<string, unknown>) => string,
     targetModelId?: string | null,
   ): Promise<HandoffPacket> {
     const cp = await checkpoints.getById(checkpointId);
     if (!cp) {
-      throw new Error(`checkpoint ${checkpointId} 不存在`);
+      throw new Error(`checkpoint ${checkpointId} not found`);
     }
-    const content = renderHandoffMarkdown(cp, targetRole);
+    const content = renderHandoffMarkdown(cp, targetRole, t);
     return handoffPackets.create({
       projectId: cp.projectId,
       checkpointId,
@@ -1791,13 +1801,17 @@ export const usageEvents = {
 
 export type MemoryKind = "decision" | "lesson" | "context" | "preference" | "other";
 
-export const MEMORY_KIND_LABEL: Record<MemoryKind, string> = {
-  decision: "决策",
-  lesson: "经验教训",
-  context: "背景上下文",
-  preference: "偏好",
-  other: "其他",
-};
+/**
+ * 把 memory kind 翻译成当前语言的 label（v0.7 i18n 化：原本是硬编码中文常量）
+ * UI 层调用：memoryKindLabel(m.kind, t) → "决策" / "Decision" 等
+ */
+export function memoryKindLabel(kind: string, t: (k: string) => string): string {
+  const known: MemoryKind[] = ["decision", "lesson", "context", "preference", "other"];
+  if ((known as string[]).includes(kind)) {
+    return t(`memoryKind.${kind}`);
+  }
+  return kind;
+}
 
 export interface ProjectMemory {
   id: string;
