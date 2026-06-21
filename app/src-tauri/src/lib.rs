@@ -114,6 +114,40 @@ async fn run_shell_command(
     })
 }
 
+/// 给单个文件做一次 git commit（AI 写操作后的回滚兜底）。
+/// v0.7 阶段4b 增强：路径与消息作为**独立参数**传给 git（不经 sh -c），杜绝 shell 注入。
+/// 非 git 仓库 / git 失败 → 返回 false（不报错，调用方据此标记 reversible）。
+#[tauri::command]
+async fn git_commit_file(
+    app: tauri::AppHandle,
+    workspace: String,
+    rel_path: String,
+    message: String,
+) -> Result<bool, String> {
+    let add = app
+        .shell()
+        .command("git")
+        .args(["add", "--", &rel_path])
+        .current_dir(&workspace)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !add.status.success() {
+        return Ok(false); // 非 git 仓库等
+    }
+
+    let commit = app
+        .shell()
+        .command("git")
+        .args(["commit", "-m", &message, "--", &rel_path])
+        .current_dir(&workspace)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(commit.status.success())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -121,7 +155,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![spawn_cli_stream, run_shell_command])
+        .invoke_handler(tauri::generate_handler![spawn_cli_stream, run_shell_command, git_commit_file])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -370,7 +370,15 @@
     "noData": "暂无用量数据，去对话页聊几句就有了。",
     "perfTitle": "模型真实表现（智能路由依据）",
     "perfEmpty": "样本积累中——每个模型每类任务满 30 次后，智能路由才会据此评分选模型。",
-    "perfWindow": "样本"
+    "perfWindow": "样本",
+    "toolsTitle": "AI 工具操作记录",
+    "toolsEmpty": "AI 还没动过文件或命令。在项目里给它工作区路径后，它读/改文件、跑命令都会记在这里。",
+    "toolStatus": {
+      "success": "成功",
+      "error": "失败",
+      "denied": "已拒绝",
+      "timeout": "超时"
+    }
   },
   "settings": {
     "sectionLabel": "系统设置",
@@ -447,7 +455,12 @@
     "tools": {
       "confirmTitle": "AI 请求一个操作，请确认",
       "approve": "确认执行",
-      "reject": "拒绝"
+      "reject": "拒绝",
+      "safetyTitle": "工具安全",
+      "safetyDesc": "AI 跑命令时已内置白名单（只允许 pnpm/npm/git/node 等开发命令）+ 危险拦截 + 每次都要你确认。这里可再加项目专属的命令黑名单（每行一条，命中即拒绝）。",
+      "blockedPlaceholder": "例如：\ngit\npnpm install",
+      "save": "保存黑名单",
+      "saved": "已保存"
     },
     "notFound": "项目未找到",
     "coreWorkflow": "核心工作流",

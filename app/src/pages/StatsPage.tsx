@@ -1,9 +1,9 @@
 // StatsPage - v0.9 阶段7：用量与省钱统计（成本趋势 / 按模型 / 缓存 / 模型表现）
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { BarChart3, Coins, Sparkles, Activity, Cpu } from "lucide-react";
+import { BarChart3, Coins, Sparkles, Activity, Cpu, Wrench, FileEdit, Terminal, Eye } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import { usageEvents, semanticCache, modelPerformanceStats, type ModelPerformanceStatRow } from "@/lib/db";
+import { usageEvents, semanticCache, modelPerformanceStats, toolExecutions, type ModelPerformanceStatRow, type ToolExecutionRow } from "@/lib/db";
 import { aggregateUsage, type UsageSummary } from "@/lib/llm/usage-stats";
 import { cleanupExpiredCache } from "@/lib/llm/semantic-cache";
 import { formatCost as fmtCost } from "@/lib/utils";
@@ -13,6 +13,7 @@ export function StatsPage() {
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   const [cache, setCache] = useState<{ entries: number; totalHits: number }>({ entries: 0, totalHits: 0 });
   const [perf, setPerf] = useState<ModelPerformanceStatRow[]>([]);
+  const [toolExecs, setToolExecs] = useState<ToolExecutionRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -22,14 +23,16 @@ export function StatsPage() {
         void cleanupExpiredCache();
         // 只拉近 30 天用量（StatsPage 最长窗口就是 30 天），避免全表扫描
         const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
-        const [rows, cacheStats, perfRows] = await Promise.all([
+        const [rows, cacheStats, perfRows, execs] = await Promise.all([
           usageEvents.list(since),
           semanticCache.stats(),
           modelPerformanceStats.list(),
+          toolExecutions.list(30),
         ]);
         setSummary(aggregateUsage(rows));
         setCache(cacheStats);
         setPerf(perfRows);
+        setToolExecs(execs);
       } catch {
         setSummary(aggregateUsage([]));
       } finally {
@@ -131,6 +134,35 @@ export function StatsPage() {
                       <span className="text-muted-foreground/60">n={p.sampleCount}</span>
                     </div>
                   ))}
+                </div>
+              )}
+            </Card>
+
+            {/* AI 工具操作记录（透明化：用户看清 AI 读/改/跑了什么） */}
+            <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 shadow-xl">
+              <div className="flex items-center gap-3 pb-6 border-b border-white/10">
+                <Wrench className="w-5 h-5 text-primary" />
+                <h2 className="text-lg font-bold dark:text-white">{t("stats.toolsTitle")}</h2>
+              </div>
+              {toolExecs.length === 0 ? (
+                <p className="text-sm text-muted-foreground pt-6">{t("stats.toolsEmpty")}</p>
+              ) : (
+                <div className="pt-4 space-y-2">
+                  {toolExecs.map((e) => {
+                    const Icon = e.toolName === "bash" ? Terminal
+                      : e.toolName === "edit" || e.toolName === "write" ? FileEdit : Eye;
+                    const statusColor = e.status === "success" ? "text-emerald-500"
+                      : e.status === "denied" ? "text-amber-500" : "text-red-500";
+                    return (
+                      <div key={e.id} className="flex items-center gap-3 p-3 bg-white/5 rounded-xl text-xs">
+                        <Icon className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                        <span className="font-mono font-bold">{e.toolName}</span>
+                        <span className="text-muted-foreground truncate flex-1">{e.input}</span>
+                        <span className={`font-bold ${statusColor}`}>{t(`stats.toolStatus.${e.status}`)}</span>
+                        <span className="text-muted-foreground/50 tabular-nums">{e.durationMs}ms</span>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </Card>

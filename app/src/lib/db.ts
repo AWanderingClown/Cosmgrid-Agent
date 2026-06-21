@@ -370,6 +370,15 @@ export async function initSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_tool_executions_created
     ON tool_executions(created_at DESC)
   `);
+
+  // v0.7 阶段4b：项目级工具安全配置（自定义命令黑名单，叠加在内置白名单之上）
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS workspace_configs (
+      project_id TEXT PRIMARY KEY,
+      blocked_commands TEXT NOT NULL DEFAULT '[]',
+      updated_at TEXT NOT NULL
+    )
+  `);
 }
 
 // ============ 内置模板种子数据（4.13.3，只建模板本体，不建角色——角色模型由用户分配） ============
@@ -2237,6 +2246,36 @@ export const toolExecutions = {
       [conversationId]
     );
     return rows.map(mapToolExecRow);
+  },
+};
+
+// ============ workspaceConfigs CRUD（v0.7 阶段4b：项目级工具安全配置） ============
+
+export const workspaceConfigs = {
+  /** 取项目的自定义命令黑名单（无配置返回空数组） */
+  async getBlockedCommands(projectId: string): Promise<string[]> {
+    const db = await getDb();
+    const rows = await db.select<any[]>(
+      "SELECT blocked_commands FROM workspace_configs WHERE project_id = $1",
+      [projectId]
+    );
+    if (rows.length === 0) return [];
+    try {
+      return JSON.parse(rows[0].blocked_commands || "[]");
+    } catch {
+      return [];
+    }
+  },
+
+  /** 设置项目的自定义命令黑名单 */
+  async setBlockedCommands(projectId: string, blocked: string[]): Promise<void> {
+    const db = await getDb();
+    await db.execute(
+      `INSERT INTO workspace_configs (project_id, blocked_commands, updated_at)
+       VALUES ($1,$2,$3)
+       ON CONFLICT(project_id) DO UPDATE SET blocked_commands = excluded.blocked_commands, updated_at = excluded.updated_at`,
+      [projectId, JSON.stringify(blocked), now()]
+    );
   },
 };
 

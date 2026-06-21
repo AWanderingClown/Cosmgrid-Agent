@@ -11,6 +11,7 @@ import { checkPath } from "./path-safety";
 import { getFsAdapter } from "./fs-adapter";
 import { computeDiff, diffSummaryLine } from "./diff-util";
 import { requireApproval } from "./confirm";
+import { snapshotWrite } from "./git-snapshot";
 
 const paramsSchema = z.object({
   file_path: z.string().describe("要写入的文件路径（相对工作区或绝对路径）"),
@@ -53,10 +54,11 @@ export const writeTool: ToolDefinition<WriteParams> = {
       return { status: "error", output: `写入失败：${err instanceof Error ? err.message : String(err)}` };
     }
 
+    const reversible = await snapshotWrite(ctx.workspacePath, check.resolved, "write");
     return {
       status: "success",
-      output: `已写入 ${check.resolved}（+${diff.added} −${diff.removed}）`,
-      reversible: false,
+      output: `已写入 ${check.resolved}（+${diff.added} −${diff.removed}）${reversible ? "，已 git 快照可回滚" : ""}`,
+      reversible,
     };
   },
 };

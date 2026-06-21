@@ -1,6 +1,7 @@
 // write/edit/diff 工具单测（v0.7 阶段4b：写操作 + 确认门）
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setFsAdapter, type FsAdapter } from "../fs-adapter";
+import { setGitSnapshot } from "../git-snapshot";
 import { writeTool } from "../write-tool";
 import { editTool } from "../edit-tool";
 import { computeDiff } from "../diff-util";
@@ -33,6 +34,8 @@ beforeEach(() => {
   const m = makeMutableFs({ "/ws/src/a.ts": "const x = 1;\nconst y = 2;\n" });
   files = m.files;
   setFsAdapter(m.fs);
+  // 默认 git 快照成功（可回滚）；个别用例可覆盖
+  setGitSnapshot({ commitFile: async () => true });
 });
 
 describe("computeDiff", () => {
@@ -84,6 +87,19 @@ describe("write 工具", () => {
     const r = await writeTool.execute({ file_path: ".env", content: "SECRET=1" }, ctxWith(confirm));
     expect(r.status).toBe("denied");
     expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("写成功后做 git 快照，标记 reversible", async () => {
+    const r = await writeTool.execute({ file_path: "src/new.ts", content: "x" }, ctxWith(vi.fn().mockResolvedValue(true)));
+    expect(r.reversible).toBe(true);
+    expect(r.output).toMatch(/可回滚/);
+  });
+
+  it("非 git 仓库（快照失败）仍写盘成功，reversible=false", async () => {
+    setGitSnapshot({ commitFile: async () => false });
+    const r = await writeTool.execute({ file_path: "src/new.ts", content: "x" }, ctxWith(vi.fn().mockResolvedValue(true)));
+    expect(r.status).toBe("success");
+    expect(r.reversible).toBe(false);
   });
 
   it("覆盖已有文件时 diff 体现旧内容", async () => {

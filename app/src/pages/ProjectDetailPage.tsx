@@ -46,6 +46,7 @@ import { cn } from "@/lib/utils";
 import { WORK_ROLES } from "@/lib/api";
 import {
   projects as dbProjects,
+  workspaceConfigs as dbWorkspaceConfigs,
   projectStages as dbStages,
   projectTemplateRoles as dbTemplateRoles,
   checkpoints as dbCheckpoints,
@@ -244,11 +245,13 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
       const proj = await dbProjects.getById(stage.projectId);
       if (proj?.workspacePath) {
         // includeWrite：项目有工作区就给 AI 读写工具；写工具运行时强制走 requestConfirm 确认
+        const blockedCommands = await dbWorkspaceConfigs.getBlockedCommands(stage.projectId);
         tools = buildAiSdkTools(createDefaultToolRegistry({ includeWrite: true }), {
           workspacePath: proj.workspacePath,
           projectId: stage.projectId,
           conversationId,
           confirm: requestConfirm,
+          blockedCommands,
         });
       }
     } catch {
@@ -407,10 +410,13 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
   const [addMemoryOpen, setAddMemoryOpen] = useState(false);
   const [, setRelatedMemories] = useState<ProjectMemory[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // v0.7 阶段4b：项目级命令黑名单（换行/逗号分隔）
+  const [blockedInput, setBlockedInput] = useState("");
+  const [blockedSaved, setBlockedSaved] = useState(false);
 
   async function load() {
     try {
-      const [p, s, m, c, cp, hf, mem] = await Promise.all([
+      const [p, s, m, c, cp, hf, mem, blocked] = await Promise.all([
         dbProjects.getById(projectId),
         dbStages.listByProject(projectId),
         dbModels.listEnabled(),
@@ -418,9 +424,11 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
         dbCheckpoints.listByProject(projectId),
         dbHandoffs.listByProject(projectId),
         dbMemories.listByProject(projectId),
+        dbWorkspaceConfigs.getBlockedCommands(projectId),
       ]);
       if (!p) { setLoadError(t("projectDetail.notFound")); return; }
       setProject(p); setStages(s); setModels(m); setCredentials(c); setCheckpoints(cp); setHandoffs(hf); setMemories(mem);
+      setBlockedInput(blocked.join("\n"));
       if (p.templateId) setTemplateRoles(await dbTemplateRoles.listByTemplate(p.templateId));
       const query = [p.name, p.description].filter(Boolean).join(" ");
       if (query) setRelatedMemories(await dbMemories.searchAcrossProjects(query, { excludeProjectId: projectId, limit: 3 }).catch(() => []));
@@ -429,6 +437,13 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
   }
 
   useEffect(() => { void load(); }, [projectId]);
+
+  async function saveBlockedCommands() {
+    const list = blockedInput.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+    await dbWorkspaceConfigs.setBlockedCommands(projectId, list);
+    setBlockedSaved(true);
+    setTimeout(() => setBlockedSaved(false), 2000);
+  }
 
   const modelMap = useMemo(() => new Map(models.map((m) => [m.id, m])), [models]);
   const credentialMap = useMemo(() => new Map(credentials.map((c) => [c.providerId, c])), [credentials]);
@@ -676,6 +691,29 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
             </div>
           </div>
         </div>
+
+        {/* v0.7 阶段4b：项目工具安全 — 自定义命令黑名单 */}
+        {project.workspacePath && (
+          <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-4 shadow-xl">
+            <div className="flex items-center gap-3 pb-2 border-b border-white/10">
+              <ShieldAlert className="w-5 h-5 text-amber-500" />
+              <h2 className="text-lg font-bold dark:text-white">{t("projectDetail.tools.safetyTitle")}</h2>
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed">{t("projectDetail.tools.safetyDesc")}</p>
+            <textarea
+              value={blockedInput}
+              onChange={(e) => setBlockedInput(e.target.value)}
+              placeholder={t("projectDetail.tools.blockedPlaceholder")}
+              className="w-full bg-white/5 dark:bg-black/20 border border-white/10 rounded-xl px-4 py-3 text-xs font-mono outline-none focus:border-amber-500/40 resize-none h-24 dark:text-white"
+            />
+            <div className="flex items-center gap-3">
+              <Button size="sm" variant="outline" className="rounded-xl" onClick={() => void saveBlockedCommands()}>
+                {t("projectDetail.tools.save")}
+              </Button>
+              {blockedSaved && <span className="text-xs font-bold text-emerald-500">{t("projectDetail.tools.saved")}</span>}
+            </div>
+          </Card>
+        )}
       </div>
 
       {/* 对话框挂载 (使用同样的 Cosmic 风格重写对话框内容) */}

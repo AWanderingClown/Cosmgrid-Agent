@@ -370,7 +370,15 @@
     "noData": "No usage yet — chat a bit and it'll show up here.",
     "perfTitle": "Real model performance (routing basis)",
     "perfEmpty": "Building samples — once each model has 30+ calls per task type, smart routing scores models from this.",
-    "perfWindow": "samples"
+    "perfWindow": "samples",
+    "toolsTitle": "AI tool activity",
+    "toolsEmpty": "The AI hasn't touched files or commands yet. Once a project has a workspace path, its reads/edits/commands show up here.",
+    "toolStatus": {
+      "success": "success",
+      "error": "error",
+      "denied": "denied",
+      "timeout": "timeout"
+    }
   },
   "settings": {
     "sectionLabel": "System Settings",
@@ -447,7 +455,12 @@
     "tools": {
       "confirmTitle": "AI requests an action — please confirm",
       "approve": "Approve",
-      "reject": "Reject"
+      "reject": "Reject",
+      "safetyTitle": "Tool Safety",
+      "safetyDesc": "When the AI runs commands it already has a built-in allowlist (only dev commands like pnpm/npm/git/node) + dangerous-command blocking + your confirmation every time. Add project-specific blocked patterns here (one per line, blocked on match).",
+      "blockedPlaceholder": "e.g.\ngit\npnpm install",
+      "save": "Save blocklist",
+      "saved": "Saved"
     },
     "notFound": "Project not found",
     "coreWorkflow": "Core Workflow",
