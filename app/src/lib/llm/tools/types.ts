@@ -16,6 +16,8 @@ export interface ToolContext {
   conversationId?: string;
   /** 写操作的用户确认回调；返回 false 表示用户拒绝 */
   confirm?: (preview: ToolConfirmRequest) => Promise<boolean>;
+  /** 项目自定义的命令黑名单前缀（bash 工具用，叠加在内置危险拦截之上） */
+  blockedCommands?: string[];
 }
 
 /** 写操作请求用户确认时的展示信息 */

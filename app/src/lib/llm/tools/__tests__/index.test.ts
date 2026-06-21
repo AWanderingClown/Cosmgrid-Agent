@@ -16,6 +16,8 @@ beforeEach(() => {
     readTextFile: async () => "hello\nworld",
     readDir: async () => [],
     exists: async () => true,
+    writeTextFile: async () => {},
+    mkdirp: async () => {},
   };
   setFsAdapter(fs);
 });

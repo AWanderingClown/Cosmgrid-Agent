@@ -3,7 +3,7 @@
 // 把 @tauri-apps/plugin-fs 包一层（可注入），让工具依赖接口而非直接依赖 Tauri——
 // 单测时换成内存假实现，无需真实文件系统 / Tauri 运行时。
 
-import { readTextFile, readDir, exists } from "@tauri-apps/plugin-fs";
+import { readTextFile, readDir, exists, writeTextFile, mkdir } from "@tauri-apps/plugin-fs";
 
 export interface FsDirEntry {
   name: string;
@@ -15,6 +15,9 @@ export interface FsAdapter {
   readTextFile(path: string): Promise<string>;
   readDir(path: string): Promise<FsDirEntry[]>;
   exists(path: string): Promise<boolean>;
+  writeTextFile(path: string, content: string): Promise<void>;
+  /** 递归创建目录（写文件前确保父目录存在） */
+  mkdirp(path: string): Promise<void>;
 }
 
 /** 生产实现：走 Tauri plugin-fs（已在 Rust 注册 + capabilities 授权 $HOME/**） */
@@ -29,6 +32,8 @@ export const tauriFs: FsAdapter = {
     }));
   },
   exists: (path) => exists(path),
+  writeTextFile: (path, content) => writeTextFile(path, content),
+  mkdirp: (path) => mkdir(path, { recursive: true }),
 };
 
 let active: FsAdapter = tauriFs;

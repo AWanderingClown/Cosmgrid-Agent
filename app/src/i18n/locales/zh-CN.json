@@ -444,6 +444,11 @@
     }
   },
   "projectDetail": {
+    "tools": {
+      "confirmTitle": "AI 请求一个操作，请确认",
+      "approve": "确认执行",
+      "reject": "拒绝"
+    },
     "notFound": "项目未找到",
     "coreWorkflow": "核心工作流",
     "timeline": "时间线",

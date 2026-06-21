@@ -444,6 +444,11 @@
     }
   },
   "projectDetail": {
+    "tools": {
+      "confirmTitle": "AI requests an action — please confirm",
+      "approve": "Approve",
+      "reject": "Reject"
+    },
     "notFound": "Project not found",
     "coreWorkflow": "Core Workflow",
     "timeline": "Timeline",

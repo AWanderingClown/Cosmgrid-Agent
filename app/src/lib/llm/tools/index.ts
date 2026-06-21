@@ -10,16 +10,25 @@ import type { ToolContext } from "./types";
 import { readTool } from "./read-tool";
 import { globTool } from "./glob-tool";
 import { grepTool } from "./grep-tool";
+import { writeTool } from "./write-tool";
+import { editTool } from "./edit-tool";
+import { bashTool } from "./bash-tool";
 
 export * from "./types";
 export { ToolRegistry } from "./registry";
 export { executeTool } from "./executor";
 export { setFsAdapter, getFsAdapter, type FsAdapter } from "./fs-adapter";
+export { setShellAdapter, getShellAdapter, type ShellAdapter } from "./shell-adapter";
 
-/** 当前可用的只读工具集（4a）。写/执行工具（4b）后续加入。 */
-export function createDefaultToolRegistry(): ToolRegistry {
+/**
+ * 工具集。默认只含只读工具（read/glob/grep）。
+ * 传 includeWrite=true 才加入写工具（edit/write）——它们运行时仍强制走 ctx.confirm，
+ * 没有确认通道会自我拒绝（双保险）。
+ */
+export function createDefaultToolRegistry(opts: { includeWrite?: boolean } = {}): ToolRegistry {
   const registry = new ToolRegistry();
   registry.registerAll([readTool, globTool, grepTool]);
+  if (opts.includeWrite) registry.registerAll([writeTool, editTool, bashTool]);
   return registry;
 }
 

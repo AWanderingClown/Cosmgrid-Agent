@@ -35,6 +35,8 @@ function makeFakeFs(files: Record<string, string>): FsAdapter {
       }
       return Array.from(names.values());
     },
+    writeTextFile: async () => {},
+    mkdirp: async () => {},
   };
 }
 

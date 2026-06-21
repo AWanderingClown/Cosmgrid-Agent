@@ -81,6 +81,39 @@ async fn spawn_cli_stream(
     Ok(())
 }
 
+/// 一次性运行一条 shell 命令（在指定工作目录），捕获 stdout/stderr/exit code。
+/// v0.7 阶段4b：bash 工具用。**安全前置在 TS 侧**（command-safety 白名单 + 危险拦截 + 用户确认），
+/// 本函数只负责执行已批准的命令；用 `sh -c` 以支持白名单命令的参数与管道。
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ShellOutput {
+    stdout: String,
+    stderr: String,
+    code: Option<i32>,
+}
+
+#[tauri::command]
+async fn run_shell_command(
+    app: tauri::AppHandle,
+    command: String,
+    cwd: String,
+) -> Result<ShellOutput, String> {
+    let output = app
+        .shell()
+        .command("sh")
+        .args(["-c", &command])
+        .current_dir(cwd)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(ShellOutput {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        code: output.status.code(),
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -88,7 +121,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![spawn_cli_stream])
+        .invoke_handler(tauri::generate_handler![spawn_cli_stream, run_shell_command])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

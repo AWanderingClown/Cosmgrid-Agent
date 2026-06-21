@@ -17,6 +17,7 @@ import {
   Zap,
   Terminal,
   ShieldCheck,
+  ShieldAlert,
   BrainCircuit,
   Workflow
 } from "lucide-react";
@@ -64,7 +65,7 @@ import {
 } from "@/lib/db";
 import { getApiKey } from "@/lib/keystore";
 import { streamWithFallback, toModelEndpoint } from "@/lib/llm/chat-fallback";
-import { createDefaultToolRegistry, buildAiSdkTools } from "@/lib/llm/tools";
+import { createDefaultToolRegistry, buildAiSdkTools, type ToolConfirmRequest } from "@/lib/llm/tools";
 import { generateCheckpointDraft } from "@/lib/llm/checkpoint-generator";
 import { getLanguageModel } from "@/lib/llm/provider-factory";
 import {
@@ -175,8 +176,24 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
   const [streaming, setStreaming] = useState(false);
   const [streamErr, setStreamErr] = useState<string | null>(null);
   const [switchNotice, setSwitchNotice] = useState<string | null>(null);
+  // v0.7 阶段4b：写操作确认弹窗（diff 预览 + 确认/拒绝）
+  const [pendingConfirm, setPendingConfirm] = useState<ToolConfirmRequest | null>(null);
+  const confirmResolverRef = useRef<((ok: boolean) => void) | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 工具确认回调：弹窗 + 返回 Promise，等用户点按钮 resolve
+  function requestConfirm(req: ToolConfirmRequest): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      setPendingConfirm(req);
+      confirmResolverRef.current = resolve;
+    });
+  }
+  function resolveConfirm(ok: boolean) {
+    confirmResolverRef.current?.(ok);
+    confirmResolverRef.current = null;
+    setPendingConfirm(null);
+  }
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -226,10 +243,12 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
     try {
       const proj = await dbProjects.getById(stage.projectId);
       if (proj?.workspacePath) {
-        tools = buildAiSdkTools(createDefaultToolRegistry(), {
+        // includeWrite：项目有工作区就给 AI 读写工具；写工具运行时强制走 requestConfirm 确认
+        tools = buildAiSdkTools(createDefaultToolRegistry({ includeWrite: true }), {
           workspacePath: proj.workspacePath,
           projectId: stage.projectId,
           conversationId,
+          confirm: requestConfirm,
         });
       }
     } catch {
@@ -273,7 +292,44 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
   }
 
   return (
-    <div className="flex flex-col h-[500px] glass border-x-0 border-b-0">
+    <div className="relative flex flex-col h-[500px] glass border-x-0 border-b-0">
+      {/* v0.7 阶段4b：写操作确认弹窗 */}
+      {pendingConfirm && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-6">
+          <div className="glass border border-white/15 rounded-2xl max-w-2xl w-full max-h-[80%] flex flex-col shadow-2xl">
+            <div className="flex items-center gap-2 px-5 py-4 border-b border-white/10">
+              <ShieldAlert className="w-4 h-4 text-amber-500" />
+              <span className="font-bold text-sm">{t("projectDetail.tools.confirmTitle")}</span>
+              <span className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500 uppercase">{pendingConfirm.toolName}</span>
+            </div>
+            <div className="px-5 py-3 text-xs font-bold text-muted-foreground">{pendingConfirm.summary}</div>
+            {pendingConfirm.diff && (
+              <pre className="flex-1 overflow-auto mx-5 mb-3 p-3 rounded-xl bg-black/30 text-[11px] leading-relaxed font-mono custom-scrollbar">
+                {pendingConfirm.diff.split("\n").map((line, i) => (
+                  <div
+                    key={i}
+                    className={
+                      line.startsWith("+") ? "text-emerald-400"
+                        : line.startsWith("-") ? "text-red-400"
+                        : "text-muted-foreground/70"
+                    }
+                  >
+                    {line || " "}
+                  </div>
+                ))}
+              </pre>
+            )}
+            <div className="flex justify-end gap-3 px-5 py-4 border-t border-white/10">
+              <Button variant="outline" size="sm" className="rounded-xl" onClick={() => resolveConfirm(false)}>
+                {t("projectDetail.tools.reject")}
+              </Button>
+              <Button size="sm" className="rounded-xl bg-emerald-600 hover:bg-emerald-700" onClick={() => resolveConfirm(true)}>
+                {t("projectDetail.tools.approve")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       {switchNotice && (
         <div className="px-4 py-2 bg-amber-500/10 text-[10px] font-bold text-amber-500 flex items-center gap-2 border-b border-amber-500/10">
           <Zap className="w-3 h-3" /> {switchNotice}
