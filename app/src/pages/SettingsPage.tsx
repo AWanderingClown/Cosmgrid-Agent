@@ -1,19 +1,21 @@
 // SettingsPage - 设置页 (v0.7.5: 移除缺失的 RadioGroup 依赖，采用自定义稳定实现)
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check } from "lucide-react";
+import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useTheme } from "@/lib/theme";
+import { useSmartRoutingSetting } from "@/lib/app-settings";
 import { SUPPORTED_LANGUAGES, LANGUAGE_LABELS, type SupportedLanguage } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 export function SettingsPage() {
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
+  const [smartRouting, setSmartRouting] = useSmartRoutingSetting();
   const [language, setLanguageState] = useState<SupportedLanguage>(
     (SUPPORTED_LANGUAGES as readonly string[]).includes(i18n.language)
       ? (i18n.language as SupportedLanguage)
@@ -104,6 +106,36 @@ export function SettingsPage() {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+          </Card>
+
+          {/* 智能路由 v2 */}
+          <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-8 shadow-xl">
+            <div className="flex items-center gap-3 pb-4 border-b border-white/10">
+              <Zap className="w-5 h-5 text-amber-500" />
+              <h2 className="text-xl font-bold dark:text-white">{t("settings.smartRouting.title")}</h2>
+            </div>
+            <div className="flex items-center justify-between gap-4 p-5 bg-white/5 rounded-2xl border border-white/5">
+              <div className="space-y-1">
+                <div className="text-sm font-bold">{t("settings.smartRouting.toggleTitle")}</div>
+                <p className="text-xs text-muted-foreground max-w-lg leading-relaxed">{t("settings.smartRouting.toggleDesc")}</p>
+              </div>
+              <button
+                role="switch"
+                aria-checked={smartRouting}
+                onClick={() => setSmartRouting(!smartRouting)}
+                className={cn(
+                  "relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors duration-300",
+                  smartRouting ? "bg-amber-500" : "bg-white/15"
+                )}
+              >
+                <span
+                  className={cn(
+                    "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform duration-300",
+                    smartRouting ? "translate-x-6" : "translate-x-1"
+                  )}
+                />
+              </button>
             </div>
           </Card>
 

@@ -64,6 +64,7 @@ import {
 } from "@/lib/db";
 import { getApiKey } from "@/lib/keystore";
 import { streamWithFallback, toModelEndpoint } from "@/lib/llm/chat-fallback";
+import { createDefaultToolRegistry, buildAiSdkTools } from "@/lib/llm/tools";
 import { generateCheckpointDraft } from "@/lib/llm/checkpoint-generator";
 import { getLanguageModel } from "@/lib/llm/provider-factory";
 import {
@@ -219,6 +220,22 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
     }
 
     const chain = fallback ? [primary, toModelEndpoint(fallback.model, fallback.credential, fallback.apiKey)] : [primary];
+
+    // v0.7 阶段4：项目设了工作区路径，就给 AI 挂上读文件/搜索工具（read/glob/grep）
+    let tools: ReturnType<typeof buildAiSdkTools> | undefined;
+    try {
+      const proj = await dbProjects.getById(stage.projectId);
+      if (proj?.workspacePath) {
+        tools = buildAiSdkTools(createDefaultToolRegistry(), {
+          workspacePath: proj.workspacePath,
+          projectId: stage.projectId,
+          conversationId,
+        });
+      }
+    } catch {
+      // 取工作区失败不影响对话，只是没有工具
+    }
+
     let full = "";
     try {
       await streamWithFallback(
@@ -243,7 +260,8 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
             setHistory((prev) => prev.map((m) => (m.id === assistantId ? finalAssistant : m)));
           },
         },
-        { signal: controller.signal, projectId: stage.projectId },
+        // role 不传：chat-fallback 内部按最后一条 user 消息推断难度桶
+        { signal: controller.signal, projectId: stage.projectId, ...(tools ? { tools } : {}) },
       );
     } catch (err) {
       if ((err as Error).name === "AbortError") return;

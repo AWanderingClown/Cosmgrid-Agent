@@ -38,7 +38,15 @@ const DEFAULT_BASE_URLS: Record<ProviderTypeValue, string> = {
   google: "https://generativelanguage.googleapis.com/v1beta",
   // openai-compatible 默认空，让用户在 BasicFormFields 自己填
   "openai-compatible": "",
+  // CLI 引擎：baseUrl 复用为「可执行文件路径」，默认空＝用系统 PATH 里的 claude/codex
+  "claude-cli": "",
+  "codex-cli": "",
 };
+
+/** CLI 引擎类型：spawn 本机 CLI 吃订阅额度，不需要 API Key / URL 端点 */
+function isCliType(type: ProviderTypeValue): boolean {
+  return type === "claude-cli" || type === "codex-cli";
+}
 
 const INITIAL_STATE = {
   providerType: "anthropic" as ProviderTypeValue,
@@ -84,9 +92,12 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
     setWorkRoles(roles);
   }
 
+  const isCli = isCliType(providerType);
+
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!providerName || !apiKey || !modelName || workRoles.length === 0) {
+    // CLI 引擎不需要 API Key（走本机订阅登录态）
+    if (!providerName || !modelName || workRoles.length === 0 || (!isCli && !apiKey)) {
       setError(t("addProvider.fillRequired"));
       return;
     }
@@ -119,8 +130,8 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
       });
       createdCredentialId = credential.id;
 
-      // 3. API Key 存 keystore（不入 DB）
-      await saveApiKey(credential.id, apiKey);
+      // 3. API Key 存 keystore（不入 DB）；CLI 引擎无 Key，跳过
+      if (apiKey) await saveApiKey(credential.id, apiKey);
 
       // 4. 建 Model（capabilityScore 由模型名自动推断，模板页才能据此自动分配最优模型）
       const inferred = inferModelCapabilities(modelName);
@@ -186,21 +197,36 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
             onWebsiteChange={setWebsite}
           />
 
-          <div className="space-y-2">
-            <Label htmlFor="baseUrl">Base URL</Label>
-            <Input
-              id="baseUrl"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-            />
-          </div>
+          {isCli ? (
+            <div className="space-y-2">
+              <Label htmlFor="baseUrl">{t("addProvider.cliPathLabel")}</Label>
+              <Input
+                id="baseUrl"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder={providerType === "claude-cli" ? "/usr/local/bin/claude" : "/usr/local/bin/codex"}
+              />
+              <p className="text-xs text-muted-foreground">{t("addProvider.cliHint")}</p>
+            </div>
+          ) : (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="baseUrl">Base URL</Label>
+                <Input
+                  id="baseUrl"
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                />
+              </div>
 
-          <ApiKeyInput
-            value={apiKey}
-            onChange={setApiKey}
-            required
-            placeholder="sk-ant-..."
-          />
+              <ApiKeyInput
+                value={apiKey}
+                onChange={setApiKey}
+                required
+                placeholder="sk-ant-..."
+              />
+            </>
+          )}
 
           <ModelConfigFields
             modelName={modelName}
@@ -213,13 +239,15 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
 
           <WorkRoleSelector value={workRoles} onChange={handleWorkRolesChange} />
 
-          <TestConnectionButton
-            providerType={providerType}
-            modelName={modelName}
-            apiKey={apiKey}
-            baseUrl={baseUrl}
-            disabled={submitting}
-          />
+          {!isCli && (
+            <TestConnectionButton
+              providerType={providerType}
+              modelName={modelName}
+              apiKey={apiKey}
+              baseUrl={baseUrl}
+              disabled={submitting}
+            />
+          )}
 
           {error && (
             <Alert variant="destructive">

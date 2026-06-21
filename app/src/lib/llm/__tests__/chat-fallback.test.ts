@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   streamText: vi.fn(),
 }));
 
-vi.mock("ai", () => ({ streamText: mocks.streamText }));
+vi.mock("ai", () => ({ streamText: mocks.streamText, stepCountIs: (n: number) => n }));
 // provider-factory 直接 mock 掉（不再需要验证 getLanguageModel 内部）
 vi.mock("../provider-factory", () => ({
   getLanguageModel: vi.fn((type: string) => ({ __mock: true, type })),

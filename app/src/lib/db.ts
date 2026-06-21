@@ -288,6 +288,88 @@ export async function initSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_project_memories_project
     ON project_memories(project_id, importance DESC)
   `);
+
+  // v0.9 阶段7：模型表现滚动统计（SmartRouter 评分数据源）
+  // 一行 = 某模型在某难度桶（simple/standard/hard）上的累积表现；每写 UsageEvent 增量更新
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS model_performance_stats (
+      id TEXT PRIMARY KEY,
+      model_id TEXT NOT NULL,
+      task_type TEXT NOT NULL,
+      success_rate REAL NOT NULL DEFAULT 1,
+      avg_input_tokens REAL NOT NULL DEFAULT 0,
+      avg_output_tokens REAL NOT NULL DEFAULT 0,
+      avg_cost REAL NOT NULL DEFAULT 0,
+      avg_latency_ms REAL NOT NULL DEFAULT 0,
+      sample_count INTEGER NOT NULL DEFAULT 0,
+      window_start TEXT NOT NULL,
+      window_end TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (model_id, task_type)
+    )
+  `);
+
+  // v0.9 阶段7：语义缓存（重复/相似 query 命中已有答案，省 token）
+  // query_embedding 存 JSON float[]；检索时纯 JS 余弦扫描（自用阶段量小够用）
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS semantic_cache (
+      id TEXT PRIMARY KEY,
+      query_text TEXT NOT NULL,
+      query_embedding TEXT NOT NULL,
+      response_text TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      task_type TEXT NOT NULL,
+      hit_count INTEGER NOT NULL DEFAULT 0,
+      last_hit_at TEXT,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_semantic_cache_expires
+    ON semantic_cache(expires_at)
+  `);
+
+  // v0.8 阶段5：多角色对弈会话（Solver/Critic/Judge 协作的一次实例）
+  // rounds 存 JSON（每轮 role/modelId/content/token），避免另建 DebateRound 表
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS debate_sessions (
+      id TEXT PRIMARY KEY,
+      project_id TEXT,
+      topic TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'completed',
+      quick_mode INTEGER NOT NULL DEFAULT 0,
+      rounds TEXT NOT NULL DEFAULT '[]',
+      final_solution TEXT,
+      created_at TEXT NOT NULL,
+      completed_at TEXT
+    )
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_debate_sessions_created
+    ON debate_sessions(created_at DESC)
+  `);
+
+  // v0.7 阶段4：工具执行审计（每次工具调用一条，可追溯）
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS tool_executions (
+      id TEXT PRIMARY KEY,
+      project_id TEXT,
+      conversation_id TEXT,
+      tool_name TEXT NOT NULL,
+      input TEXT NOT NULL,
+      output TEXT NOT NULL,
+      status TEXT NOT NULL,
+      user_confirmed INTEGER NOT NULL DEFAULT 0,
+      reversible INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    )
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_tool_executions_created
+    ON tool_executions(created_at DESC)
+  `);
 }
 
 // ============ 内置模板种子数据（4.13.3，只建模板本体，不建角色——角色模型由用户分配） ============
@@ -1794,6 +1876,367 @@ export const usageEvents = {
         ts,
       ]
     );
+  },
+
+  /** 列出用量事件（StatsPage 统计用）。sinceTs 可选，只取该 ISO 时间之后的 */
+  async list(sinceTs?: string): Promise<UsageEventRow[]> {
+    const db = await getDb();
+    const rows = sinceTs
+      ? await db.select<any[]>(
+          "SELECT model_id, role, input_tokens, output_tokens, cost, success, created_at FROM usage_events WHERE created_at >= $1 ORDER BY created_at ASC",
+          [sinceTs],
+        )
+      : await db.select<any[]>(
+          "SELECT model_id, role, input_tokens, output_tokens, cost, success, created_at FROM usage_events ORDER BY created_at ASC",
+        );
+    return rows.map((r) => ({
+      modelId: r.model_id,
+      role: r.role,
+      inputTokens: r.input_tokens,
+      outputTokens: r.output_tokens,
+      cost: r.cost,
+      success: !!r.success,
+      createdAt: r.created_at,
+    }));
+  },
+};
+
+export interface UsageEventRow {
+  modelId: string | null;
+  role: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
+  success: boolean;
+  createdAt: string;
+}
+
+// ============ modelPerformanceStats CRUD（v0.9 阶段7：SmartRouter 评分数据源） ============
+
+export interface ModelPerformanceStatRow {
+  modelId: string;
+  taskType: string;
+  successRate: number;
+  avgInputTokens: number;
+  avgOutputTokens: number;
+  avgCost: number;
+  avgLatencyMs: number;
+  sampleCount: number;
+  windowStart: string;
+  windowEnd: string;
+}
+
+function mapPerfRow(r: any): ModelPerformanceStatRow {
+  return {
+    modelId: r.model_id,
+    taskType: r.task_type,
+    successRate: r.success_rate,
+    avgInputTokens: r.avg_input_tokens,
+    avgOutputTokens: r.avg_output_tokens,
+    avgCost: r.avg_cost,
+    avgLatencyMs: r.avg_latency_ms,
+    sampleCount: r.sample_count,
+    windowStart: r.window_start,
+    windowEnd: r.window_end,
+  };
+}
+
+export const modelPerformanceStats = {
+  /** 按 (modelId, taskType) 取一条统计，无则 null */
+  async get(modelId: string, taskType: string): Promise<ModelPerformanceStatRow | null> {
+    const db = await getDb();
+    const rows = await db.select<any[]>(
+      "SELECT * FROM model_performance_stats WHERE model_id = $1 AND task_type = $2 LIMIT 1",
+      [modelId, taskType]
+    );
+    return rows.length > 0 ? mapPerfRow(rows[0]) : null;
+  },
+
+  /** upsert：按 (model_id, task_type) 唯一键插入或整行更新 */
+  async upsert(stat: ModelPerformanceStatRow): Promise<void> {
+    const db = await getDb();
+    const ts = now();
+    await db.execute(
+      `INSERT INTO model_performance_stats
+        (id, model_id, task_type, success_rate, avg_input_tokens, avg_output_tokens,
+         avg_cost, avg_latency_ms, sample_count, window_start, window_end, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT(model_id, task_type) DO UPDATE SET
+         success_rate = excluded.success_rate,
+         avg_input_tokens = excluded.avg_input_tokens,
+         avg_output_tokens = excluded.avg_output_tokens,
+         avg_cost = excluded.avg_cost,
+         avg_latency_ms = excluded.avg_latency_ms,
+         sample_count = excluded.sample_count,
+         window_start = excluded.window_start,
+         window_end = excluded.window_end,
+         updated_at = excluded.updated_at`,
+      [
+        newId(), stat.modelId, stat.taskType, stat.successRate, stat.avgInputTokens,
+        stat.avgOutputTokens, stat.avgCost, stat.avgLatencyMs, stat.sampleCount,
+        stat.windowStart, stat.windowEnd, ts,
+      ]
+    );
+  },
+
+  /** 列出全部统计（StatsPage / SmartRouter 评分用） */
+  async list(): Promise<ModelPerformanceStatRow[]> {
+    const db = await getDb();
+    const rows = await db.select<any[]>("SELECT * FROM model_performance_stats");
+    return rows.map(mapPerfRow);
+  },
+};
+
+// ============ semanticCache CRUD（v0.9 阶段7：语义缓存） ============
+
+export interface SemanticCacheRow {
+  id: string;
+  queryText: string;
+  queryEmbedding: number[];
+  responseText: string;
+  modelId: string;
+  taskType: string;
+  hitCount: number;
+  lastHitAt: string | null;
+  expiresAt: string;
+  createdAt: string;
+}
+
+function mapCacheRow(r: any): SemanticCacheRow {
+  return {
+    id: r.id,
+    queryText: r.query_text,
+    queryEmbedding: JSON.parse(r.query_embedding),
+    responseText: r.response_text,
+    modelId: r.model_id,
+    taskType: r.task_type,
+    hitCount: r.hit_count,
+    lastHitAt: r.last_hit_at,
+    expiresAt: r.expires_at,
+    createdAt: r.created_at,
+  };
+}
+
+export const semanticCache = {
+  /** 写入一条缓存 */
+  async create(input: {
+    queryText: string;
+    queryEmbedding: number[];
+    responseText: string;
+    modelId: string;
+    taskType: string;
+    expiresAt: string;
+  }): Promise<void> {
+    const db = await getDb();
+    await db.execute(
+      `INSERT INTO semantic_cache
+        (id, query_text, query_embedding, response_text, model_id, task_type,
+         hit_count, last_hit_at, expires_at, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,0,NULL,$7,$8)`,
+      [
+        newId(), input.queryText, JSON.stringify(input.queryEmbedding), input.responseText,
+        input.modelId, input.taskType, input.expiresAt, now(),
+      ]
+    );
+  },
+
+  /** 列出所有未过期缓存（检索时纯 JS 余弦扫描） */
+  async listValid(): Promise<SemanticCacheRow[]> {
+    const db = await getDb();
+    const rows = await db.select<any[]>(
+      "SELECT * FROM semantic_cache WHERE expires_at > $1",
+      [now()]
+    );
+    return rows.map(mapCacheRow);
+  },
+
+  /** 命中后累加命中次数 + 更新 last_hit_at */
+  async recordHit(id: string): Promise<void> {
+    const db = await getDb();
+    await db.execute(
+      "UPDATE semantic_cache SET hit_count = hit_count + 1, last_hit_at = $1 WHERE id = $2",
+      [now(), id]
+    );
+  },
+
+  /** 清理过期缓存，返回删除条数 */
+  async deleteExpired(): Promise<void> {
+    const db = await getDb();
+    await db.execute("DELETE FROM semantic_cache WHERE expires_at <= $1", [now()]);
+  },
+
+  /** 缓存统计：条目数 + 累计命中次数（StatsPage 用） */
+  async stats(): Promise<{ entries: number; totalHits: number }> {
+    const db = await getDb();
+    const rows = await db.select<any[]>(
+      "SELECT COUNT(*) AS entries, COALESCE(SUM(hit_count), 0) AS total_hits FROM semantic_cache"
+    );
+    const r = rows[0] ?? { entries: 0, total_hits: 0 };
+    return { entries: Number(r.entries) || 0, totalHits: Number(r.total_hits) || 0 };
+  },
+};
+
+// ============ debateSessions CRUD（v0.8 阶段5：多角色对弈） ============
+
+export interface DebateRoundData {
+  role: "solver" | "critic" | "judge";
+  modelId: string;
+  content: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface DebateSessionRow {
+  id: string;
+  projectId: string | null;
+  topic: string;
+  status: string;
+  quickMode: boolean;
+  rounds: DebateRoundData[];
+  finalSolution: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+function mapDebateRow(r: any): DebateSessionRow {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    topic: r.topic,
+    status: r.status,
+    quickMode: !!r.quick_mode,
+    rounds: JSON.parse(r.rounds || "[]"),
+    finalSolution: r.final_solution,
+    createdAt: r.created_at,
+    completedAt: r.completed_at,
+  };
+}
+
+export const debateSessions = {
+  /** 保存一场完成的对弈 */
+  async create(input: {
+    projectId?: string | null;
+    topic: string;
+    quickMode: boolean;
+    rounds: DebateRoundData[];
+    finalSolution: string;
+    status?: string;
+  }): Promise<string> {
+    const db = await getDb();
+    const id = newId();
+    const ts = now();
+    await db.execute(
+      `INSERT INTO debate_sessions
+        (id, project_id, topic, status, quick_mode, rounds, final_solution, created_at, completed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        id, input.projectId ?? null, input.topic, input.status ?? "completed",
+        boolToInt(input.quickMode), JSON.stringify(input.rounds), input.finalSolution, ts, ts,
+      ]
+    );
+    return id;
+  },
+
+  /** 列出历史对弈（最近在前） */
+  async list(limit = 50): Promise<DebateSessionRow[]> {
+    const db = await getDb();
+    const rows = await db.select<any[]>(
+      "SELECT * FROM debate_sessions ORDER BY created_at DESC LIMIT $1",
+      [limit]
+    );
+    return rows.map(mapDebateRow);
+  },
+
+  async getById(id: string): Promise<DebateSessionRow | null> {
+    const db = await getDb();
+    const rows = await db.select<any[]>("SELECT * FROM debate_sessions WHERE id = $1", [id]);
+    return rows.length > 0 ? mapDebateRow(rows[0]) : null;
+  },
+
+  async delete(id: string): Promise<void> {
+    const db = await getDb();
+    await db.execute("DELETE FROM debate_sessions WHERE id = $1", [id]);
+  },
+};
+
+// ============ toolExecutions CRUD（v0.7 阶段4：工具执行审计） ============
+
+export interface ToolExecutionRow {
+  id: string;
+  projectId: string | null;
+  conversationId: string | null;
+  toolName: string;
+  input: string;
+  output: string;
+  status: string;
+  userConfirmed: boolean;
+  reversible: boolean;
+  durationMs: number;
+  createdAt: string;
+}
+
+function mapToolExecRow(r: any): ToolExecutionRow {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    conversationId: r.conversation_id,
+    toolName: r.tool_name,
+    input: r.input,
+    output: r.output,
+    status: r.status,
+    userConfirmed: !!r.user_confirmed,
+    reversible: !!r.reversible,
+    durationMs: r.duration_ms,
+    createdAt: r.created_at,
+  };
+}
+
+export const toolExecutions = {
+  async create(input: {
+    projectId?: string | null;
+    conversationId?: string | null;
+    toolName: string;
+    input: string;
+    output: string;
+    status: string;
+    userConfirmed?: boolean;
+    reversible?: boolean;
+    durationMs: number;
+  }): Promise<string> {
+    const db = await getDb();
+    const id = newId();
+    await db.execute(
+      `INSERT INTO tool_executions
+        (id, project_id, conversation_id, tool_name, input, output, status,
+         user_confirmed, reversible, duration_ms, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [
+        id, input.projectId ?? null, input.conversationId ?? null, input.toolName,
+        input.input, input.output, input.status,
+        boolToInt(input.userConfirmed ?? false), boolToInt(input.reversible ?? false),
+        input.durationMs, now(),
+      ]
+    );
+    return id;
+  },
+
+  /** 列出最近的工具执行（审计/侧边栏用） */
+  async list(limit = 100): Promise<ToolExecutionRow[]> {
+    const db = await getDb();
+    const rows = await db.select<any[]>(
+      "SELECT * FROM tool_executions ORDER BY created_at DESC LIMIT $1",
+      [limit]
+    );
+    return rows.map(mapToolExecRow);
+  },
+
+  async listByConversation(conversationId: string): Promise<ToolExecutionRow[]> {
+    const db = await getDb();
+    const rows = await db.select<any[]>(
+      "SELECT * FROM tool_executions WHERE conversation_id = $1 ORDER BY created_at ASC",
+      [conversationId]
+    );
+    return rows.map(mapToolExecRow);
   },
 };
 

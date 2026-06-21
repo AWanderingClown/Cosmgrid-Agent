@@ -125,12 +125,21 @@
 .logo-wrap {
   @apply flex items-center justify-center transition-transform duration-500 overflow-visible;
   background: transparent; /* 改为透明，释放限制 */
+  /* 立体投影：-45° 斜角（左上光源 → 投向右下），紧凑短投影才有"浮起"的立体感。
+     放父层，不被 logo-hue 动画覆盖，且随子元素 logo-float 一起浮动。浅色用黑投影。 */
+  filter: drop-shadow(5px 5px 5px rgba(0, 0, 0, 0.28));
+}
+
+/* 深色模式：黑投影在黑底看不见 → 同样 -45° 斜角，改用白色投影才显得出来 */
+.dark .logo-wrap {
+  filter: drop-shadow(5px 5px 6px rgba(255, 255, 255, 0.4));
 }
 
 .logo-base {
   @apply block w-full h-full; /* 填满父容器 */
   animation: logo-float 8s ease-in-out infinite, logo-hue 12s linear infinite;
-  filter: drop-shadow(0 0 15px oklch(0.55 0.22 260 / 0.2));
+  /* 注意：阴影/光晕必须写进 logo-hue 的 keyframes 里——动画的 filter 优先级最高，
+     若只在这里写静态 filter 会被动画整个覆盖（之前阴影看不到就是这个原因）。 */
 }
 
 @keyframes logo-float {
@@ -139,6 +148,7 @@
   66% { transform: translateY(5px) rotate(-2deg) scale(0.98); }
 }
 
+/* logo-hue 只管色相循环；阴影放到父层 .logo-wrap（见上方），避免动画 filter 覆盖。 */
 @keyframes logo-hue {
   0% { filter: hue-rotate(0deg) saturate(1.2); }
   100% { filter: hue-rotate(360deg) saturate(1.2); }

@@ -14,6 +14,9 @@ export const PROVIDER_TYPES = [
   { value: "openai", labelKey: "addProvider.providerTypes.openai" },
   { value: "google", labelKey: "addProvider.providerTypes.google" },
   { value: "openai-compatible", labelKey: "addProvider.providerTypes.openai-compatible" },
+  // 本机 CLI 引擎：spawn 官方 claude/codex 吃订阅额度（不填 API Key，走系统已登录的订阅）
+  { value: "claude-cli", labelKey: "addProvider.providerTypes.claude-cli" },
+  { value: "codex-cli", labelKey: "addProvider.providerTypes.codex-cli" },
 ] as const;
 
 export type ProviderTypeValue = (typeof PROVIDER_TYPES)[number]["value"];

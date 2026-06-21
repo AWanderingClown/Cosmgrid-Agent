@@ -66,8 +66,10 @@ app/
 │   │   ├── keystore.ts           #   API Key 存取（plugin-store，不入库明文）
 │   │   ├── api.ts / schemas.ts   #   数据访问 + Zod 校验
 │   │   ├── templates.ts          #   内置项目模板
-│   │   └── llm/                  #   LLM 适配层（11 个文件）
-│   │       ├── provider-factory.ts      # provider 工厂 + 缓存
+│   │   └── llm/                  #   LLM 适配层（13 个文件）
+│   │       ├── provider-factory.ts      # provider 工厂 + 缓存（API 直连路径）
+│   │       ├── cli-protocol.ts          # CLI 引擎协议层（纯逻辑可单测，JSONL 解析 + 受控 env）
+│   │       ├── cli-engine.ts            # CLI 引擎 spawn 层（接 Rust spawn_cli_stream）
 │   │       ├── model-capabilities.ts    # 模型能力知识库（自动识别 + 打分）
 │   │       ├── checkpoint-generator.ts  # AI 自动生成检查点草稿
 │   │       ├── chat-fallback.ts         # 回退链
@@ -78,7 +80,7 @@ app/
 │   │       └── error-classifier.ts / test-connection.ts
 │   ├── App.tsx / main.tsx / index.css
 │   └── lib/__tests__/            # 单元测试
-├── src-tauri/                    # Tauri 2 桌面壳（Rust，仅插件配置，无业务逻辑）
+├── src-tauri/                    # Tauri 2 桌面壳（Rust，插件配置 + spawn_cli_stream 命令，无 LLM 业务逻辑）
 │   ├── capabilities/             #   插件权限
 │   ├── src/ · Cargo.toml · tauri.conf.json
 └── package.json
@@ -94,5 +96,7 @@ app/
 - ✅ **v0.4** 项目工作区端到端打通（项目列表 / 详情 / 阶段 / 检查点）
 - ✅ **v0.5** 首次启动引导 + 新建项目向导
 - ✅ **v0.6** 长期记忆 + RAG（项目级记忆 + 跨项目关键词检索）
+- ✅ **UI 美化** 整体视觉打磨
+- 🔧 **v0.7（部分提前）** CLI 引擎落地——spawn 本机 `claude` / `codex` 吃订阅五小时额度（对订阅锁死在官方端的 Claude/Codex，是痛点 1「限额无缝续」的解法）。代码已在工作区，截至 2026-06-21 尚未提交。其余 v0.7 项（只读工具层 / 系统托盘 / 三平台打包）待按「产品真北」重评估。
 
 > 数据库表结构见主方案文档第 9 节；产品定位与真实痛点见第 1~2 节。

@@ -17,11 +17,22 @@
 //    不再混用 LlmErrorCategory。
 // 5. 链式调用：models 数组按顺序尝试，跳过 cooldown 的，遇到非 shouldFallback 的错就终止。
 
-import { streamText } from "ai";
+import { streamText, stepCountIs, type ToolSet } from "ai";
 import { getLanguageModel } from "./provider-factory";
 import { classifyLlmError, type LlmErrorCategory } from "./error-classifier";
 import { isInCooldown, markModelFailed, markModelSucceeded } from "./model-cooldown";
 import { recordUsageEvent, type RecordUsageParams } from "./usage-tracker";
+import { isCliProviderType } from "./cli-protocol";
+import { streamViaCli } from "./cli-engine";
+import { classifyMessageComplexity } from "./message-router";
+
+/** 从对话里取最后一条 user 消息推断难度桶（role 默认值） */
+function inferRole(messages: Array<{ role: string; content: string }>): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]!.role === "user") return classifyMessageComplexity(messages[i]!.content);
+  }
+  return "main_chat";
+}
 
 /** 一个可调用的模型端点：模型 + 凭证 + baseUrl */
 export interface ModelEndpoint {
@@ -125,6 +136,13 @@ export async function streamWithFallback(
     projectId?: string;
     /** 关联 conversationId（目前未使用，预留给未来按 conversation 聚合统计） */
     conversationId?: string;
+    /** 消息难度桶（simple/standard/hard），落 UsageEvent 供 v0.9 SmartRouter 滚动统计。
+     *  不传则内部按最后一条 user 消息推断（调用方无需各自重复算）。 */
+    role?: string;
+    /** v0.7 阶段4：工具集（read/glob/grep 等）。传了才开启工具调用 + 多步 agentic 循环 */
+    tools?: ToolSet;
+    /** 工具调用最大步数（防死循环），默认 8 */
+    maxToolSteps?: number;
   } = {},
 ): Promise<{ usedModelId: string; switched: boolean }> {
   if (models.length === 0) {
@@ -153,25 +171,51 @@ export async function streamWithFallback(
     }
 
     try {
-      const lm = getLanguageModel(target.providerType, target.modelName, target.apiKey, target.baseUrl);
-      const result = streamText({
-        model: lm,
-        messages,
-        ...(options.signal ? { abortSignal: options.signal } : {}),
-      });
+      let streamUsage: StreamUsage;
+      let finishReason: string;
+      let wasAborted: boolean;
+      const startedAt = Date.now();
 
-      for await (const delta of result.textStream) {
-        callbacks.onDelta(delta);
+      if (isCliProviderType(target.providerType)) {
+        // CLI 引擎路径：spawn 本机 claude/codex 吃订阅额度（baseUrl 复用为可执行文件路径）
+        const cliResult = await streamViaCli(
+          {
+            providerType: target.providerType,
+            modelName: target.modelName,
+            ...(target.baseUrl ? { program: target.baseUrl } : {}),
+          },
+          messages,
+          { onDelta: callbacks.onDelta },
+          options.signal ? { signal: options.signal } : {},
+        );
+        finishReason = cliResult.finishReason;
+        wasAborted = finishReason === "abort" || (options.signal?.aborted ?? false);
+        streamUsage = { inputTokens: cliResult.inputTokens, outputTokens: cliResult.outputTokens };
+      } else {
+        // API 直连路径：Vercel AI SDK streamText
+        const lm = getLanguageModel(target.providerType, target.modelName, target.apiKey, target.baseUrl);
+        const result = streamText({
+          model: lm,
+          messages,
+          // 传了 tools 才开工具调用 + 多步循环（stopWhen 防死循环）
+          ...(options.tools ? { tools: options.tools, stopWhen: stepCountIs(options.maxToolSteps ?? 8) } : {}),
+          ...(options.signal ? { abortSignal: options.signal } : {}),
+        });
+
+        for await (const delta of result.textStream) {
+          callbacks.onDelta(delta);
+        }
+
+        const usage = await result.usage;
+        finishReason = (await result.finishReason) ?? "stop";
+        wasAborted = options.signal?.aborted ?? false;
+        streamUsage = {
+          inputTokens: usage?.inputTokens ?? 0,
+          outputTokens: usage?.outputTokens ?? 0,
+        };
       }
 
-      const usage = await result.usage;
-      const finishReason = (await result.finishReason) ?? "stop";
-      const wasAborted = options.signal?.aborted ?? false;
       markModelSucceeded(target.modelId);
-      const streamUsage: StreamUsage = {
-        inputTokens: usage?.inputTokens ?? 0,
-        outputTokens: usage?.outputTokens ?? 0,
-      };
       callbacks.onUsage?.(streamUsage, target, finishReason, wasAborted);
 
       // 落 UsageEvent（chat-fallback 内置，避免调用方写错 modelName/providerId）
@@ -185,9 +229,12 @@ export async function streamWithFallback(
           usage: { inputTokens: streamUsage.inputTokens, outputTokens: streamUsage.outputTokens },
           finishReason,
           interrupted: false,
+          latencyMs: Date.now() - startedAt,
         };
         if (options.projectId) params.projectId = options.projectId;
         if (options.conversationId) params.conversationId = options.conversationId;
+        // role 不传则按最后一条 user 消息推断难度桶（避免每个调用方各算一遍）
+        params.role = options.role ?? inferRole(messages);
         void recordUsageEvent(params);
       }
 

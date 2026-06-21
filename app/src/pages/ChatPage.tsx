@@ -11,6 +11,12 @@ import { models as dbModels, apiCredentials as dbCredentials } from "@/lib/db";
 import { getApiKey } from "@/lib/keystore";
 import { streamWithFallback, toModelEndpoint, type StreamUsage } from "@/lib/llm/chat-fallback";
 import { pickBestModelForRole, rankFallbackModels } from "@/lib/llm/model-capabilities";
+import { isCliProviderType } from "@/lib/llm/cli-protocol";
+import { classifyMessageComplexity } from "@/lib/llm/message-router";
+import { routeMessage } from "@/lib/llm/smart-router";
+import { isSmartRoutingEnabled } from "@/lib/app-settings";
+import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
+import { compressHistory, type ChatMsg } from "@/lib/llm/context-compressor";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 
 interface ChatMessage {
@@ -96,6 +102,7 @@ export function ChatPage() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [switchNotice, setSwitchNotice] = useState<string | null>(null);
+  const [cacheNotice, setCacheNotice] = useState<string | null>(null);
   const [lastUsage, setLastUsage] = useState<ChatUsage | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -103,6 +110,7 @@ export function ChatPage() {
 
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // 自动滚动到底部
   useEffect(() => {
@@ -152,14 +160,19 @@ export function ChatPage() {
     const model = availableModels.find((m) => m.id === selectedModelId);
     if (!model || isStreaming) return;
 
+    // v0.9 阶段7：这一回合是否启用 v2（查缓存/压缩/写缓存）——入口读一次，全程一致
+    const smart = isSmartRoutingEnabled();
+
     const cred = credentials.find((c) => c.providerId === model.providerId);
     if (!cred) {
       setStreamError(t("chat.noCredential"));
       return;
     }
 
-    const apiKey = await getApiKey(cred.id);
-    if (!apiKey) {
+    // CLI 引擎走本机订阅登录态，没有 API Key；API 直连才需要取 Key
+    const primaryIsCli = isCliProviderType(model.provider?.type ?? "");
+    const apiKey = primaryIsCli ? "" : ((await getApiKey(cred.id)) ?? "");
+    if (!primaryIsCli && !apiKey) {
       setStreamError(t("chat.noApiKey"));
       return;
     }
@@ -173,6 +186,27 @@ export function ChatPage() {
     setIsStreaming(true);
     setStreamError(null);
     setSwitchNotice(null);
+    setCacheNotice(null);
+
+    const taskRole = classifyMessageComplexity(text);
+
+    // v0.9 阶段7：智能路由开启时先查语义缓存——命中则秒回、0 成本、跳过 LLM
+    if (smart) {
+      try {
+        const hit = await lookupCache(text);
+        if (hit) {
+          const days = Math.max(0, Math.floor(hit.ageMs / 86_400_000));
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantId ? { ...m, content: hit.responseText } : m)),
+          );
+          setCacheNotice(t("chat.cacheHit", { days }));
+          setIsStreaming(false);
+          return;
+        }
+      } catch {
+        // 缓存查询失败不影响主流程，继续正常调模型
+      }
+    }
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -193,8 +227,14 @@ export function ChatPage() {
     for (const cand of rankFallbackModels(model, availableModels, "main_chat")) {
       const fbCred = credentials.find((c) => c.providerId === cand.providerId);
       if (!fbCred) continue;
-      const fbKey = await getApiKey(fbCred.id);
-      if (!fbKey) continue;
+      // CLI 备用模型无 Key；API 备用模型缺 Key 则跳过
+      const fbIsCli = isCliProviderType(cand.provider?.type ?? "");
+      let fbKey = "";
+      if (!fbIsCli) {
+        const k = await getApiKey(fbCred.id);
+        if (!k) continue;
+        fbKey = k;
+      }
       try {
         chain.push(toModelEndpoint(cand, fbCred, fbKey));
       } catch {
@@ -202,11 +242,19 @@ export function ChatPage() {
       }
     }
 
+    // v0.9 阶段7：智能路由开启时，超长历史先抽取式裁剪省 token（system 与最近消息保留）
+    let outgoing: ChatMsg[] = newMessages.map((m) => ({ role: m.role, content: m.content }));
+    if (smart) {
+      outgoing = compressHistory(outgoing, {
+        noticeText: (n) => t("chat.contextTrimmed", { count: n }),
+      }).messages;
+    }
+
     let fullContent = "";
     try {
-      await streamWithFallback(
+      const result = await streamWithFallback(
         chain,
-        newMessages.map((m) => ({ role: m.role, content: m.content })),
+        outgoing,
         {
           onDelta: (delta) => {
             fullContent += delta;
@@ -229,8 +277,13 @@ export function ChatPage() {
             );
           },
         },
-        { signal: controller.signal },
+        // role = 这条消息的难度桶，落 UsageEvent 供 v0.9 SmartRouter 按 taskType 滚动统计
+        { signal: controller.signal, role: taskRole },
       );
+      // v0.9 阶段7：成功回答写入语义缓存（isCacheable 内部会过滤时间敏感/代码答案）
+      if (smart && fullContent && !controller.signal.aborted) {
+        void writeCache(text, fullContent, result.usedModelId, taskRole).catch(() => {});
+      }
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
       setStreamError(err instanceof Error ? err.message : t("chat.requestInterrupted"));
@@ -243,8 +296,25 @@ export function ChatPage() {
 
   function handleStop() { abortRef.current?.abort(); }
 
-  function handleSmartPick() {
+  async function handleSmartPick() {
     if (availableModels.length === 0) return;
+    const text = inputRef.current?.value.trim() ?? "";
+
+    // 智能路由开启 + 有输入：用 SmartRouter 按真实表现评分选模型，并展示决策理由
+    if (isSmartRoutingEnabled() && text) {
+      try {
+        const routed = await routeMessage(text, availableModels);
+        if (routed) {
+          setSelectedModelId(routed.model.id);
+          setSwitchNotice(routed.decisionLog.reasons[0] ?? null);
+          return;
+        }
+      } catch {
+        // 路由失败回落 v1
+      }
+    }
+
+    // 兜底：v1 规则按角色挑能力分最高
     const best = pickBestModelForRole("main_chat", availableModels);
     if (best) setSelectedModelId(best.id);
   }
@@ -299,7 +369,7 @@ export function ChatPage() {
             type="button"
             size="sm"
             variant="ghost"
-            onClick={handleSmartPick}
+            onClick={() => void handleSmartPick()}
             className="h-9 px-3 text-xs font-medium hover:bg-primary/10 hover:text-primary transition-all rounded-xl gap-2"
           >
             <div className="p-1 bg-primary/10 rounded-lg group-hover:scale-110 transition-transform">
@@ -333,6 +403,12 @@ export function ChatPage() {
             <div className="flex items-center gap-2 px-3 py-1 bg-amber-500/10 text-amber-500 rounded-full border border-amber-500/20 animate-pulse">
               <Zap className="w-3 h-3" />
               <span className="text-[10px] font-bold uppercase">{switchNotice}</span>
+            </div>
+          )}
+          {cacheNotice && (
+            <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 text-emerald-500 rounded-full border border-emerald-500/20">
+              <Sparkles className="w-3 h-3" />
+              <span className="text-[10px] font-bold uppercase">{cacheNotice}</span>
             </div>
           )}
         </div>
@@ -400,6 +476,7 @@ export function ChatPage() {
         >
           <div className="flex-1 relative">
             <input
+              ref={inputRef}
               name="input"
               placeholder={selectedModel ? t("chat.inputPlaceholder", { name: selectedModel.displayName || selectedModel.name }) : t("chat.inputPlaceholderFallback")}
               disabled={isStreaming}

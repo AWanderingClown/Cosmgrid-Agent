@@ -1,7 +1,7 @@
 // Cosmgrid-Agent 主入口
 // v0.7.2: 彻底修复响应式布局冲突，回归稳定的 Flex 布局
 import { useState, useEffect } from "react";
-import { AlertTriangle, KeyRound, MessageSquare, LayoutTemplate, Coins, FolderKanban, X, Settings } from "lucide-react";
+import { AlertTriangle, KeyRound, MessageSquare, LayoutTemplate, Coins, FolderKanban, X, Settings, BarChart3, Swords } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { usePanelResize, ResizeHandle } from "@/components/ui/resize-handle";
@@ -24,8 +24,10 @@ import { ProjectsPage } from "@/pages/ProjectsPage";
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { OnboardingModal } from "@/pages/OnboardingModal";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { StatsPage } from "@/pages/StatsPage";
+import { DebatePage } from "@/pages/DebatePage";
 
-type PageKey = "chat" | "providers" | "templates" | "tokenPlans" | "projects" | "settings";
+type PageKey = "chat" | "providers" | "templates" | "tokenPlans" | "projects" | "debate" | "stats" | "settings";
 
 interface NavItem {
   key: PageKey;
@@ -40,6 +42,8 @@ function App() {
     { key: "providers", icon: <KeyRound className="w-4 h-4" /> },
     { key: "templates", icon: <LayoutTemplate className="w-4 h-4" /> },
     { key: "tokenPlans", icon: <Coins className="w-4 h-4" /> },
+    { key: "debate", icon: <Swords className="w-4 h-4" /> },
+    { key: "stats", icon: <BarChart3 className="w-4 h-4" /> },
   ];
   const [page, setPage] = useState<PageKey>("chat");
   const [openProjectId, setOpenProjectId] = useState<string | null>(null);
@@ -201,6 +205,12 @@ function App() {
           </div>
           <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "tokenPlans" ? "block" : "none" }}>
             <TokenPlansPage />
+          </div>
+          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "debate" ? "block" : "none" }}>
+            <DebatePage />
+          </div>
+          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "stats" ? "block" : "none" }}>
+            <StatsPage />
           </div>
           <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "settings" ? "block" : "none" }}>
             <SettingsPage />

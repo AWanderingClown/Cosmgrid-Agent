@@ -1,0 +1,131 @@
+// CLI 引擎 spawn 层（依赖 Tauri，运行时才生效）
+//
+// 把 cli-protocol（纯逻辑）和 Rust 的 spawn_cli_stream 命令接起来：
+//   构造参数 → invoke Rust spawn → Channel 流式收 stdout 行 → 协议层解析 → 回调。
+// 与 provider-factory + streamText（API 直连）平行，由 chat-fallback 按 provider 类型分流。
+
+import { Channel, invoke } from "@tauri-apps/api/core";
+import {
+  buildCliArgs,
+  buildPromptFromMessages,
+  parseCliStreamLine,
+  CLI_DEFAULT_PROGRAM,
+  type CliProviderType,
+  type CliMessage,
+} from "./cli-protocol";
+
+/** Rust spawn_cli_stream 通过 Channel 推回的原始事件（与 lib.rs 的 CliStreamEvent 对应） */
+type RustCliEvent =
+  | { type: "stdout"; line: string }
+  | { type: "stderr"; line: string }
+  | { type: "terminated"; code: number | null }
+  | { type: "error"; message: string };
+
+export interface CliEndpoint {
+  providerType: CliProviderType;
+  /** 模型别名/全名（传 --model） */
+  modelName: string;
+  /** CLI 可执行文件绝对路径；空则回退到 PATH 查找默认名 */
+  program?: string;
+}
+
+export interface CliStreamCallbacks {
+  onDelta: (text: string) => void;
+  onUsage?: (usage: { inputTokens: number; outputTokens: number }) => void;
+  /** 订阅额度状态（claude 的 rate_limit_event），用于未来接 Token Plan 显示 */
+  onRateLimit?: (info: { resetsAt: number | null; limitType: string | null }) => void;
+}
+
+export interface CliStreamResult {
+  inputTokens: number;
+  outputTokens: number;
+  finishReason: string;
+}
+
+/**
+ * spawn 本机 CLI 流式对话。成功 resolve usage；CLI 报错（未登录 / 额度耗尽 / 非零退出）reject。
+ * abort：前端停止接收并 resolve（finishReason="abort"）；子进程 kill 留待后续（见下方 TODO）。
+ */
+export async function streamViaCli(
+  endpoint: CliEndpoint,
+  messages: readonly CliMessage[],
+  callbacks: CliStreamCallbacks,
+  options: { signal?: AbortSignal } = {},
+): Promise<CliStreamResult> {
+  const program = endpoint.program?.trim() || CLI_DEFAULT_PROGRAM[endpoint.providerType];
+  const prompt = buildPromptFromMessages(messages);
+  const args = buildCliArgs(endpoint.providerType, endpoint.modelName, prompt);
+
+  let usage = { inputTokens: 0, outputTokens: 0 };
+  let finishReason = "stop";
+  let errorMsg: string | null = null;
+  let stderrBuf = "";
+
+  return new Promise<CliStreamResult>((resolve, reject) => {
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      if (errorMsg) reject(new Error(errorMsg));
+      else resolve({ ...usage, finishReason });
+    };
+
+    const channel = new Channel<RustCliEvent>();
+    channel.onmessage = (ev) => {
+      if (settled) return;
+      switch (ev.type) {
+        case "stdout": {
+          // 一次回调可能含多行（Rust 按行 trim 但保险再按 \n 拆）
+          for (const line of ev.line.split("\n")) {
+            for (const e of parseCliStreamLine(endpoint.providerType, line)) {
+              if (e.kind === "delta") callbacks.onDelta(e.text);
+              else if (e.kind === "usage") {
+                usage = { inputTokens: e.inputTokens, outputTokens: e.outputTokens };
+                callbacks.onUsage?.(usage);
+              } else if (e.kind === "rate_limit") {
+                callbacks.onRateLimit?.({ resetsAt: e.resetsAt, limitType: e.limitType });
+              } else if (e.kind === "error") {
+                errorMsg = e.message;
+              } else if (e.kind === "done") {
+                finishReason = e.finishReason;
+              }
+            }
+          }
+          break;
+        }
+        case "stderr":
+          stderrBuf += `${ev.line}\n`;
+          break;
+        case "error":
+          errorMsg = ev.message;
+          break;
+        case "terminated":
+          if (!errorMsg && ev.code !== 0 && ev.code !== null) {
+            errorMsg = stderrBuf.trim() || `CLI exited with code ${ev.code}`;
+          }
+          settle();
+          break;
+      }
+    };
+
+    // abort：前端停止接收并收尾。
+    // TODO(v0.7.x)：真正 kill 子进程需 Rust 端按 id 保存 child + 加 kill 命令，
+    //   否则 abort 后 CLI 仍在后台跑完（白耗额度）。当前先保证 UI 立即恢复。
+    options.signal?.addEventListener("abort", () => {
+      if (settled) return;
+      settled = true;
+      resolve({ ...usage, finishReason: "abort" });
+    });
+
+    invoke("spawn_cli_stream", {
+      program,
+      args,
+      extraEnv: {},
+      onEvent: channel,
+    }).catch((err: unknown) => {
+      if (settled) return;
+      errorMsg = err instanceof Error ? err.message : String(err);
+      settle();
+    });
+  });
+}
