@@ -15,10 +15,12 @@ import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
 import { type ProviderListItem, type CredentialListItem, type ModelListItem, parseWorkRoles } from "@/lib/api";
 import { providers as dbProviders, apiCredentials as dbCredentials, models as dbModels } from "@/lib/db";
 import { deleteApiKey } from "@/lib/keystore";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 
 export function ProvidersPage() {
   const { t } = useTranslation();
+  const { confirm, alert } = useConfirm();
   const [providers, setProviders] = useState<ProviderListItem[]>([]);
   const [credentials, setCredentials] = useState<CredentialListItem[]>([]);
   const [models, setModels] = useState<ModelListItem[]>([]);
@@ -66,33 +68,33 @@ export function ProvidersPage() {
   }, []);
 
   async function handleDeleteProvider(id: string) {
-    if (!confirm(t("providers.deleteProvider"))) return;
+    if (!(await confirm({ description: t("providers.deleteProvider"), destructive: true }))) return;
     try {
       await dbProviders.delete(id);
       await load();
     } catch (err) {
-      alert(err instanceof Error ? err.message : t("providers.deleteFailed"));
+      await alert({ description: err instanceof Error ? err.message : t("providers.deleteFailed") });
     }
   }
 
   async function handleDeleteCredential(id: string) {
-    if (!confirm(t("providers.deleteCredential"))) return;
+    if (!(await confirm({ description: t("providers.deleteCredential"), destructive: true }))) return;
     try {
       await dbCredentials.delete(id);
       await deleteApiKey(id);
       await load();
     } catch (err) {
-      alert(err instanceof Error ? err.message : t("providers.deleteFailed"));
+      await alert({ description: err instanceof Error ? err.message : t("providers.deleteFailed") });
     }
   }
 
   async function handleDeleteModel(id: string) {
-    if (!confirm(t("providers.deleteModel"))) return;
+    if (!(await confirm({ description: t("providers.deleteModel"), destructive: true }))) return;
     try {
       await dbModels.delete(id);
       await load();
     } catch (err) {
-      alert(err instanceof Error ? err.message : t("providers.deleteFailed"));
+      await alert({ description: err instanceof Error ? err.message : t("providers.deleteFailed") });
     }
   }
 
@@ -101,13 +103,13 @@ export function ProvidersPage() {
       await dbModels.update(m.id, { enabled: !m.enabled });
       await load();
     } catch (err) {
-      alert(err instanceof Error ? err.message : t("providers.updateFailed"));
+      await alert({ description: err instanceof Error ? err.message : t("providers.updateFailed") });
     }
   }
 
   return (
-    <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
-      <div className="max-w-6xl mx-auto space-y-10">
+    <div className="h-full w-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
+      <div className="space-y-10">
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-6">
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-primary">

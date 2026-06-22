@@ -2,6 +2,9 @@
   "common": {
     "cancel": "Cancel",
     "confirm": "Confirm",
+    "confirmTitle": "Confirm action",
+    "noticeTitle": "Notice",
+    "ok": "OK",
     "delete": "Delete",
     "edit": "Edit",
     "save": "Save",
@@ -47,6 +50,8 @@
     "userLabel": "You",
     "assistantLabel": "CosmGrid Assistant",
     "newChat": "New Chat",
+    "untitledChat": "Untitled chat",
+    "conversations": "Conversations",
     "deleteConvConfirm": "Delete this conversation? This cannot be undone.",
     "loadError": "Failed to load",
     "noCredential": "API credential not found",
@@ -508,6 +513,7 @@
       "failed": "System Failure"
     },
     "deleteCheckpoint": "Delete this checkpoint? Associated handoff packets will also be removed.",
+    "deleteMemory": "Delete this memory? This cannot be undone.",
     "systemModel": "System Model",
     "startSequence": "Start Sequence",
     "closeLogs": "Close Logs",

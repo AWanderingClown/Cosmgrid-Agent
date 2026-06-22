@@ -120,8 +120,8 @@ export function DebatePage({ initialTopic }: DebatePageProps = {}) {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
-      <div className="max-w-5xl mx-auto space-y-8 pb-20">
+    <div className="h-full w-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
+      <div className="space-y-8 pb-20">
         <header className="space-y-3 border-l-4 border-primary pl-6 py-2">
           <div className="flex items-center gap-2 text-primary font-bold">
             <Swords className="w-5 h-5" />

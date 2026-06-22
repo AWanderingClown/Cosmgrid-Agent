@@ -1,10 +1,12 @@
 // ChatPage - 重构为 "Cosmic Cyber" 视觉风格
 import { memo, useEffect, useRef, useState } from "react";
-import { Bot, Send, Square, User, Zap, Sparkles, Cpu, ChevronDown, PanelRight, X, Activity, Swords, Plus, Trash2, MessageSquare } from "lucide-react";
+import { Bot, Send, Square, User, Zap, Sparkles, Cpu, PanelRight, X, Activity, Swords, Plus, Trash2, MessageSquare, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { usePanelResize, ResizeHandle } from "@/components/ui/resize-handle";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
 import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, type Conversation, type DbMessage } from "@/lib/db";
@@ -109,6 +111,114 @@ const MessageItem = memo(function MessageItem({
   );
 });
 
+/** 会话切换下拉：顶部栏里点开 = 新建 + 历史会话列表（切换 / 删除）。
+ *  取代旧的「第 2 列会话侧栏」，把横向空间还给聊天；会话仍一键可达。 */
+function ConversationSwitcher({
+  conversations,
+  activeId,
+  disabled,
+  onSwitch,
+  onNew,
+  onDelete,
+}: {
+  conversations: Conversation[];
+  activeId: string | null;
+  disabled: boolean;
+  onSwitch: (id: string) => void;
+  onNew: () => void;
+  onDelete: (id: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // 点面板外部 / 按 Esc 关闭
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const active = conversations.find((c) => c.id === activeId);
+  const activeTitle = active?.title || t("chat.untitledChat");
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold hover:bg-white/10 transition-colors max-w-[220px]"
+        title={activeTitle}
+      >
+        <MessageSquare className="w-4 h-4 text-primary shrink-0" />
+        <span className="truncate">{activeTitle}</span>
+        <ChevronDown className={cn("w-3.5 h-3.5 shrink-0 opacity-60 transition-transform", open && "rotate-180")} />
+      </button>
+
+      {open && (
+        <div className="absolute top-full left-0 mt-2 w-72 max-h-[26rem] overflow-hidden rounded-2xl glass border border-white/10 shadow-2xl z-50 flex flex-col">
+          <div className="p-2 border-b border-white/10">
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => {
+                onNew();
+                setOpen(false);
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 disabled:opacity-50 transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              {t("chat.newChat")}
+            </button>
+          </div>
+          <div className="px-3 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">
+            {t("chat.conversations")}
+          </div>
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-1.5 pt-0.5 space-y-0.5">
+            {conversations.map((c) => (
+              <div
+                key={c.id}
+                onClick={() => {
+                  onSwitch(c.id);
+                  setOpen(false);
+                }}
+                className={cn(
+                  "group flex items-center gap-2 px-3 py-2 rounded-xl cursor-pointer text-sm transition-colors",
+                  c.id === activeId ? "bg-primary/10 text-primary font-medium" : "hover:bg-white/5 text-muted-foreground",
+                )}
+              >
+                <MessageSquare className="w-3.5 h-3.5 shrink-0 opacity-70" />
+                <span className="flex-1 truncate">{c.title || t("chat.untitledChat")}</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(c.id);
+                  }}
+                  title={t("common.delete")}
+                  className="opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity shrink-0"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface ChatPageProps {
   /** 用户在输入框写下"多方案权衡"类问题时，点"开对弈"会带着这条话题跳到对弈页 */
   onOpenDebate?: (topic: string) => void;
@@ -116,6 +226,7 @@ interface ChatPageProps {
 
 export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
   const { t } = useTranslation();
+  const { confirm } = useConfirm();
   const [availableModels, setAvailableModels] = useState<ModelListItem[]>([]);
   const [credentials, setCredentials] = useState<CredentialListItem[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>("");
@@ -177,7 +288,7 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
         // 主对话多会话：列出全部主对话，没有就建一条，恢复最近一条的历史（关 app 不丢上下文）
         let list = await dbConversations.listMainChats();
         if (list.length === 0) {
-          await dbConversations.getOrCreateMainChat(ml[0]?.id ?? null);
+          await dbConversations.getOrCreateMainChat(ml[0]?.id ?? null, t("chat.untitledChat"));
           list = await dbConversations.listMainChats();
         }
         setConversationList(list);
@@ -195,7 +306,7 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
   async function handleNewChat() {
     if (isStreaming) return;
     try {
-      const conv = await dbConversations.create({ title: t("chat.newChat"), defaultModelId: selectedModelId || null, projectId: null });
+      const conv = await dbConversations.create({ title: t("chat.untitledChat"), defaultModelId: selectedModelId || null, projectId: null });
       setConversationList((prev) => [conv, ...prev]);
       setConversationId(conv.id);
       setMessages([]);
@@ -223,7 +334,7 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
 
   async function handleDeleteConversation(id: string) {
     if (isStreaming) return;
-    if (!confirm(t("chat.deleteConvConfirm"))) return;
+    if (!(await confirm({ description: t("chat.deleteConvConfirm"), destructive: true }))) return;
     try {
       await dbConversations.delete(id);
     } catch {
@@ -231,7 +342,7 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
     }
     const remaining = conversationList.filter((c) => c.id !== id);
     if (remaining.length === 0) {
-      const conv = await dbConversations.create({ title: t("chat.newChat"), defaultModelId: selectedModelId || null, projectId: null });
+      const conv = await dbConversations.create({ title: t("chat.untitledChat"), defaultModelId: selectedModelId || null, projectId: null });
       setConversationList([conv]);
       setConversationId(conv.id);
       setMessages([]);
@@ -278,7 +389,7 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
     let convId = conversationId;
     if (!convId) {
       try {
-        const c = await dbConversations.getOrCreateMainChat(model.id);
+        const c = await dbConversations.getOrCreateMainChat(model.id, t("chat.untitledChat"));
         convId = c.id;
         setConversationId(convId);
       } catch {
@@ -494,69 +605,36 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
   }
 
   return (
-    <div className="flex h-full">
-      {/* 会话侧栏：多会话切换 / 新建 / 删除 */}
-      <aside className="w-60 shrink-0 flex flex-col border-r border-white/10 glass">
-        <div className="p-3 border-b border-white/10">
-          <Button
-            type="button"
-            size="sm"
-            onClick={() => void handleNewChat()}
-            disabled={isStreaming}
-            className="w-full justify-start gap-2 rounded-xl bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20"
-          >
-            <Plus className="w-4 h-4" />
-            {t("chat.newChat")}
-          </Button>
-        </div>
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
-          {conversationList.map((c) => (
-            <div
-              key={c.id}
-              onClick={() => void switchConversation(c.id)}
-              className={cn(
-                "group flex items-center gap-2 px-3 py-2 rounded-xl cursor-pointer text-sm transition-colors",
-                c.id === conversationId ? "bg-primary/10 text-primary font-medium" : "hover:bg-white/5 text-muted-foreground",
-              )}
-            >
-              <MessageSquare className="w-3.5 h-3.5 shrink-0 opacity-70" />
-              <span className="flex-1 truncate">{c.title}</span>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void handleDeleteConversation(c.id);
-                }}
-                title={t("common.delete")}
-                className="opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity shrink-0"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ))}
-        </div>
-      </aside>
-
-      <div className="relative flex flex-col h-full flex-1 min-w-0 bg-background/30 backdrop-blur-sm">
+    <div className="flex h-full w-full">
+      <div className="relative flex flex-col h-full flex-1 min-w-0 rounded-3xl overflow-hidden glass">
       {/* 顶部控制栏 - Premium Glass Effect */}
       <header className="px-6 py-4 flex items-center justify-between border-b border-white/10 glass z-10">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          <ConversationSwitcher
+            conversations={conversationList}
+            activeId={conversationId}
+            disabled={isStreaming}
+            onSwitch={(id) => void switchConversation(id)}
+            onNew={() => void handleNewChat()}
+            onDelete={(id) => void handleDeleteConversation(id)}
+          />
+          <div className="h-5 w-px bg-white/10 shrink-0" />
           <div className="relative group">
             <div className="absolute -inset-1 bg-gradient-to-r from-primary to-accent rounded-xl blur opacity-25 group-hover:opacity-50 transition duration-1000 group-hover:duration-200"></div>
-            <div className="relative flex items-center gap-2 px-3 py-1.5 bg-background border border-white/10 rounded-xl cursor-pointer">
-              <Cpu className="w-4 h-4 text-primary" />
-              <select
-                value={selectedModelId}
-                onChange={(e) => handleModelChange(e.target.value)}
-                className="text-xs font-bold appearance-none bg-transparent focus:outline-none pr-6 cursor-pointer"
-              >
-                {availableModels.map((m) => (
-                  <option key={m.id} value={m.id} className="bg-background text-foreground">
-                    {m.displayName ?? m.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="absolute right-2 w-3 h-3 text-muted-foreground pointer-events-none" />
+            <div className="relative flex items-center gap-2 px-3 py-1.5 rounded-xl">
+              <Cpu className="w-4 h-4 text-primary shrink-0" />
+              <Select value={selectedModelId} onValueChange={handleModelChange}>
+                <SelectTrigger className="border-0 bg-transparent shadow-none focus-visible:ring-0 focus-visible:border-0 px-0 h-auto text-xs font-bold gap-1 hover:bg-transparent">
+                  <SelectValue placeholder="选择模型" />
+                </SelectTrigger>
+                <SelectContent position="popper" side="bottom" sideOffset={6} align="start" avoidCollisions={false}>
+                  {availableModels.map((m) => (
+                    <SelectItem key={m.id} value={m.id} className="focus:bg-primary focus:text-primary-foreground">
+                      {m.displayName ?? m.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
@@ -726,7 +804,7 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
       {panelOpen && (
         <>
         <ResizeHandle onMouseDown={workPanel.onMouseDown} />
-        <aside style={{ width: workPanel.width }} className="shrink-0 glass h-full flex flex-col">
+        <aside style={{ width: workPanel.width }} className="shrink-0 glass h-full flex flex-col rounded-3xl overflow-hidden">
           <div className="px-5 py-4 flex items-center justify-between border-b border-white/10 shrink-0">
             <div className="flex items-center gap-2">
               <Activity className="w-4 h-4 text-primary" />

@@ -100,8 +100,15 @@
   * {
     @apply border-border;
   }
+  /* 高度链：html → body → #root 全部 height:100%/width:100%。
+     不用 dvh/dvw——macOS WKWebView（Tauri 用的内核）下 100dvh/100dvw 在窗口 resize 后不会重算，
+     会卡在初始视口尺寸，导致窗口变大后右下角露白。百分比高度逐级解析到视口，resize 时可靠重算。 */
+  html,
+  #root {
+    @apply h-full w-full;
+  }
   body {
-    @apply bg-background text-foreground antialiased overflow-hidden h-screen w-screen;
+    @apply bg-background text-foreground antialiased overflow-hidden h-full w-full;
     background-image:
       radial-gradient(circle at top right, oklch(0.55 0.22 260 / 0.04) 0%, transparent 40%),
       radial-gradient(circle at bottom left, oklch(0.72 0.2 45 / 0.04) 0%, transparent 40%);
@@ -158,4 +165,13 @@
   background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
   background-size: 200% 100%;
   animation: shimmer 3s infinite linear;
+}
+
+/* 隐藏滚动条但保留滚动能力（鼠标滚轮/触摸板 native 支持照常工作） */
+.scrollbar-none {
+  scrollbar-width: none;          /* Firefox */
+  -ms-overflow-style: none;       /* IE/Edge legacy */
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;                  /* Chrome/Safari/Tauri WebView */
 }

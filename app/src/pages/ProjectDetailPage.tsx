@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   Dialog,
   DialogContent,
@@ -395,6 +396,7 @@ export interface ProjectDetailPageProps {
 
 export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps) {
   const { t } = useTranslation();
+  const { confirm } = useConfirm();
   const [project, setProject] = useState<Project | null>(null);
   const [stages, setStages] = useState<ProjectStage[]>([]);
   const [models, setModels] = useState<Model[]>([]);
@@ -465,8 +467,14 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
   }
 
   async function deleteCheckpoint(id: string) {
-    if (!confirm(t("projectDetail.deleteCheckpoint"))) return;
+    if (!(await confirm({ description: t("projectDetail.deleteCheckpoint"), destructive: true }))) return;
     await dbCheckpoints.delete(id);
+    await load();
+  }
+
+  async function deleteMemory(id: string) {
+    if (!(await confirm({ description: t("projectDetail.deleteMemory"), destructive: true }))) return;
+    await dbMemories.delete(id);
     await load();
   }
 
@@ -486,8 +494,8 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
   };
 
   return (
-    <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
-      <div className="max-w-6xl mx-auto space-y-12 pb-20">
+    <div className="h-full w-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
+      <div className="space-y-12 pb-20">
         {/* Header Section */}
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-8 animate-in fade-in slide-in-from-top-4 duration-700">
           <div className="space-y-4 flex-1">
@@ -680,7 +688,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                           )}>
                              {memoryKindLabel(m.kind, t)}
                           </div>
-                          <button onClick={() => dbMemories.delete(m.id).then(load)} className="opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => void deleteMemory(m.id)} className="opacity-0 group-hover:opacity-100 transition-opacity">
                             <XCircle className="w-3 h-3 text-red-500/50 hover:text-red-500" />
                           </button>
                        </div>

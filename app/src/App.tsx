@@ -1,5 +1,6 @@
 // Cosmgrid-Agent 主入口
-// v0.7.2: 彻底修复响应式布局冲突，回归稳定的 Flex 布局
+// 布局：根容器用 h-full/w-full，依赖 index.css 建立的 html→body→#root height:100% 链。
+// 不用 dvh/dvw——WKWebView(Tauri 内核)下动态视口单位 resize 后不重算，会导致窗口变大露白。
 import { useState, useEffect } from "react";
 import { AlertTriangle, KeyRound, MessageSquare, LayoutTemplate, Coins, FolderKanban, X, Settings, BarChart3, Swords } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -100,7 +101,7 @@ function App() {
 
   if (dbError) {
     return (
-      <div className="flex h-screen items-center justify-center bg-background p-6">
+      <div className="flex h-full w-full items-center justify-center bg-background p-6">
         <div className="glass border border-red-500/30 rounded-3xl p-8 max-w-lg w-full space-y-4 text-center shadow-xl">
           <AlertTriangle className="w-10 h-10 text-red-500 mx-auto" />
           <h1 className="text-lg font-bold">{t("common.dbErrorTitle")}</h1>
@@ -116,7 +117,7 @@ function App() {
 
   if (!dbReady) {
     return (
-      <div className="flex h-screen items-center justify-center bg-background">
+      <div className="flex h-full w-full items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
           <div className="logo-wrap w-20 h-20 animate-pulse">
             <img src={cosmgridLogo} className="logo-base" alt="CosmGrid" />
@@ -128,7 +129,7 @@ function App() {
   }
 
   return (
-    <div className="flex h-screen bg-background text-foreground overflow-hidden p-3">
+    <div className="flex h-full w-full bg-background text-foreground overflow-hidden p-3">
       <OnboardingModal
         providerCount={providerCount}
         onNavigate={(p) => setPage(p)}
@@ -148,7 +149,7 @@ function App() {
           </div>
         </div>
 
-        <nav className="flex flex-col gap-1">
+        <nav className="flex-1 min-h-0 flex flex-col gap-1 overflow-y-auto scrollbar-none">
           {NAV_ITEMS.map((item) => (
             <button
               key={item.key}
@@ -211,28 +212,28 @@ function App() {
         )}
 
         <main className="flex-1 overflow-hidden">
-          <div className="h-full" style={{ display: page === "chat" ? "block" : "none" }}>
+          <div className="h-full w-full" style={{ display: page === "chat" ? "block" : "none" }}>
             <ChatPage onOpenDebate={(topic) => { setDebateSeed(topic); setPage("debate"); }} />
           </div>
-          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "providers" ? "block" : "none" }}>
+          <div className="h-full w-full rounded-3xl overflow-hidden" style={{ display: page === "providers" ? "block" : "none" }}>
             <ProvidersPage />
           </div>
-          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "templates" ? "block" : "none" }}>
+          <div className="h-full w-full rounded-3xl overflow-hidden" style={{ display: page === "templates" ? "block" : "none" }}>
             <TemplatesPage />
           </div>
-          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "tokenPlans" ? "block" : "none" }}>
+          <div className="h-full w-full rounded-3xl overflow-hidden" style={{ display: page === "tokenPlans" ? "block" : "none" }}>
             <TokenPlansPage />
           </div>
-          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "debate" ? "block" : "none" }}>
+          <div className="h-full w-full rounded-3xl overflow-hidden" style={{ display: page === "debate" ? "block" : "none" }}>
             <DebatePage initialTopic={debateSeed} />
           </div>
-          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "stats" ? "block" : "none" }}>
+          <div className="h-full w-full rounded-3xl overflow-hidden" style={{ display: page === "stats" ? "block" : "none" }}>
             <StatsPage />
           </div>
-          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "settings" ? "block" : "none" }}>
+          <div className="h-full w-full rounded-3xl overflow-hidden" style={{ display: page === "settings" ? "block" : "none" }}>
             <SettingsPage />
           </div>
-          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "projects" ? "block" : "none" }}>
+          <div className="h-full w-full rounded-3xl overflow-hidden" style={{ display: page === "projects" ? "block" : "none" }}>
             {openProjectId ? (
               <ProjectDetailPage projectId={openProjectId} onBack={() => setOpenProjectId(null)} />
             ) : (

@@ -35,6 +35,7 @@ import {
   type Project,
   type ProjectTemplate,
 } from "@/lib/db";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 const STATUS_KEYS = ["pending", "active", "paused", "completed", "failed"] as const;
 const STATUS_COLORS: Record<typeof STATUS_KEYS[number], string> = {
@@ -56,6 +57,7 @@ export interface ProjectsPageProps {
 
 export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
   const { t, i18n } = useTranslation();
+  const { confirm } = useConfirm();
   const [items, setItems] = useState<Project[]>([]);
   const [templates, setTemplates] = useState<ProjectTemplate[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -110,7 +112,7 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
   }
 
   async function deleteProject(id: string) {
-    if (!confirm(t("projects.deleteConfirm"))) return;
+    if (!(await confirm({ description: t("projects.deleteConfirm"), destructive: true }))) return;
     await dbProjects.delete(id);
     await load();
   }
@@ -128,8 +130,8 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
-      <div className="max-w-6xl mx-auto space-y-10">
+    <div className="h-full w-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
+      <div className="space-y-10">
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-6">
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-primary">

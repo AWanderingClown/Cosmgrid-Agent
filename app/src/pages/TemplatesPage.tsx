@@ -142,8 +142,8 @@ export function TemplatesPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
-      <div className="max-w-6xl mx-auto space-y-10 pb-20">
+    <div className="h-full w-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
+      <div className="space-y-10 pb-20">
         <header className="space-y-3 border-l-4 border-primary pl-6 py-2">
           <div className="flex items-center gap-2 text-primary font-bold">
             <Settings2 className="w-5 h-5" />

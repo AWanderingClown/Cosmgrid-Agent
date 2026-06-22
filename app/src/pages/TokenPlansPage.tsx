@@ -27,6 +27,7 @@ import {
   type TokenPlan,
   type Provider,
 } from "@/lib/db";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 
 const PLAN_TYPE_KEYS = ["monthly", "usage", "message_count", "token_pack", "time_window", "unknown"] as const;
@@ -42,6 +43,7 @@ function statusOf(p: TokenPlan, t: (k: string) => string): { label: string; colo
 
 export function TokenPlansPage() {
   const { t } = useTranslation();
+  const { confirm } = useConfirm();
   const [plans, setPlans] = useState<TokenPlan[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -86,7 +88,7 @@ export function TokenPlansPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm(t("tokenPlans.deleteConfirm"))) return;
+    if (!(await confirm({ description: t("tokenPlans.deleteConfirm"), destructive: true }))) return;
     await dbTokenPlans.delete(id);
     await load();
   }
@@ -109,8 +111,8 @@ export function TokenPlansPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
-      <div className="max-w-6xl mx-auto space-y-8">
+    <div className="h-full w-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
+      <div className="space-y-8">
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-primary">

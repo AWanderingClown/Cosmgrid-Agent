@@ -2,6 +2,9 @@
   "common": {
     "cancel": "取消",
     "confirm": "确认",
+    "confirmTitle": "确认操作",
+    "noticeTitle": "提示",
+    "ok": "好的",
     "delete": "删除",
     "edit": "编辑",
     "save": "保存",
@@ -47,6 +50,8 @@
     "userLabel": "授权用户",
     "assistantLabel": "CosmGrid 助手",
     "newChat": "新对话",
+    "untitledChat": "未命名对话",
+    "conversations": "对话记录",
     "deleteConvConfirm": "删除这个对话？此操作不可撤销。",
     "loadError": "加载失败",
     "noCredential": "未找到 API 凭证",
@@ -508,6 +513,7 @@
       "failed": "系统故障"
     },
     "deleteCheckpoint": "删除这个检查点？关联的接力包也会一起删。",
+    "deleteMemory": "删除这条记忆？此操作不可撤销。",
     "systemModel": "System Model",
     "startSequence": "Start Sequence",
     "closeLogs": "Close Logs",

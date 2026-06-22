@@ -35,8 +35,8 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
-      <div className="max-w-4xl mx-auto space-y-10 pb-20">
+    <div className="h-full w-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
+      <div className="space-y-10 pb-20">
         <header className="space-y-3 border-l-4 border-primary pl-6 py-2">
           <div className="flex items-center gap-2 text-primary font-bold">
             <Settings className="w-5 h-5" />
@@ -111,7 +111,7 @@ export function SettingsPage() {
           {/* 智能路由 v2 */}
           <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-8 shadow-xl">
             <div className="flex items-center gap-3 pb-4 border-b border-white/10">
-              <Zap className="w-5 h-5 text-amber-500" />
+              <Zap className="w-5 h-5 text-primary" />
               <h2 className="text-xl font-bold dark:text-white">{t("settings.smartRouting.title")}</h2>
             </div>
             <div className="flex items-center justify-between gap-4 p-5 bg-white/5 rounded-2xl border border-white/5">
@@ -125,7 +125,7 @@ export function SettingsPage() {
                 onClick={() => setSmartRouting(!smartRouting)}
                 className={cn(
                   "relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors duration-300",
-                  smartRouting ? "bg-amber-500" : "bg-white/15"
+                  smartRouting ? "bg-primary" : "bg-white/15"
                 )}
               >
                 <span
@@ -161,7 +161,7 @@ export function SettingsPage() {
                   <div className="text-sm font-bold">{t("settings.security.apiKey.title")}</div>
                   <p className="text-xs text-muted-foreground">{t("settings.security.apiKey.desc")}</p>
                 </div>
-                <Badge className="bg-amber-500/20 text-amber-600 dark:text-amber-500 border-none px-3 py-1 font-bold whitespace-nowrap">{t("settings.security.encrypted")}</Badge>
+                <Badge className="bg-primary/20 text-primary dark:text-primary border-none px-3 py-1 font-bold whitespace-nowrap">{t("settings.security.encrypted")}</Badge>
               </div>
             </div>
           </Card>

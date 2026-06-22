@@ -59,7 +59,9 @@ interface ResizeHandleProps {
   className?: string;
 }
 
-/** 可拖拽的竖向分隔条：一条灰线 + 加宽命中区 */
+/** 可拖拽的竖向分隔条：默认就有可见细线（浅色浅灰/深色白），hover 加深并显示中央把手圆点。
+ *  浅色 = zinc-300（≈ oklch 12% 黑），深色 = white/15（≈ oklch 12% 白）—— 符合 UI 文档 §5 "边框保持 10% 极低可见度"。
+ */
 export function ResizeHandle({ onMouseDown, className }: ResizeHandleProps) {
   return (
     <div
@@ -67,12 +69,14 @@ export function ResizeHandle({ onMouseDown, className }: ResizeHandleProps) {
       aria-orientation="vertical"
       onMouseDown={onMouseDown}
       className={cn(
-        "group relative w-2.5 shrink-0 cursor-col-resize flex items-center justify-center",
+        "group relative w-3 shrink-0 cursor-col-resize flex items-center justify-center",
         className,
       )}
     >
-      {/* 默认完全透明（板块之间是留白，不是分割线）；鼠标移上去浮现一个淡淡的小竖条，提示这里可拖 */}
-      <div className="w-1 h-12 rounded-full bg-muted-foreground/0 group-hover:bg-muted-foreground/25 transition-colors" />
+      {/* 默认可见细线：浅色 zinc-300 浅灰、深色 white/15；hover 加深 */}
+      <div className="absolute inset-y-0 w-px bg-zinc-300 dark:bg-white/15 group-hover:bg-zinc-400 dark:group-hover:bg-white/30 transition-colors" />
+      {/* hover 时中央显示的把手圆点（明确告诉用户"这里能拖"） */}
+      <div className="relative w-1 h-12 rounded-full bg-zinc-500 dark:bg-white/50 opacity-0 group-hover:opacity-100 transition-opacity" />
     </div>
   );
 }
