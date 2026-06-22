@@ -19,6 +19,7 @@ import { routeMessage } from "@/lib/llm/smart-router";
 import { isSmartRoutingEnabled } from "@/lib/app-settings";
 import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
 import { compressHistory, type ChatMsg } from "@/lib/llm/context-compressor";
+import { classifyLlmError } from "@/lib/llm/error-classifier";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 
 interface ChatMessage {
@@ -345,7 +346,7 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
       // 不丢已经流式出来的半个回答（停止/中断都保留并落库）
       persistAssistant(fullContent, model.id);
       if ((err as Error).name === "AbortError") return;
-      setStreamError(err instanceof Error ? err.message : t("chat.requestInterrupted"));
+      setStreamError(classifyLlmError(err, t).userMessage);
       // 不再删用户消息（已落库）；只移除「空的」助手占位，保留有内容的半个回答
       setMessages((prev) => prev.filter((m) => m.id !== assistantId || m.content !== ""));
     } finally {

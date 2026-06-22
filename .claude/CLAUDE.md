@@ -88,11 +88,11 @@ v0.1/v0.2 用的「Prisma + 内嵌 Hono(Node) server」有**打包死局**：Pri
 
 **package.json 起步**：直接抄 CC Switch 的依赖列表（路径 `/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/技术参考/cc-switch-main/package.json`）
 
-## 数据表（v0.1 起 14 张，随 v0.6-v0.9 增至 **20 张**；建表 DDL 全在 [db.ts](app/src/lib/db.ts) `initSchema()`）
+## 数据表（v0.1 起 14 张，随 v0.6-v0.9 增至 20 张；2026-06-22 删死表 conversation_model_snapshots 后 **19 张**；建表 DDL 全在 [db.ts](app/src/lib/db.ts) `initSchema()`）
 
 **资源层（4）**：providers / api_credentials / token_plans / models
 **模板层（2）**：project_templates / project_template_roles
-**任务层（5）**：projects / project_stages / conversations / conversation_model_snapshots / messages
+**任务层（4）**：projects / project_stages / conversations / messages（~~conversation_model_snapshots 死表已删~~）
 **连续性层（2）**：checkpoints / handoff_packets（注意：字段是 `projectId`，不是 `taskId`）
 **统计层（1）**：usage_events（字段也是 `projectId`）
 **v0.6+ 新增（6）**：project_memories（长期记忆/RAG）/ model_performance_stats（SmartRouter 数据源）/ semantic_cache（语义缓存）/ debate_sessions（多模型对弈）/ tool_executions（工具执行审计）/ workspace_configs（工作区配置）

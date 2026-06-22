@@ -11,6 +11,7 @@ const BUILT_IN_TEMPLATE_NAME_TO_KEY: Record<string, "fullstack_web" | "data_scie
 ) as Record<string, "fullstack_web" | "data_science" | "mobile_app" | "small_script">;
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -59,6 +60,7 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
   const [templates, setTemplates] = useState<ProjectTemplate[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [step, setStep] = useState<1 | 2>(1);
   const [name, setName] = useState("");
@@ -67,9 +69,14 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
   const [templateId, setTemplateId] = useState<string>("");
 
   async function load() {
-    const [p, tpls] = await Promise.all([dbProjects.list(), dbTemplates.list()]);
-    setItems(p);
-    setTemplates(tpls);
+    try {
+      const [p, tpls] = await Promise.all([dbProjects.list(), dbTemplates.list()]);
+      setItems(p);
+      setTemplates(tpls);
+      setLoadError(null);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : t("common.error"));
+    }
   }
 
   useEffect(() => {
@@ -109,6 +116,16 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
   }
 
   const selectedTemplate = templates.find((tpl) => tpl.id === templateId) ?? null;
+
+  if (loadError) {
+    return (
+      <div className="flex h-full items-center justify-center p-12">
+        <Alert variant="destructive" className="max-w-md bg-red-500/10 border-red-500/20 backdrop-blur-xl">
+          <AlertDescription>{loadError}</AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Plus, Coins, Trash2, Gauge, Activity, Calendar, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Dialog,
   DialogContent,
@@ -44,6 +45,7 @@ export function TokenPlansPage() {
   const [plans, setPlans] = useState<TokenPlan[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState({
     providerId: "",
     name: "",
@@ -54,9 +56,14 @@ export function TokenPlansPage() {
   });
 
   async function load() {
-    const [p, pr] = await Promise.all([dbTokenPlans.list(), dbProviders.list()]);
-    setPlans(p);
-    setProviders(pr);
+    try {
+      const [p, pr] = await Promise.all([dbTokenPlans.list(), dbProviders.list()]);
+      setPlans(p);
+      setProviders(pr);
+      setLoadError(null);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : t("common.error"));
+    }
   }
 
   useEffect(() => {
@@ -89,6 +96,16 @@ export function TokenPlansPage() {
     if (Number.isNaN(usedQuota)) return;
     await dbTokenPlans.update(p.id, { usedQuota });
     await load();
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex h-full items-center justify-center p-12">
+        <Alert variant="destructive" className="max-w-md bg-red-500/10 border-red-500/20 backdrop-blur-xl">
+          <AlertDescription>{loadError}</AlertDescription>
+        </Alert>
+      </div>
+    );
   }
 
   return (
