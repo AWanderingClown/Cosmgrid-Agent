@@ -883,6 +883,20 @@ export const conversations = {
     const r = rows[0]!;
     return { id: r.id, projectId: r.project_id, title: r.title, defaultModelId: r.default_model_id, createdAt: r.created_at, updatedAt: r.updated_at };
   },
+
+  // 主对话（无项目归属）的单例会话：取最近一条 project_id IS NULL 的会话，没有则建一条。
+  // 让 ChatPage 主聊天像项目阶段对话一样落库，关 app 不丢上下文（产品真北：上下文是用户的资产）。
+  async getOrCreateMainChat(defaultModelId?: string | null): Promise<Conversation> {
+    const db = await getDb();
+    const rows = await db.select<ConversationRow[]>(
+      "SELECT * FROM conversations WHERE project_id IS NULL ORDER BY updated_at DESC LIMIT 1"
+    );
+    const r = rows[0];
+    if (r) {
+      return { id: r.id, projectId: r.project_id, title: r.title, defaultModelId: r.default_model_id, createdAt: r.created_at, updatedAt: r.updated_at };
+    }
+    return this.create({ title: "Main Chat", defaultModelId: defaultModelId ?? null, projectId: null });
+  },
 };
 
 export const messages = {

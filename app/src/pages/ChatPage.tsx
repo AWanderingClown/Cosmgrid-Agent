@@ -7,7 +7,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { usePanelResize, ResizeHandle } from "@/components/ui/resize-handle";
 import { cn } from "@/lib/utils";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
-import { models as dbModels, apiCredentials as dbCredentials } from "@/lib/db";
+import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages } from "@/lib/db";
 import { getApiKey } from "@/lib/keystore";
 import { streamWithFallback, toModelEndpoint, type StreamUsage } from "@/lib/llm/chat-fallback";
 import { pickBestModelForRole, rankFallbackModels, scoreModelForRole } from "@/lib/llm/model-capabilities";
@@ -105,6 +105,7 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
   const [availableModels, setAvailableModels] = useState<ModelListItem[]>([]);
   const [credentials, setCredentials] = useState<CredentialListItem[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>("");
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
@@ -157,6 +158,24 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
         setAvailableModels(ml);
         setCredentials(cl);
         if (ml.length > 0) setSelectedModelId(ml[0]!.id);
+
+        // 主对话持久化：恢复上次会话历史（关 app 不丢上下文）
+        const conv = await dbConversations.getOrCreateMainChat(ml[0]?.id ?? null);
+        setConversationId(conv.id);
+        const hist = await dbMessages.listByConversation(conv.id);
+        if (hist.length > 0) {
+          setMessages(
+            hist
+              .filter((m) => m.role === "user" || m.role === "assistant")
+              .map((m) => ({
+                id: m.id,
+                role: m.role as "user" | "assistant",
+                content: m.content,
+                modelLabel: (m.modelId ? ml.find((x) => x.id === m.modelId)?.displayName : undefined) ?? undefined,
+                usage: m.outputTokens > 0 ? { inputTokens: m.inputTokens, outputTokens: m.outputTokens } : undefined,
+              })),
+          );
+        }
         setLoadError(null);
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : t("chat.loadError"));
@@ -185,7 +204,35 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
       return;
     }
 
-    const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content: text };
+    // 主对话落库：确保会话存在，用户消息先写库（关 app/崩溃也不丢）
+    let convId = conversationId;
+    if (!convId) {
+      try {
+        const c = await dbConversations.getOrCreateMainChat(model.id);
+        convId = c.id;
+        setConversationId(convId);
+      } catch {
+        // 落库不可用时降级为纯内存，不阻断对话
+      }
+    }
+    let userId: string = crypto.randomUUID();
+    if (convId) {
+      try {
+        userId = (await dbMessages.create({ conversationId: convId, role: "user", content: text })).id;
+      } catch {
+        // 写库失败降级用内存 id，不阻断
+      }
+    }
+
+    // 把助手最终/部分回答落库（成功、缓存命中、停止、中断都不丢）
+    const persistAssistant = (content: string, modelId: string | null, usage?: { inputTokens: number; outputTokens: number }) => {
+      if (!convId || !content) return;
+      void dbMessages
+        .create({ conversationId: convId, role: "assistant", content, modelId, inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0 })
+        .catch(() => {});
+    };
+
+    const userMsg: ChatMessage = { id: userId, role: "user", content: text };
     const assistantId = crypto.randomUUID();
     const assistantMsg: ChatMessage = { id: assistantId, role: "assistant", content: "", modelLabel: model.displayName ?? model.name };
 
@@ -207,6 +254,7 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
           setMessages((prev) =>
             prev.map((m) => (m.id === assistantId ? { ...m, content: hit.responseText } : m)),
           );
+          persistAssistant(hit.responseText, model.id);
           setCacheNotice(t("chat.cacheHit", { days }));
           setIsStreaming(false);
           return;
@@ -283,6 +331,7 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
             setMessages((prev) =>
               prev.map((m) => (m.id === assistantId ? { ...m, usage: u, modelLabel: usedModel.displayLabel ?? usedModel.modelName } : m)),
             );
+            persistAssistant(fullContent, usedModel.modelId ?? null, u);
           },
         },
         // role = 这条消息的难度桶，落 UsageEvent 供 v0.9 SmartRouter 按 taskType 滚动统计
@@ -293,9 +342,12 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
         void writeCache(text, fullContent, result.usedModelId, taskRole).catch(() => {});
       }
     } catch (err) {
+      // 不丢已经流式出来的半个回答（停止/中断都保留并落库）
+      persistAssistant(fullContent, model.id);
       if ((err as Error).name === "AbortError") return;
       setStreamError(err instanceof Error ? err.message : t("chat.requestInterrupted"));
-      setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+      // 不再删用户消息（已落库）；只移除「空的」助手占位，保留有内容的半个回答
+      setMessages((prev) => prev.filter((m) => m.id !== assistantId || m.content !== ""));
     } finally {
       setIsStreaming(false);
       abortRef.current = null;
