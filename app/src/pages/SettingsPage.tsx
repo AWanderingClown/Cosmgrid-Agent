@@ -4,7 +4,6 @@ import { useTranslation } from "react-i18next";
 import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useTheme } from "@/lib/theme";
@@ -148,14 +147,13 @@ export function SettingsPage() {
 
             <div className="space-y-6">
               <div className="flex items-center justify-between gap-4 p-5 bg-white/5 rounded-2xl border border-white/5">
-                <div className="space-y-1">
-                  <div className="text-sm font-bold">{t("settings.security.localDb.title")}</div>
-                  <p className="text-xs text-muted-foreground">{t("settings.security.localDb.desc")}</p>
+                <div className="space-y-1 flex items-center gap-2">
+                  <Database className="w-4 h-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <div className="text-sm font-bold">{t("settings.security.localDb.title")}</div>
+                    <p className="text-xs text-muted-foreground">{t("settings.security.localDb.desc")}</p>
+                  </div>
                 </div>
-                <Button variant="outline" size="sm" className="rounded-xl border-white/10 h-10 px-4">
-                  <Database className="w-4 h-4 mr-2" />
-                  {t("settings.security.manageDb")}
-                </Button>
               </div>
 
               <div className="flex items-center justify-between gap-4 p-5 bg-white/5 rounded-2xl border border-white/5">
@@ -163,7 +161,7 @@ export function SettingsPage() {
                   <div className="text-sm font-bold">{t("settings.security.apiKey.title")}</div>
                   <p className="text-xs text-muted-foreground">{t("settings.security.apiKey.desc")}</p>
                 </div>
-                <Badge className="bg-emerald-500/20 text-emerald-500 border-none px-3 py-1 font-bold">{t("settings.security.encrypted")}</Badge>
+                <Badge className="bg-amber-500/20 text-amber-600 dark:text-amber-500 border-none px-3 py-1 font-bold whitespace-nowrap">{t("settings.security.encrypted")}</Badge>
               </div>
             </div>
           </Card>

@@ -197,20 +197,6 @@ export async function initSchema(): Promise<void> {
   `);
 
   await db.execute(`
-    CREATE TABLE IF NOT EXISTS conversation_model_snapshots (
-      id TEXT PRIMARY KEY,
-      conversation_id TEXT NOT NULL,
-      model_id TEXT NOT NULL,
-      switched_at TEXT NOT NULL,
-      message_count INTEGER NOT NULL DEFAULT 0,
-      total_input_tokens INTEGER NOT NULL DEFAULT 0,
-      total_output_tokens INTEGER NOT NULL DEFAULT 0,
-      note TEXT,
-      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-    )
-  `);
-
-  await db.execute(`
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL,
@@ -283,6 +269,15 @@ export async function initSchema(): Promise<void> {
   // 迁移：给旧库的 usage_events 补 outcome 列（改进-1 Step B 隐式信号）。
   // 新库 CREATE 时已含；旧库 IF NOT EXISTS 不改已存在表，故需幂等 ALTER。
   await addColumnIfMissing(db, "usage_events", "outcome", "TEXT");
+
+  // 索引：① setOutcomeForLatest 按 model_id + outcome IS NULL 取最近一条（隐式反馈热路径）；
+  //        ② usageEvents.list 按 created_at 过滤/排序（统计 + SmartRouter 数据源）。
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_usage_events_model_outcome ON usage_events(model_id, created_at DESC) WHERE outcome IS NULL"
+  );
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_usage_events_created ON usage_events(created_at)"
+  );
 
   // v0.6 项目级长期记忆（4.11 记忆分层 + 5.6 RAG）
   // 每条记忆 = 一段结构化笔记（决策 / 经验 / 上下文 / 失败教训），
@@ -882,6 +877,20 @@ export const conversations = {
     const rows = await db.select<ConversationRow[]>("SELECT * FROM conversations WHERE id = $1", [id]);
     const r = rows[0]!;
     return { id: r.id, projectId: r.project_id, title: r.title, defaultModelId: r.default_model_id, createdAt: r.created_at, updatedAt: r.updated_at };
+  },
+
+  // 主对话（无项目归属）的单例会话：取最近一条 project_id IS NULL 的会话，没有则建一条。
+  // 让 ChatPage 主聊天像项目阶段对话一样落库，关 app 不丢上下文（产品真北：上下文是用户的资产）。
+  async getOrCreateMainChat(defaultModelId?: string | null): Promise<Conversation> {
+    const db = await getDb();
+    const rows = await db.select<ConversationRow[]>(
+      "SELECT * FROM conversations WHERE project_id IS NULL ORDER BY updated_at DESC LIMIT 1"
+    );
+    const r = rows[0];
+    if (r) {
+      return { id: r.id, projectId: r.project_id, title: r.title, defaultModelId: r.default_model_id, createdAt: r.created_at, updatedAt: r.updated_at };
+    }
+    return this.create({ title: "Main Chat", defaultModelId: defaultModelId ?? null, projectId: null });
   },
 };
 

@@ -10,7 +10,10 @@
     "error": "Error",
     "success": "Success",
     "optional": "(optional)",
-    "required": "*"
+    "required": "*",
+    "dbErrorTitle": "Failed to open the local database",
+    "dbErrorDesc": "The app could not initialize its database (it may be locked by a backup, the disk is full, or the data directory is not writable). Try restarting; if it persists, check the data directory.",
+    "dbErrorRetry": "Restart"
   },
   "errorClassifier": {
     "auth_invalid": "API Key is invalid or expired — please check the Providers page",
@@ -411,9 +414,9 @@
       "manageDb": "Manage Database",
       "apiKey": {
         "title": "API Key Storage",
-        "desc": "Keys are encrypted via the OS keychain, with security backed by the underlying OS."
+        "desc": "Keys are stored in a separate local file (cosmgrid-keys.json), kept out of the database. Note: this file is plaintext — avoid using on shared or untrusted machines."
       },
-      "encrypted": "Encrypted"
+      "encrypted": "Local file"
     },
     "about": {
       "title": "About CosmGrid",

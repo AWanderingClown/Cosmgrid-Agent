@@ -49,7 +49,7 @@ function App() {
   const [openProjectId, setOpenProjectId] = useState<string | null>(null);
   const [debateSeed, setDebateSeed] = useState<string | undefined>(undefined);
   const [dbReady, setDbReady] = useState(false);
-  const [, setDbError] = useState<string | null>(null);
+  const [dbError, setDbError] = useState<string | null>(null);
   const [plans, setPlans] = useState<TokenPlan[]>([]);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   const [providerCount, setProviderCount] = useState(0);
@@ -97,6 +97,22 @@ function App() {
     .map((p) => ({ plan: p, level: planUsageLevel(p) }))
     .filter((x) => x.level !== "ok")
     .filter((x) => !dismissedIds.has(x.plan.id));
+
+  if (dbError) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background p-6">
+        <div className="glass border border-red-500/30 rounded-3xl p-8 max-w-lg w-full space-y-4 text-center shadow-xl">
+          <AlertTriangle className="w-10 h-10 text-red-500 mx-auto" />
+          <h1 className="text-lg font-bold">{t("common.dbErrorTitle")}</h1>
+          <p className="text-sm text-muted-foreground">{t("common.dbErrorDesc")}</p>
+          <pre className="text-xs text-left bg-black/20 rounded-xl p-3 overflow-auto max-h-40 whitespace-pre-wrap break-words text-red-400">{dbError}</pre>
+          <Button onClick={() => window.location.reload()} className="rounded-xl">
+            {t("common.dbErrorRetry")}
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   if (!dbReady) {
     return (

@@ -68,6 +68,7 @@ import { getApiKey } from "@/lib/keystore";
 import { streamWithFallback, toModelEndpoint } from "@/lib/llm/chat-fallback";
 import { createDefaultToolRegistry, buildAiSdkTools, type ToolConfirmRequest } from "@/lib/llm/tools";
 import { generateCheckpointDraft } from "@/lib/llm/checkpoint-generator";
+import { classifyLlmError } from "@/lib/llm/error-classifier";
 import { getLanguageModel } from "@/lib/llm/provider-factory";
 import {
   projectMemories as dbMemories,
@@ -287,7 +288,7 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
       );
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
-      setStreamErr(err instanceof Error ? err.message : t("projectDetail.chat.streamFailed"));
+      setStreamErr(classifyLlmError(err, t).userMessage);
     } finally {
       setStreaming(false);
       abortRef.current = null;

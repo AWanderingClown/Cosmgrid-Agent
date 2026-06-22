@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { LayoutTemplate, Copy, Sparkles, ChevronRight, Settings2, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -36,12 +37,18 @@ export function TemplatesPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [roles, setRoles] = useState<ProjectTemplateRole[]>([]);
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   async function load() {
-    const [tpls, m] = await Promise.all([dbTemplates.list(), dbModels.listEnabled()]);
-    setTemplates(tpls);
-    setModels(m);
-    if (!selectedId && tpls.length > 0) setSelectedId(tpls[0]!.id);
+    try {
+      const [tpls, m] = await Promise.all([dbTemplates.list(), dbModels.listEnabled()]);
+      setTemplates(tpls);
+      setModels(m);
+      if (!selectedId && tpls.length > 0) setSelectedId(tpls[0]!.id);
+      setLoadError(null);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : t("common.error"));
+    }
   }
 
   useEffect(() => { void load(); }, []);
@@ -122,6 +129,16 @@ export function TemplatesPage() {
       await dbTemplateRoles.update(existing.id, { fallbackModelId: fallbackModelId || null });
       setRoles(await dbTemplateRoles.listByTemplate(selected.id));
     } finally { setSaving(false); }
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex h-full items-center justify-center p-12">
+        <Alert variant="destructive" className="max-w-md bg-red-500/10 border-red-500/20 backdrop-blur-xl">
+          <AlertDescription>{loadError}</AlertDescription>
+        </Alert>
+      </div>
+    );
   }
 
   return (

@@ -31,7 +31,7 @@
 
 ## 进度与当前任务
 
-> ⚠️ 进度以 git 提交历史为准（本段 2026-06-20 同步到 v0.6）。
+> ⚠️ 进度以 git 提交历史为准（本段 2026-06-22 同步到 v0.9 / v0.7.5 Stable）。
 
 - ✅ v0.1 数据底座
 - ✅ v0.2 多模型对话 + workRoles（API 接入页 + 对话页 + Vercel AI SDK）
@@ -43,13 +43,23 @@
   - ✅ v0.4.4 项目工作区端到端打通 + openai-compatible provider
 - ✅ v0.5 首次启动 4 步引导（OnboardingModal）+ 新建项目向导（2 步 + workspacePath）
 - ✅ v0.6 长期记忆 + RAG（项目级记忆 + 跨项目关键词检索）
-- ✅ UI 美化
+- ✅ v0.7 工具执行层 + CLI 引擎（吃订阅额度）
+  - ✅ 4a 只读工具：read / glob / grep / git-read（+ `path-safety` 路径白名单）
+  - ✅ 4b 写工具：write / edit / bash（+ `command-safety` 命令白名单 + 用户确认 + git 单文件快照回滚 + diagnostics 写后诊断）
+  - ✅ CLI 引擎：Rust `spawn_cli_stream` spawn 本机 claude/codex，受控 env 隔离（抹掉 `ANTHROPIC_*`/`CLAUDECODE` 等污染前缀），实测吃订阅 5 小时额度；abort → `kill_cli` 真 SIGKILL 子进程
+- ✅ v0.8 多模型对弈（`debate-engine`/`debate-runner`：出方案 / 反驳 / 裁判同台 + DebatePage + `debate-suggester` 在 ChatPage 检测复杂问题建议升级对弈）
+- ✅ v0.9 智能省 token
+  - ✅ SmartRouter v2：按真实表现评分路由 + 决策日志（评分门槛已从 30 样本死锁修为 1 + 贝叶斯收缩，见记忆 [[v0.9-stage7-smartrouter-spec]]）
+  - ✅ 语义缓存（`semantic-cache`，关键词哈希 embedding 占位，transformers.js 真 embedding 留 v0.9.1）+ 抽取式上下文压缩（`context-compressor`，零 LLM 成本）
+  - ✅ StatsPage 用量统计 + 隐式反馈学习 Step B（用户换更强模型 → 给上个模型记 `switched_up` 负反馈喂回评分）
+- ✅ v0.7.5 Stable UI 美化（当前 About 页版本号）
 
-> 注：此前本段标为 ⏳「留到 v0.4」的三项（模板回退链运行时触发 / 模型路由器 v1 / Token Plan 阈值提醒 UI）均已在 v0.4.1~v0.4.3 完成。
+### 🔜 下一步（待定，按「产品真北」+ 两份审查报告校准）
 
-### 🔜 下一步（待定，需按「产品真北」重新评估）
-
-产品定位已于 2026-06-20 重新对齐为「上下文是中心、模型是可热插拔的临时工」（见上方 🧭 产品真北）。主方案文档原计划的下一步是 **v0.7 桌面集成 + 工具执行层**，但当前应**先拿产品真北 + 4 个真实痛点回头校准路线图**，再定下一个版本做什么——不要默认照旧文档往下推。
+v0.7-v0.9 主线已落地。下一步不照旧路线图推，按 `项目文档/Cosmgrid-Agent-改进增强方案-2026-06-22.md`：
+- **第一梯队**：SmartRouter 去死锁（Step A 已做）→ Step B 隐式反馈（已做）；LSP 桥接进工具执行层；对弈自动建议
+- **明确不做**：bash sidecar / git worktree 隔离 / 技能市场（详见改进方案）
+- **已知安全债（2026-06-22 审查实测，按需修）**：① API Key 是 `plugin-store` 明文 JSON，但 Settings UI 谎称"keychain 加密"——文案必须改诚实或真接 keychain；② [App.tsx](app/src/App.tsx) `dbError` 被吞、永远渲染不出故障页；③ SettingsPage"管理数据库"是死按钮；④ 根目录 15 个 `vite_ssr_*.mjs` 调试垃圾待删
 
 ### ⚠️ 架构返工（v0.3，✅ 已完成，保留作技术坑记录）
 
@@ -58,13 +68,13 @@ v0.1/v0.2 用的「Prisma + 内嵌 Hono(Node) server」有**打包死局**：Pri
 返工方案（已用 `spike-tauri-sql/` 实测打包成 4.8MB dmg 并读写落盘通过）：
 - 数据库：Prisma → **`tauri-plugin-sql`**（底层 Rust sqlx，前端纯 TS，不写 Rust 业务逻辑）
 - 架构：去掉 Hono server（3001 端口），前端经插件直连 SQLite
-- API Key：明文传 + 假加密 → **系统 keychain**（tauri keychain 插件）
+- API Key：明文传 + 假加密 → **`@tauri-apps/plugin-store` 独立 JSON 文件**（不入 SQLite 明文）。⚠️ **当初计划的"系统 keychain"并未落地**：实际是 [keystore.ts](app/src/lib/keystore.ts) 写 `cosmgrid-keys.json`，文件本身仍是明文（落 OS app-data 目录）。要真 keychain 得换 `keyring` crate——见上方「已知安全债」。
 - 完成后**必须真跑 `pnpm tauri build` 验证产物可用**，不能只验 dev
 
 ### v0.3 验收标准
 - `tauri build` 产出可双击运行的桌面 App，数据库读写落盘
-- API Key 存在系统 keychain，不入库明文
-- tsc 通过、pnpm test 通过、覆盖率 ≥ 80%
+- API Key 不入 SQLite 明文（走 `plugin-store` 独立文件；⚠️ 非系统 keychain，文件仍明文，UI 文案需同步纠正）
+- tsc 通过、pnpm test 通过、覆盖率 ≥ 80%（✅ 2026-06-22 已达标：行 **89%** / 语句 87% / 分支 77% / 函数 87%，461 测试全过，四阈值全过。db.ts 补了 node:sqlite 真跑集成测试 [db.integration.test.ts](app/src/lib/__tests__/db.integration.test.ts)，从 34% 提到 88%）
 
 ## 技术栈（v0.1 必须用）
 
@@ -73,20 +83,21 @@ v0.1/v0.2 用的「Prisma + 内嵌 Hono(Node) server」有**打包死局**：Pri
 - **UI 库**：shadcn/ui + Tailwind
 - **数据库**：SQLite（本地）
 - **DB 访问**：`tauri-plugin-sql`（⚠️ 不用 Prisma，会打包死局；也不用 rusqlite 手写）
-- **API Key**：存系统 keychain（不入库明文）
+- **API Key**：`@tauri-apps/plugin-store` 独立 JSON 文件（不入 SQLite 明文）。⚠️ **不是系统 keychain**——store 文件本身明文，安全债已记录，勿再写"keychain"
 - **包管理**：pnpm（注意：pnpm 11 的 build 批准在 `pnpm-workspace.yaml` 的 `allowBuilds: esbuild: true`，否则 `tauri build` 卡在依赖检查）
 
 **package.json 起步**：直接抄 CC Switch 的依赖列表（路径 `/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/技术参考/cc-switch-main/package.json`）
 
-## 14 张数据表（按 5 层组织，资源层 → 模板层 → 任务层 → 连续性层 → 统计层）
+## 数据表（v0.1 起 14 张，随 v0.6-v0.9 增至 20 张；2026-06-22 删死表 conversation_model_snapshots 后 **19 张**；建表 DDL 全在 [db.ts](app/src/lib/db.ts) `initSchema()`）
 
-**资源层（4）**：Provider / ApiCredential / TokenPlan / Model
-**模板层（2）**：ProjectTemplate / ProjectTemplateRole
-**任务层（5）**：Project / ProjectStage / Conversation / ConversationModelSnapshot / Message
-**连续性层（2）**：Checkpoint / HandoffPacket（注意：字段是 `projectId`，不是 `taskId`）
-**统计层（1）**：UsageEvent（字段也是 `projectId`）
+**资源层（4）**：providers / api_credentials / token_plans / models
+**模板层（2）**：project_templates / project_template_roles
+**任务层（4）**：projects / project_stages / conversations / messages（~~conversation_model_snapshots 死表已删~~）
+**连续性层（2）**：checkpoints / handoff_packets（注意：字段是 `projectId`，不是 `taskId`）
+**统计层（1）**：usage_events（字段也是 `projectId`）
+**v0.6+ 新增（6）**：project_memories（长期记忆/RAG）/ model_performance_stats（SmartRouter 数据源）/ semantic_cache（语义缓存）/ debate_sessions（多模型对弈）/ tool_executions（工具执行审计）/ workspace_configs（工作区配置）
 
-完整字段定义见方案文档第 9 节。
+核心 14 张的完整字段定义见方案文档第 9 节；v0.6+ 6 张以 db.ts 的 DDL 为准。
 
 ## 借鉴项目（v0.1 主要）
 

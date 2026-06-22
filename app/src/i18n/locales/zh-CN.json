@@ -10,7 +10,10 @@
     "error": "错误",
     "success": "成功",
     "optional": "（可选）",
-    "required": "*"
+    "required": "*",
+    "dbErrorTitle": "本地数据库打开失败",
+    "dbErrorDesc": "应用无法初始化数据库（可能是文件被备份程序占用、磁盘已满，或数据目录不可写）。先尝试重启；若仍失败，请检查数据目录。",
+    "dbErrorRetry": "重启"
   },
   "errorClassifier": {
     "auth_invalid": "API Key 无效或已过期，请在 API 接入页检查",
@@ -411,9 +414,9 @@
       "manageDb": "管理数据库",
       "apiKey": {
         "title": "API 密钥存储",
-        "desc": "密钥通过操作系统的安全钥匙串进行加密存储，安全性由底层 OS 保障。"
+        "desc": "密钥存于本地独立文件（cosmgrid-keys.json），不写入数据库。注意：该文件为明文，请勿在共用或不可信的电脑上使用。"
       },
-      "encrypted": "加密存储中"
+      "encrypted": "本地明文文件"
     },
     "about": {
       "title": "关于 CosmGrid",
