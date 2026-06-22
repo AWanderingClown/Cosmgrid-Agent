@@ -46,6 +46,8 @@
   "chat": {
     "userLabel": "授权用户",
     "assistantLabel": "CosmGrid 助手",
+    "newChat": "新对话",
+    "deleteConvConfirm": "删除这个对话？此操作不可撤销。",
     "loadError": "加载失败",
     "noCredential": "未找到 API 凭证",
     "noApiKey": "API Key 缺失",

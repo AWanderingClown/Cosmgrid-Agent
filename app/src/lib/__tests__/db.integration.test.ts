@@ -88,6 +88,31 @@ describe("conversations + 主对话", () => {
     expect(a.id).toBe(b.id);
     expect(a.projectId).toBeNull();
   });
+
+  it("listMainChats 只列无项目会话 + rename/touch 排到最前 + delete 级联删消息", async () => {
+    const c1 = await db.conversations.create({ title: "会话1", projectId: null });
+    const c2 = await db.conversations.create({ title: "会话2", projectId: null });
+    // 带项目的会话不应出现在主对话列表
+    const proj = await db.projects.create({ name: "x" });
+    await db.conversations.create({ title: "项目会话", projectId: proj.id });
+
+    const mains = await db.conversations.listMainChats();
+    expect(mains.every((c) => c.projectId === null)).toBe(true);
+    expect(mains.some((c) => c.id === c1.id)).toBe(true);
+    expect(mains.some((c) => c.title === "项目会话")).toBe(false);
+
+    // rename 改标题；touch 不报错
+    await db.conversations.rename(c1.id, "会话1-改");
+    await db.conversations.touch(c1.id);
+    const afterRename = await db.conversations.listMainChats();
+    expect(afterRename.find((c) => c.id === c1.id)!.title).toBe("会话1-改");
+
+    // delete 级联：先放条消息，删会话后消息也没了
+    await db.messages.create({ conversationId: c2.id, role: "user", content: "hi" });
+    await db.conversations.delete(c2.id);
+    expect((await db.conversations.listMainChats()).some((c) => c.id === c2.id)).toBe(false);
+    expect(await db.messages.listByConversation(c2.id)).toHaveLength(0);
+  });
 });
 
 describe("messages", () => {

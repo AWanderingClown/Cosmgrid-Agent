@@ -46,6 +46,8 @@
   "chat": {
     "userLabel": "You",
     "assistantLabel": "CosmGrid Assistant",
+    "newChat": "New Chat",
+    "deleteConvConfirm": "Delete this conversation? This cannot be undone.",
     "loadError": "Failed to load",
     "noCredential": "API credential not found",
     "noApiKey": "API Key missing",

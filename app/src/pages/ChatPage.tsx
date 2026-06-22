@@ -1,13 +1,13 @@
 // ChatPage - 重构为 "Cosmic Cyber" 视觉风格
 import { memo, useEffect, useRef, useState } from "react";
-import { Bot, Send, Square, User, Zap, Sparkles, Cpu, ChevronDown, PanelRight, X, Activity, Swords } from "lucide-react";
+import { Bot, Send, Square, User, Zap, Sparkles, Cpu, ChevronDown, PanelRight, X, Activity, Swords, Plus, Trash2, MessageSquare } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { usePanelResize, ResizeHandle } from "@/components/ui/resize-handle";
 import { cn } from "@/lib/utils";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
-import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages } from "@/lib/db";
+import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, type Conversation, type DbMessage } from "@/lib/db";
 import { getApiKey } from "@/lib/keystore";
 import { streamWithFallback, toModelEndpoint, type StreamUsage } from "@/lib/llm/chat-fallback";
 import { pickBestModelForRole, rankFallbackModels, scoreModelForRole } from "@/lib/llm/model-capabilities";
@@ -37,6 +37,19 @@ interface ChatMessage {
 }
 
 type ChatUsage = StreamUsage;
+
+/** 把落库的消息映射回 UI 的 ChatMessage（恢复历史 / 切换会话复用） */
+function dbMessagesToChat(hist: DbMessage[], models: ModelListItem[]): ChatMessage[] {
+  return hist
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m) => ({
+      id: m.id,
+      role: m.role as "user" | "assistant",
+      content: m.content,
+      modelLabel: (m.modelId ? models.find((x) => x.id === m.modelId)?.displayName : undefined) ?? undefined,
+      usage: m.outputTokens > 0 ? { inputTokens: m.inputTokens, outputTokens: m.outputTokens } : undefined,
+    }));
+}
 
 const MessageItem = memo(function MessageItem({
   role,
@@ -107,6 +120,7 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
   const [credentials, setCredentials] = useState<CredentialListItem[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>("");
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversationList, setConversationList] = useState<Conversation[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
@@ -160,23 +174,17 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
         setCredentials(cl);
         if (ml.length > 0) setSelectedModelId(ml[0]!.id);
 
-        // 主对话持久化：恢复上次会话历史（关 app 不丢上下文）
-        const conv = await dbConversations.getOrCreateMainChat(ml[0]?.id ?? null);
-        setConversationId(conv.id);
-        const hist = await dbMessages.listByConversation(conv.id);
-        if (hist.length > 0) {
-          setMessages(
-            hist
-              .filter((m) => m.role === "user" || m.role === "assistant")
-              .map((m) => ({
-                id: m.id,
-                role: m.role as "user" | "assistant",
-                content: m.content,
-                modelLabel: (m.modelId ? ml.find((x) => x.id === m.modelId)?.displayName : undefined) ?? undefined,
-                usage: m.outputTokens > 0 ? { inputTokens: m.inputTokens, outputTokens: m.outputTokens } : undefined,
-              })),
-          );
+        // 主对话多会话：列出全部主对话，没有就建一条，恢复最近一条的历史（关 app 不丢上下文）
+        let list = await dbConversations.listMainChats();
+        if (list.length === 0) {
+          await dbConversations.getOrCreateMainChat(ml[0]?.id ?? null);
+          list = await dbConversations.listMainChats();
         }
+        setConversationList(list);
+        const active = list[0]!;
+        setConversationId(active.id);
+        const hist = await dbMessages.listByConversation(active.id);
+        setMessages(dbMessagesToChat(hist, ml));
         setLoadError(null);
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : t("chat.loadError"));
@@ -184,9 +192,70 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
     })();
   }, []);
 
+  async function handleNewChat() {
+    if (isStreaming) return;
+    try {
+      const conv = await dbConversations.create({ title: t("chat.newChat"), defaultModelId: selectedModelId || null, projectId: null });
+      setConversationList((prev) => [conv, ...prev]);
+      setConversationId(conv.id);
+      setMessages([]);
+      setStreamError(null);
+      setSwitchNotice(null);
+      setCacheNotice(null);
+    } catch {
+      // 建会话失败不阻断
+    }
+  }
+
+  async function switchConversation(id: string) {
+    if (id === conversationId || isStreaming) return;
+    setConversationId(id);
+    setStreamError(null);
+    setSwitchNotice(null);
+    setCacheNotice(null);
+    try {
+      const hist = await dbMessages.listByConversation(id);
+      setMessages(dbMessagesToChat(hist, availableModels));
+    } catch {
+      setMessages([]);
+    }
+  }
+
+  async function handleDeleteConversation(id: string) {
+    if (isStreaming) return;
+    if (!confirm(t("chat.deleteConvConfirm"))) return;
+    try {
+      await dbConversations.delete(id);
+    } catch {
+      // 删库失败也继续更新 UI
+    }
+    const remaining = conversationList.filter((c) => c.id !== id);
+    if (remaining.length === 0) {
+      const conv = await dbConversations.create({ title: t("chat.newChat"), defaultModelId: selectedModelId || null, projectId: null });
+      setConversationList([conv]);
+      setConversationId(conv.id);
+      setMessages([]);
+      return;
+    }
+    setConversationList(remaining);
+    if (id === conversationId) {
+      const next = remaining[0]!;
+      setConversationId(next.id);
+      try {
+        const hist = await dbMessages.listByConversation(next.id);
+        setMessages(dbMessagesToChat(hist, availableModels));
+      } catch {
+        setMessages([]);
+      }
+    }
+  }
+
   async function handleSend(text: string) {
     const model = availableModels.find((m) => m.id === selectedModelId);
     if (!model || isStreaming) return;
+
+    // 首条消息：用它给会话自动命名
+    const isFirstMessage = messages.length === 0;
 
     // v0.9 阶段7：这一回合是否启用 v2（查缓存/压缩/写缓存）——入口读一次，全程一致
     const smart = isSmartRoutingEnabled();
@@ -222,6 +291,15 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
         userId = (await dbMessages.create({ conversationId: convId, role: "user", content: text })).id;
       } catch {
         // 写库失败降级用内存 id，不阻断
+      }
+      // 首条消息自动命名会话；后续消息只 bump 排序时间
+      if (isFirstMessage) {
+        const title = text.slice(0, 40);
+        const cid = convId;
+        void dbConversations.rename(cid, title).catch(() => {});
+        setConversationList((prev) => prev.map((c) => (c.id === cid ? { ...c, title } : c)));
+      } else {
+        void dbConversations.touch(convId).catch(() => {});
       }
     }
 
@@ -417,6 +495,48 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
 
   return (
     <div className="flex h-full">
+      {/* 会话侧栏：多会话切换 / 新建 / 删除 */}
+      <aside className="w-60 shrink-0 flex flex-col border-r border-white/10 glass">
+        <div className="p-3 border-b border-white/10">
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => void handleNewChat()}
+            disabled={isStreaming}
+            className="w-full justify-start gap-2 rounded-xl bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20"
+          >
+            <Plus className="w-4 h-4" />
+            {t("chat.newChat")}
+          </Button>
+        </div>
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
+          {conversationList.map((c) => (
+            <div
+              key={c.id}
+              onClick={() => void switchConversation(c.id)}
+              className={cn(
+                "group flex items-center gap-2 px-3 py-2 rounded-xl cursor-pointer text-sm transition-colors",
+                c.id === conversationId ? "bg-primary/10 text-primary font-medium" : "hover:bg-white/5 text-muted-foreground",
+              )}
+            >
+              <MessageSquare className="w-3.5 h-3.5 shrink-0 opacity-70" />
+              <span className="flex-1 truncate">{c.title}</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleDeleteConversation(c.id);
+                }}
+                title={t("common.delete")}
+                className="opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity shrink-0"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      </aside>
+
       <div className="relative flex flex-col h-full flex-1 min-w-0 bg-background/30 backdrop-blur-sm">
       {/* 顶部控制栏 - Premium Glass Effect */}
       <header className="px-6 py-4 flex items-center justify-between border-b border-white/10 glass z-10">

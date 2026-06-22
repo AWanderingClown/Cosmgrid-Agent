@@ -892,6 +892,40 @@ export const conversations = {
     }
     return this.create({ title: "Main Chat", defaultModelId: defaultModelId ?? null, projectId: null });
   },
+
+  // 列出全部主对话（无项目归属），最近活跃在前——ChatPage 多会话侧栏用。
+  async listMainChats(): Promise<Conversation[]> {
+    const db = await getDb();
+    const rows = await db.select<ConversationRow[]>(
+      "SELECT * FROM conversations WHERE project_id IS NULL ORDER BY updated_at DESC"
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      projectId: r.project_id,
+      title: r.title,
+      defaultModelId: r.default_model_id,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  },
+
+  // 改标题（首条消息自动命名 / 用户手动重命名）。顺带 bump updated_at 让它排到最前。
+  async rename(id: string, title: string): Promise<void> {
+    const db = await getDb();
+    await db.execute("UPDATE conversations SET title = $1, updated_at = $2 WHERE id = $3", [title, now(), id]);
+  },
+
+  // bump updated_at（有新消息时调，保证侧栏按最近活跃排序）。
+  async touch(id: string): Promise<void> {
+    const db = await getDb();
+    await db.execute("UPDATE conversations SET updated_at = $1 WHERE id = $2", [now(), id]);
+  },
+
+  // 删除会话（messages 经 FK ON DELETE CASCADE 一并删）。
+  async delete(id: string): Promise<void> {
+    const db = await getDb();
+    await db.execute("DELETE FROM conversations WHERE id = $1", [id]);
+  },
 };
 
 export const messages = {
