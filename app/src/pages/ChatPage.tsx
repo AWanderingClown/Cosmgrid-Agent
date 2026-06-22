@@ -10,7 +10,8 @@ import { type ModelListItem, type CredentialListItem } from "@/lib/api";
 import { models as dbModels, apiCredentials as dbCredentials } from "@/lib/db";
 import { getApiKey } from "@/lib/keystore";
 import { streamWithFallback, toModelEndpoint, type StreamUsage } from "@/lib/llm/chat-fallback";
-import { pickBestModelForRole, rankFallbackModels } from "@/lib/llm/model-capabilities";
+import { pickBestModelForRole, rankFallbackModels, scoreModelForRole } from "@/lib/llm/model-capabilities";
+import { applyOutcomeForLatest } from "@/lib/llm/outcome-tracker";
 import { isCliProviderType } from "@/lib/llm/cli-protocol";
 import { classifyMessageComplexity } from "@/lib/llm/message-router";
 import { shouldSuggestDebate } from "@/lib/llm/debate-suggester";
@@ -303,6 +304,19 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
 
   function handleStop() { abortRef.current?.abort(); }
 
+  // 隐式信号采集（改进-1 Step B）：用户在已有对话里手动换到能力分更高的模型，
+  // 说明上一个模型这次没让他满意（路由派轻了）→ 给上个模型记一条 switched_up 负反馈，喂回评分。
+  function handleModelChange(newId: string) {
+    const oldId = selectedModelId;
+    setSelectedModelId(newId);
+    if (!oldId || oldId === newId || messages.length === 0) return;
+    const oldM = availableModels.find((m) => m.id === oldId);
+    const newM = availableModels.find((m) => m.id === newId);
+    if (oldM && newM && scoreModelForRole(newM, "main_chat") > scoreModelForRole(oldM, "main_chat")) {
+      void applyOutcomeForLatest(oldId, "switched_up");
+    }
+  }
+
   async function handleSmartPick() {
     if (availableModels.length === 0) return;
     const text = inputRef.current?.value.trim() ?? "";
@@ -360,7 +374,7 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
               <Cpu className="w-4 h-4 text-primary" />
               <select
                 value={selectedModelId}
-                onChange={(e) => setSelectedModelId(e.target.value)}
+                onChange={(e) => handleModelChange(e.target.value)}
                 className="text-xs font-bold appearance-none bg-transparent focus:outline-none pr-6 cursor-pointer"
               >
                 {availableModels.map((m) => (

@@ -14,6 +14,7 @@ import {
   mergeSample,
   isScoreEligible,
   recordPerformanceSample,
+  recordOutcomeSignal,
   shrinkSuccessRate,
   MIN_SAMPLES_FOR_SCORING,
   PRIOR_PSEUDO_COUNT,
@@ -158,5 +159,46 @@ describe("recordPerformanceSample — db 读改写", () => {
     mocks.get.mockRejectedValue(new Error("db down"));
     await expect(recordPerformanceSample("m-1", "hard", sample())).resolves.toBeUndefined();
     expect(mocks.upsert).not.toHaveBeenCalled();
+  });
+});
+
+describe("recordOutcomeSignal — 隐式反馈只动成功率，不污染成本/延迟", () => {
+  beforeEach(() => {
+    mocks.get.mockReset();
+    mocks.upsert.mockReset();
+    mocks.upsert.mockResolvedValue(undefined);
+  });
+
+  const base: ModelPerfStat = {
+    modelId: "m-1", taskType: "hard", successRate: 0.8, avgInputTokens: 100,
+    avgOutputTokens: 50, avgCost: 0.02, avgLatencyMs: 1200, sampleCount: 10,
+    windowStart: TS, windowEnd: TS,
+  };
+
+  it("无基线（prev=null）→ 不写（不凭空造数据）", async () => {
+    mocks.get.mockResolvedValue(null);
+    await recordOutcomeSignal("m-1", "hard", false);
+    expect(mocks.upsert).not.toHaveBeenCalled();
+  });
+
+  it("负反馈拉低成功率，但成本/延迟均值不变", async () => {
+    mocks.get.mockResolvedValue(base);
+    await recordOutcomeSignal("m-1", "hard", false);
+    const written = mocks.upsert.mock.calls[0]![0];
+    expect(written.successRate).toBeLessThan(base.successRate);
+    expect(written.avgCost).toBeCloseTo(base.avgCost, 10);
+    expect(written.avgLatencyMs).toBeCloseTo(base.avgLatencyMs, 10);
+    expect(written.sampleCount).toBe(11);
+  });
+
+  it("正反馈拉高成功率", async () => {
+    mocks.get.mockResolvedValue(base);
+    await recordOutcomeSignal("m-1", "hard", true);
+    expect(mocks.upsert.mock.calls[0]![0].successRate).toBeGreaterThan(base.successRate);
+  });
+
+  it("db 报错不抛", async () => {
+    mocks.get.mockRejectedValue(new Error("boom"));
+    await expect(recordOutcomeSignal("m-1", "hard", false)).resolves.toBeUndefined();
   });
 });

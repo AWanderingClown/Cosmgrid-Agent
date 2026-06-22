@@ -30,6 +30,19 @@ function boolToInt(v: boolean): number {
   return v ? 1 : 0;
 }
 
+/** 幂等给表补列：列已存在则跳过（SQLite 无 ADD COLUMN IF NOT EXISTS，靠 PRAGMA 检查） */
+async function addColumnIfMissing(
+  db: Database,
+  table: string,
+  column: string,
+  decl: string,
+): Promise<void> {
+  const cols = await db.select<Array<{ name: string }>>(`PRAGMA table_info(${table})`);
+  if (!cols.some((c) => c.name === column)) {
+    await db.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+  }
+}
+
 // ============ 建表 DDL（14 张，IF NOT EXISTS） ============
 
 export async function initSchema(): Promise<void> {
@@ -263,9 +276,13 @@ export async function initSchema(): Promise<void> {
       cost REAL NOT NULL DEFAULT 0,
       success INTEGER NOT NULL DEFAULT 1,
       interrupted INTEGER NOT NULL DEFAULT 0,
+      outcome TEXT,
       created_at TEXT NOT NULL
     )
   `);
+  // 迁移：给旧库的 usage_events 补 outcome 列（改进-1 Step B 隐式信号）。
+  // 新库 CREATE 时已含；旧库 IF NOT EXISTS 不改已存在表，故需幂等 ALTER。
+  await addColumnIfMissing(db, "usage_events", "outcome", "TEXT");
 
   // v0.6 项目级长期记忆（4.11 记忆分层 + 5.6 RAG）
   // 每条记忆 = 一段结构化笔记（决策 / 经验 / 上下文 / 失败教训），
@@ -1858,7 +1875,7 @@ export const usageEvents = {
     cost?: number;
     success?: boolean;
     interrupted?: boolean;
-  }): Promise<void> {
+  }): Promise<string> {
     const db = await getDb();
     const id = newId();
     const ts = now();
@@ -1885,6 +1902,26 @@ export const usageEvents = {
         ts,
       ]
     );
+    return id;
+  },
+
+  /**
+   * 给某模型「最近一条还没被评价（outcome IS NULL）的回答」打上 outcome 标签。
+   * 改进-1 Step B：采集点（用户重答 / 手动切回贵模型 / 回滚）不必透传 UsageEvent id，
+   * 只要知道"哪个模型刚答得不满意"。返回该事件的 taskType（=role 存的难度桶）供喂回评分；无则 null。
+   */
+  async setOutcomeForLatest(
+    modelId: string,
+    outcome: string,
+  ): Promise<{ taskType: string | null } | null> {
+    const db = await getDb();
+    const rows = await db.select<Array<{ id: string; role: string | null }>>(
+      "SELECT id, role FROM usage_events WHERE model_id = $1 AND outcome IS NULL ORDER BY created_at DESC LIMIT 1",
+      [modelId],
+    );
+    if (rows.length === 0) return null;
+    await db.execute("UPDATE usage_events SET outcome = $1 WHERE id = $2", [outcome, rows[0]!.id]);
+    return { taskType: rows[0]!.role };
   },
 
   /** 列出用量事件（StatsPage 统计用）。sinceTs 可选，只取该 ISO 时间之后的 */

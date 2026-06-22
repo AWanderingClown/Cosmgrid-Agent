@@ -132,3 +132,31 @@ export async function recordPerformanceSample(
     console.error("[model-performance-stats] 写入统计失败:", error);
   }
 }
+
+/**
+ * 改进-1 Step B：把一条「用户隐式反馈」当作只影响成功率的质量样本喂回统计。
+ * cost/latency/tokens 用该模型的历史均值填充（增量均值里 x=avg → 这些维度不变），
+ * 只有 success=positive 会拉动 successRate（再经贝叶斯收缩平滑）。
+ * 没有基线统计（prev=null）则跳过——不凭空造数据。
+ */
+export async function recordOutcomeSignal(
+  modelId: string,
+  taskType: string,
+  positive: boolean,
+): Promise<void> {
+  try {
+    const prev = await modelPerformanceStats.get(modelId, taskType);
+    if (!prev) return;
+    const sample: PerfSample = {
+      inputTokens: prev.avgInputTokens,
+      outputTokens: prev.avgOutputTokens,
+      cost: prev.avgCost,
+      latencyMs: prev.avgLatencyMs,
+      success: positive,
+    };
+    const next = mergeSample(prev, sample, modelId, taskType, new Date().toISOString());
+    await modelPerformanceStats.upsert(next);
+  } catch (error) {
+    console.error("[model-performance-stats] 写入 outcome 信号失败:", error);
+  }
+}
