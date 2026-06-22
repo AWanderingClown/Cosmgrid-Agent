@@ -1,6 +1,6 @@
 // ChatPage - 重构为 "Cosmic Cyber" 视觉风格
 import { memo, useEffect, useRef, useState } from "react";
-import { Bot, Send, Square, User, Zap, Sparkles, Cpu, ChevronDown, PanelRight, X, Activity } from "lucide-react";
+import { Bot, Send, Square, User, Zap, Sparkles, Cpu, ChevronDown, PanelRight, X, Activity, Swords } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -13,6 +13,7 @@ import { streamWithFallback, toModelEndpoint, type StreamUsage } from "@/lib/llm
 import { pickBestModelForRole, rankFallbackModels } from "@/lib/llm/model-capabilities";
 import { isCliProviderType } from "@/lib/llm/cli-protocol";
 import { classifyMessageComplexity } from "@/lib/llm/message-router";
+import { shouldSuggestDebate } from "@/lib/llm/debate-suggester";
 import { routeMessage } from "@/lib/llm/smart-router";
 import { isSmartRoutingEnabled } from "@/lib/app-settings";
 import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
@@ -93,7 +94,12 @@ const MessageItem = memo(function MessageItem({
   );
 });
 
-export function ChatPage() {
+interface ChatPageProps {
+  /** 用户在输入框写下"多方案权衡"类问题时，点"开对弈"会带着这条话题跳到对弈页 */
+  onOpenDebate?: (topic: string) => void;
+}
+
+export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
   const { t } = useTranslation();
   const [availableModels, setAvailableModels] = useState<ModelListItem[]>([]);
   const [credentials, setCredentials] = useState<CredentialListItem[]>([]);
@@ -106,6 +112,7 @@ export function ChatPage() {
   const [lastUsage, setLastUsage] = useState<ChatUsage | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [showDebateHint, setShowDebateHint] = useState(false);
   const workPanel = usePanelResize({ initial: 320, min: 240, max: 560, edge: "left" });
 
   const abortRef = useRef<AbortController | null>(null);
@@ -326,6 +333,7 @@ export function ChatPage() {
     if (!text || isStreaming) return;
     void handleSend(text);
     (e.currentTarget as HTMLFormElement).reset();
+    setShowDebateHint(false);
   }
 
   const selectedModel = availableModels.find(m => m.id === selectedModelId);
@@ -470,6 +478,22 @@ export function ChatPage() {
 
       {/* 输入框区域 - Floating Command Center */}
       <div className="absolute bottom-8 left-8 right-8 z-20 pointer-events-none">
+        {onOpenDebate && showDebateHint && !isStreaming && (
+          <div className="max-w-4xl mx-auto mb-2.5 pointer-events-auto">
+            <div className="glass rounded-2xl border border-primary/30 shadow-lg px-4 py-2.5 flex items-center gap-3">
+              <Swords className="w-4 h-4 text-primary shrink-0" />
+              <span className="text-xs font-medium text-muted-foreground flex-1">{t("chat.suggestDebate")}</span>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => onOpenDebate(inputRef.current?.value.trim() ?? "")}
+                className="rounded-xl h-8 px-4 text-xs font-bold shrink-0"
+              >
+                {t("chat.suggestDebateBtn")}
+              </Button>
+            </div>
+          </div>
+        )}
         <form
           onSubmit={handleFormSubmit}
           className="max-w-4xl mx-auto glass rounded-[2.5rem] border border-white/20 shadow-2xl p-2.5 flex gap-3 pointer-events-auto group transition-all duration-500 hover:border-primary/30"
@@ -481,6 +505,7 @@ export function ChatPage() {
               placeholder={selectedModel ? t("chat.inputPlaceholder", { name: selectedModel.displayName || selectedModel.name }) : t("chat.inputPlaceholderFallback")}
               disabled={isStreaming}
               autoComplete="off"
+              onChange={(e) => setShowDebateHint(shouldSuggestDebate(e.target.value))}
               className="w-full bg-transparent border-none outline-none focus:outline-none focus:ring-0 text-sm px-6 py-4 placeholder:text-muted-foreground/40 font-medium"
             />
           </div>

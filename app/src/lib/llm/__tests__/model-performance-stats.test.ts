@@ -14,7 +14,10 @@ import {
   mergeSample,
   isScoreEligible,
   recordPerformanceSample,
+  shrinkSuccessRate,
   MIN_SAMPLES_FOR_SCORING,
+  PRIOR_PSEUDO_COUNT,
+  DEFAULT_PRIOR_SUCCESS_RATE,
   type ModelPerfStat,
   type PerfSample,
 } from "../model-performance-stats";
@@ -86,11 +89,44 @@ describe("mergeSample — 增量均值正确性", () => {
   });
 });
 
-describe("isScoreEligible", () => {
-  it(`sampleCount >= ${MIN_SAMPLES_FOR_SCORING} 才可评分`, () => {
+describe("isScoreEligible — 冷启动死锁修复后门槛=1", () => {
+  it("门槛已从 30 降到 1（跑过 1 次即可评分）", () => {
+    expect(MIN_SAMPLES_FOR_SCORING).toBe(1);
+  });
+
+  it(`sampleCount >= ${MIN_SAMPLES_FOR_SCORING} 才可评分；0 次（含 null）回落 v1`, () => {
     expect(isScoreEligible(null)).toBe(false);
-    expect(isScoreEligible({ sampleCount: MIN_SAMPLES_FOR_SCORING - 1 } as ModelPerfStat)).toBe(false);
-    expect(isScoreEligible({ sampleCount: MIN_SAMPLES_FOR_SCORING } as ModelPerfStat)).toBe(true);
+    expect(isScoreEligible({ sampleCount: 0 } as ModelPerfStat)).toBe(false);
+    expect(isScoreEligible({ sampleCount: 1 } as ModelPerfStat)).toBe(true);
+    expect(isScoreEligible({ sampleCount: 50 } as ModelPerfStat)).toBe(true);
+  });
+});
+
+describe("shrinkSuccessRate — 贝叶斯收缩防小样本过拟合", () => {
+  it("0 样本 → 完全等于先验", () => {
+    expect(shrinkSuccessRate(1, 0)).toBeCloseTo(DEFAULT_PRIOR_SUCCESS_RATE, 10);
+  });
+
+  it("1 次成功（rawRate=1）被拉向先验，不会满分", () => {
+    const shrunk = shrinkSuccessRate(1, 1);
+    // (0.7*8 + 1*1) / (8+1) = 6.6/9 ≈ 0.733
+    expect(shrunk).toBeCloseTo((DEFAULT_PRIOR_SUCCESS_RATE * PRIOR_PSEUDO_COUNT + 1) / (PRIOR_PSEUDO_COUNT + 1), 10);
+    expect(shrunk).toBeLessThan(1);
+    expect(shrunk).toBeGreaterThan(DEFAULT_PRIOR_SUCCESS_RATE);
+  });
+
+  it("大样本（n≫k）几乎等于实测率", () => {
+    expect(shrinkSuccessRate(0.95, 1000)).toBeCloseTo(0.95, 2);
+  });
+
+  it("1 次失败（rawRate=0）被先验上托，不会归零", () => {
+    const shrunk = shrinkSuccessRate(0, 1);
+    expect(shrunk).toBeGreaterThan(0);
+    expect(shrunk).toBeLessThan(DEFAULT_PRIOR_SUCCESS_RATE);
+  });
+
+  it("自定义先验与伪计数生效", () => {
+    expect(shrinkSuccessRate(1, 2, 0.5, 2)).toBeCloseTo((0.5 * 2 + 1 * 2) / 4, 10);
   });
 });
 

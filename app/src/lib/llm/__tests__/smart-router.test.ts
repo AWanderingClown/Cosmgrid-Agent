@@ -63,13 +63,20 @@ describe("routeMessage", () => {
     expect(await routeMessage("hi", [])).toBeNull();
   });
 
-  it("样本不足 → v1 降级", async () => {
-    mocks.list.mockResolvedValue([stat({ modelId: "a", sampleCount: 5 })]); // < 30
+  it("冷启动死锁修复：少量样本（5 条，旧设计 <30 会拒）现在即走评分", async () => {
+    mocks.list.mockResolvedValue([stat({ modelId: "a", sampleCount: 5 })]);
     const r = await routeMessage("帮我设计架构", [model("a"), model("b")], CTX);
-    expect(r!.decisionLog.strategy).toBe("v1-fallback");
+    expect(r!.decisionLog.strategy).toBe("scored");
+    expect(r!.decisionLog.chosenModelId).toBe("a");
   });
 
-  it("无任何统计 → v1 降级", async () => {
+  it("仅 1 条样本也走评分（边界）", async () => {
+    mocks.list.mockResolvedValue([stat({ modelId: "a", sampleCount: 1 })]);
+    const r = await routeMessage("帮我设计架构", [model("a")], CTX);
+    expect(r!.decisionLog.strategy).toBe("scored");
+  });
+
+  it("无任何统计（0 样本）→ v1 降级", async () => {
     mocks.list.mockResolvedValue([]);
     const r = await routeMessage("普通问题", [model("a")], CTX);
     expect(r!.decisionLog.strategy).toBe("v1-fallback");

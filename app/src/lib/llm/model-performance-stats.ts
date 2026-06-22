@@ -9,8 +9,33 @@
 
 import { modelPerformanceStats } from "../db";
 
-/** 评分启用门槛：样本不足时 SmartRouter 不信这个统计，回落 v1 规则路由 */
-export const MIN_SAMPLES_FOR_SCORING = 30;
+// 冷启动死锁修复（2026-06-22）：旧设计要求每模型积累 ≥30 条同 taskType 样本才走评分，
+// 但新用户/新项目永远凑不够 → 评分路径成死代码、永远走 v1。改为：跑过 ≥1 次即可参与评分
+// （0 次仍走 v1 fallback，即"第一次用 v1，之后边用边学"），并用贝叶斯收缩把小样本的成功率
+// 拉向先验，避免"1 次成功就 100% 自信"的过拟合。
+
+/** 评分启用门槛：该 (modelId, taskType) 至少跑过 1 次才有数据可评分；0 次回落 v1 规则路由 */
+export const MIN_SAMPLES_FOR_SCORING = 1;
+
+/** 贝叶斯收缩的伪计数 k：样本数 < k 时先验占主导，>> k 时数据占主导 */
+export const PRIOR_PSEUDO_COUNT = 8;
+
+/** 默认成功率先验（中性偏乐观）；后续可由模型 capabilityScore 提供 per-model 先验 */
+export const DEFAULT_PRIOR_SUCCESS_RATE = 0.7;
+
+/**
+ * 贝叶斯收缩成功率：smoothed = (priorRate·k + rawRate·n) / (k + n)。
+ * 小样本（n≪k）→ 贴近先验；大样本（n≫k）→ 贴近实测。纯函数，便于单测。
+ */
+export function shrinkSuccessRate(
+  rawRate: number,
+  sampleCount: number,
+  priorRate: number = DEFAULT_PRIOR_SUCCESS_RATE,
+  pseudoCount: number = PRIOR_PSEUDO_COUNT,
+): number {
+  const n = Math.max(0, sampleCount);
+  return (priorRate * pseudoCount + rawRate * n) / (pseudoCount + n);
+}
 
 /** 一次调用的表现样本 */
 export interface PerfSample {

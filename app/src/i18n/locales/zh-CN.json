@@ -63,6 +63,8 @@
     "ready": "准备就绪",
     "inputPlaceholder": "使用 {{name}} 进行对话...",
     "inputPlaceholderFallback": "输入消息...",
+    "suggestDebate": "这个问题有多种方案，适合让 3 个模型对弈（出方案 / 反驳 / 裁判）",
+    "suggestDebateBtn": "开对弈",
     "footer": "安全连接 • {{version}} • 由 CosmGrid 驱动",
     "workPanel": {
       "title": "工作面板",

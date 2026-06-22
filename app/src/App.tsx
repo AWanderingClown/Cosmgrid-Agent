@@ -47,6 +47,7 @@ function App() {
   ];
   const [page, setPage] = useState<PageKey>("chat");
   const [openProjectId, setOpenProjectId] = useState<string | null>(null);
+  const [debateSeed, setDebateSeed] = useState<string | undefined>(undefined);
   const [dbReady, setDbReady] = useState(false);
   const [, setDbError] = useState<string | null>(null);
   const [plans, setPlans] = useState<TokenPlan[]>([]);
@@ -195,7 +196,7 @@ function App() {
 
         <main className="flex-1 overflow-hidden">
           <div className="h-full" style={{ display: page === "chat" ? "block" : "none" }}>
-            <ChatPage />
+            <ChatPage onOpenDebate={(topic) => { setDebateSeed(topic); setPage("debate"); }} />
           </div>
           <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "providers" ? "block" : "none" }}>
             <ProvidersPage />
@@ -207,7 +208,7 @@ function App() {
             <TokenPlansPage />
           </div>
           <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "debate" ? "block" : "none" }}>
-            <DebatePage />
+            <DebatePage initialTopic={debateSeed} />
           </div>
           <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "stats" ? "block" : "none" }}>
             <StatsPage />

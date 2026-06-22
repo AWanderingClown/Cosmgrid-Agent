@@ -10,6 +10,7 @@ import { getFsAdapter } from "./fs-adapter";
 import { computeDiff, diffSummaryLine } from "./diff-util";
 import { requireApproval } from "./confirm";
 import { snapshotWrite } from "./git-snapshot";
+import { withDiagnostics } from "./diagnostics";
 
 const paramsSchema = z.object({
   file_path: z.string().describe("要修改的文件路径"),
@@ -76,9 +77,10 @@ export const editTool: ToolDefinition<EditParams> = {
     }
 
     const reversible = await snapshotWrite(ctx.workspacePath, check.resolved, "edit");
+    const baseOutput = `已修改 ${check.resolved}（+${diff.added} −${diff.removed}）${reversible ? "，已 git 快照可回滚" : ""}`;
     return {
       status: "success",
-      output: `已修改 ${check.resolved}（+${diff.added} −${diff.removed}）${reversible ? "，已 git 快照可回滚" : ""}`,
+      output: await withDiagnostics(ctx.workspacePath, check.resolved, baseOutput),
       reversible,
     };
   },

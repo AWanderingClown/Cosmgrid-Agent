@@ -63,6 +63,8 @@
     "ready": "Ready",
     "inputPlaceholder": "Use {{name}} to chat...",
     "inputPlaceholderFallback": "Type a message...",
+    "suggestDebate": "This question has multiple viable approaches — let 3 models debate it (propose / critique / judge)",
+    "suggestDebateBtn": "Open debate",
     "footer": "Secure connection • {{version}} • Powered by CosmGrid",
     "workPanel": {
       "title": "Work Panel",

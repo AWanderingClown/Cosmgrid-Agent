@@ -21,7 +21,12 @@ const ROLE_META: Record<DebateRole, { icon: typeof Lightbulb; color: string; wor
   judge: { icon: Gavel, color: "text-emerald-500", workRole: "final_review" },
 };
 
-export function DebatePage() {
+interface DebatePageProps {
+  /** 从 ChatPage"开对弈"带过来的预填话题（上下文不丢：用户在对话里写的问题直接进对弈） */
+  initialTopic?: string;
+}
+
+export function DebatePage({ initialTopic }: DebatePageProps = {}) {
   const { t } = useTranslation();
   const [models, setModels] = useState<ModelRow[]>([]);
   const [creds, setCreds] = useState<CredRow[]>([]);
@@ -32,6 +37,11 @@ export function DebatePage() {
   const [finalSolution, setFinalSolution] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<Awaited<ReturnType<typeof debateSessions.list>>>([]);
+
+  // ChatPage 带话题跳转进来时预填（仅在 seed 变化时覆盖，不打扰用户已手输的内容）
+  useEffect(() => {
+    if (initialTopic && initialTopic.trim()) setTopic(initialTopic);
+  }, [initialTopic]);
 
   useEffect(() => {
     void (async () => {
