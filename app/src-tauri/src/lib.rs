@@ -5,9 +5,16 @@
 //        模型路由 / 计费 / 解析仍全在 TS。
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 use tauri::ipc::Channel;
-use tauri_plugin_shell::process::CommandEvent;
+use tauri::State;
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
+
+/// 在跑的 CLI 子进程句柄表（按前端传来的 sessionId 索引）。
+/// abort 时前端调 kill_cli(sessionId) → 真正 SIGKILL 子进程，停止白耗订阅额度。
+#[derive(Default)]
+struct CliChildren(Mutex<HashMap<String, CommandChild>>);
 
 /// 流式回传给前端的事件（每行 stdout 一条，JSONL 由前端 cli-protocol 解析）
 #[derive(Clone, serde::Serialize)]
@@ -38,6 +45,8 @@ const POLLUTING_ENV_PREFIXES: [&str; 4] = [
 #[tauri::command]
 async fn spawn_cli_stream(
     app: tauri::AppHandle,
+    children: State<'_, CliChildren>,
+    session_id: String,
     program: String,
     args: Vec<String>,
     extra_env: HashMap<String, String>,
@@ -58,7 +67,12 @@ async fn spawn_cli_stream(
         .env_clear()
         .envs(env);
 
-    let (mut rx, _child) = command.spawn().map_err(|e| e.to_string())?;
+    let (mut rx, child) = command.spawn().map_err(|e| e.to_string())?;
+
+    // 存句柄，供 kill_cli 按 sessionId 杀进程。同一 sessionId 重复 spawn 时旧句柄被覆盖。
+    if let Ok(mut map) = children.0.lock() {
+        map.insert(session_id.clone(), child);
+    }
 
     while let Some(event) = rx.recv().await {
         let payload = match event {
@@ -78,7 +92,30 @@ async fn spawn_cli_stream(
         }
     }
 
+    // 进程已自然结束（或通道断开）→ 清掉句柄，避免 map 泄漏。
+    if let Ok(mut map) = children.0.lock() {
+        map.remove(&session_id);
+    }
+
     Ok(())
+}
+
+/// 杀掉指定 sessionId 的 CLI 子进程（前端 abort 时调用）。
+/// 返回 true=找到并杀掉；false=没有这个 session（已自然结束或从未存在）。
+#[tauri::command]
+fn kill_cli(children: State<'_, CliChildren>, session_id: String) -> Result<bool, String> {
+    let child = children
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .remove(&session_id);
+    match child {
+        Some(c) => {
+            c.kill().map_err(|e| e.to_string())?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
 }
 
 /// 一次性运行一条 shell 命令（在指定工作目录），捕获 stdout/stderr/exit code。
@@ -148,6 +185,32 @@ async fn git_commit_file(
     Ok(commit.status.success())
 }
 
+/// 只读 git 查询（status / diff / log）：AI 改完代码后能看到自己改了啥。
+/// v0.7 增强-2：参数作为**独立 Vec 传给 git**（不经 sh -c），杜绝 shell 注入；
+/// **子命令白名单 + 参数构造在 TS 侧**（git-read-tool 只放行 status/diff/log，绝不传写命令）。
+/// 本函数只执行已构造好的只读 git 命令，捕获 stdout/stderr/exit code。
+#[tauri::command]
+async fn git_read(
+    app: tauri::AppHandle,
+    workspace: String,
+    args: Vec<String>,
+) -> Result<ShellOutput, String> {
+    let output = app
+        .shell()
+        .command("git")
+        .args(args)
+        .current_dir(workspace)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(ShellOutput {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        code: output.status.code(),
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -155,7 +218,14 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![spawn_cli_stream, run_shell_command, git_commit_file])
+        .manage(CliChildren::default())
+        .invoke_handler(tauri::generate_handler![
+            spawn_cli_stream,
+            kill_cli,
+            run_shell_command,
+            git_commit_file,
+            git_read
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -42,9 +42,18 @@ export interface CliStreamResult {
   finishReason: string;
 }
 
+/** 给本次 spawn 生成唯一 id，Rust 端据此存 child 句柄、abort 时按 id kill。 */
+function newCliSessionId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `cli-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 /**
  * spawn 本机 CLI 流式对话。成功 resolve usage；CLI 报错（未登录 / 额度耗尽 / 非零退出）reject。
- * abort：前端停止接收并 resolve（finishReason="abort"）；子进程 kill 留待后续（见下方 TODO）。
+ * abort：前端停止接收并 resolve（finishReason="abort"），同时 invoke kill_cli 真正 SIGKILL
+ *   子进程——否则 CLI 仍在后台跑完，白耗订阅额度。
  */
 export async function streamViaCli(
   endpoint: CliEndpoint,
@@ -55,6 +64,7 @@ export async function streamViaCli(
   const program = endpoint.program?.trim() || CLI_DEFAULT_PROGRAM[endpoint.providerType];
   const prompt = buildPromptFromMessages(messages);
   const args = buildCliArgs(endpoint.providerType, endpoint.modelName, prompt);
+  const sessionId = newCliSessionId();
 
   let usage = { inputTokens: 0, outputTokens: 0 };
   let finishReason = "stop";
@@ -108,16 +118,19 @@ export async function streamViaCli(
       }
     };
 
-    // abort：前端停止接收并收尾。
-    // TODO(v0.7.x)：真正 kill 子进程需 Rust 端按 id 保存 child + 加 kill 命令，
-    //   否则 abort 后 CLI 仍在后台跑完（白耗额度）。当前先保证 UI 立即恢复。
+    // abort：前端立即收尾恢复 UI，并请 Rust 真正杀掉子进程（停止白耗额度）。
+    // kill_cli 失败不影响前端收尾——进程可能已自然结束，只记日志不阻塞。
     options.signal?.addEventListener("abort", () => {
       if (settled) return;
       settled = true;
+      void invoke("kill_cli", { sessionId }).catch((err: unknown) => {
+        console.warn("kill_cli 失败（子进程可能已结束）：", err);
+      });
       resolve({ ...usage, finishReason: "abort" });
     });
 
     invoke("spawn_cli_stream", {
+      sessionId,
       program,
       args,
       extraEnv: {},
