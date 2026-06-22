@@ -32,11 +32,15 @@ export async function lookupCache(
   const rows = await semanticCache.listValid();
   if (rows.length === 0) return null;
 
-  const qvec = await getEmbeddingProvider().embed(query);
+  const provider = getEmbeddingProvider();
+  const qvec = await provider.embed(query);
 
   let best: CacheHit | null = null;
   for (const row of rows) {
-    if (row.queryEmbedding.length !== qvec.length) continue; // 维度不一致（换过 provider）跳过
+    // v0.9.1 关键防线：vec 跨算法版本不兼容（dim 可能一样但哈希分布不同），
+    // provider name 不匹配直接跳过，避免把老 vec 跟新 vec 做余弦（必全 miss 还浪费 CPU）。
+    if (row.providerName !== provider.name) continue;
+    if (row.queryEmbedding.length !== qvec.length) continue;
     const sim = cosineSimilarity(qvec, row.queryEmbedding);
     if (sim >= threshold && (!best || sim > best.similarity)) {
       best = {
@@ -54,7 +58,7 @@ export async function lookupCache(
 }
 
 /**
- * 写缓存：先过 isCacheable 保守过滤，再 embed 存库。
+ * 写缓存：先过 isCacheable 保守过滤，再 embed 存库（带 provider name 标记算法版本）。
  * 返回是否真的写入（被过滤掉返回 false）。
  */
 export async function writeCache(
@@ -64,13 +68,15 @@ export async function writeCache(
   taskType: string,
 ): Promise<boolean> {
   if (!isCacheable(query, response)) return false;
-  const embedding = await getEmbeddingProvider().embed(query);
+  const provider = getEmbeddingProvider();
+  const embedding = await provider.embed(query);
   await semanticCache.create({
     queryText: query,
     queryEmbedding: embedding,
     responseText: response,
     modelId,
     taskType,
+    providerName: provider.name,
     expiresAt: new Date(Date.now() + CACHE_TTL_MS).toISOString(),
   });
   return true;

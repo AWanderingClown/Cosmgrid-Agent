@@ -336,12 +336,15 @@ export async function initSchema(): Promise<void> {
       response_text TEXT NOT NULL,
       model_id TEXT NOT NULL,
       task_type TEXT NOT NULL,
+      provider_name TEXT NOT NULL DEFAULT 'keyword-hash',
       hit_count INTEGER NOT NULL DEFAULT 0,
       last_hit_at TEXT,
       expires_at TEXT NOT NULL,
       created_at TEXT NOT NULL
     )
   `);
+  // v0.9.1：老库可能没 provider_name 列，补上（写时按当前 provider name 算）
+  await addColumnIfMissing(db, "semantic_cache", "provider_name", "TEXT NOT NULL DEFAULT 'keyword-hash'");
   await db.execute(`
     CREATE INDEX IF NOT EXISTS idx_semantic_cache_expires
     ON semantic_cache(expires_at)
@@ -2042,6 +2045,8 @@ export interface SemanticCacheRow {
   responseText: string;
   modelId: string;
   taskType: string;
+  /** embedding provider 名（如 'keyword-hash-v2'）——lookup 时不匹配直接跳过 */
+  providerName: string;
   hitCount: number;
   lastHitAt: string | null;
   expiresAt: string;
@@ -2056,6 +2061,8 @@ function mapCacheRow(r: any): SemanticCacheRow {
     responseText: r.response_text,
     modelId: r.model_id,
     taskType: r.task_type,
+    // 老库可能没 provider_name 列（DEFAULT 'keyword-hash'）— 安全降级
+    providerName: r.provider_name ?? "keyword-hash",
     hitCount: r.hit_count,
     lastHitAt: r.last_hit_at,
     expiresAt: r.expires_at,
@@ -2072,16 +2079,19 @@ export const semanticCache = {
     modelId: string;
     taskType: string;
     expiresAt: string;
+    /** embedding provider 名（写入时按当前 provider.name 取） */
+    providerName?: string;
   }): Promise<void> {
     const db = await getDb();
     await db.execute(
       `INSERT INTO semantic_cache
         (id, query_text, query_embedding, response_text, model_id, task_type,
-         hit_count, last_hit_at, expires_at, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,0,NULL,$7,$8)`,
+         provider_name, hit_count, last_hit_at, expires_at, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,0,NULL,$8,$9)`,
       [
         newId(), input.queryText, JSON.stringify(input.queryEmbedding), input.responseText,
-        input.modelId, input.taskType, input.expiresAt, now(),
+        input.modelId, input.taskType, input.providerName ?? "keyword-hash",
+        input.expiresAt, now(),
       ]
     );
   },

@@ -73,8 +73,9 @@ export const gitReadTool: ToolDefinition<GitReadParams> = {
   async execute(input, ctx): Promise<ToolResult> {
     // 可选 path 做边界校验，越界/敏感直接拒
     let pathspec: string | null = null;
-    if (input.path && input.path.trim()) {
-      const check = checkPath(ctx.workspacePath, input.path);
+    const trimmedPath = input.path?.trim();
+    if (trimmedPath) {
+      const check = checkPath(ctx.workspacePath, trimmedPath);
       if (!check.ok) {
         return { status: "denied", output: check.reason ?? "路径不允许" };
       }

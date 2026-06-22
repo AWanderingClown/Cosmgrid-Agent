@@ -23,20 +23,22 @@ beforeEach(() => {
 });
 
 describe("createDefaultToolRegistry", () => {
-  it("注册 read/glob/grep 三个只读工具", () => {
+  it("注册 read/glob/grep/git_read 四个只读工具", () => {
     const r = createDefaultToolRegistry();
     expect(r.has("read")).toBe(true);
     expect(r.has("glob")).toBe(true);
     expect(r.has("grep")).toBe(true);
-    expect(r.listReadOnly()).toHaveLength(3);
+    expect(r.has("git_read")).toBe(true);
+    expect(r.listReadOnly()).toHaveLength(4);
   });
 });
 
 describe("buildAiSdkTools", () => {
   it("每个工具转成带 description 的 AI SDK tool", () => {
     const tools = buildAiSdkTools(createDefaultToolRegistry(), ctx);
-    expect(Object.keys(tools).sort()).toEqual(["glob", "grep", "read"]);
+    expect(Object.keys(tools).sort()).toEqual(["git_read", "glob", "grep", "read"]);
     expect(tools.read!.description).toContain("读取");
+    expect(tools.git_read!.description).toContain("git");
   });
 
   it("tool.execute 走 executeTool 返回字符串输出", async () => {

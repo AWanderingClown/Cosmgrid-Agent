@@ -28,6 +28,7 @@ function row(query: string, response: string, over: Record<string, unknown> = {}
     responseText: response,
     modelId: "m-1",
     taskType: "standard",
+    providerName: "keyword-hash-v2", // 匹配当前 keywordEmbeddingProvider.name
     hitCount: 0,
     lastHitAt: null,
     expiresAt: new Date(Date.now() + 1000).toISOString(),
@@ -80,10 +81,19 @@ describe("lookupCache", () => {
     ]);
     expect(await lookupCache("什么是闭包")).toBeNull();
   });
+
+  it("provider name 不匹配的旧缓存被跳过（跨算法版本 — HIGH-1 防线）", async () => {
+    // 旧版本写入的缓存（如 'keyword-hash'），vec 跟当前 v2 算法不兼容，绝不能命中
+    mocks.listValid.mockResolvedValue([
+      { ...row("什么是闭包", "旧答案"), providerName: "keyword-hash" },
+    ]);
+    expect(await lookupCache("什么是闭包")).toBeNull();
+    expect(mocks.recordHit).not.toHaveBeenCalled();
+  });
 });
 
 describe("writeCache — 保守过滤", () => {
-  it("普通问答写入，expiresAt ≈ now + 7 天", async () => {
+  it("普通问答写入，expiresAt ≈ now + 7 天 + 带 providerName 标记", async () => {
     const before = Date.now();
     const ok = await writeCache("什么是闭包", "闭包是...", "m-1", "standard");
     expect(ok).toBe(true);
@@ -92,6 +102,8 @@ describe("writeCache — 保守过滤", () => {
     const ttl = new Date(arg.expiresAt).getTime() - before;
     expect(ttl).toBeGreaterThan(CACHE_TTL_MS - 5000);
     expect(ttl).toBeLessThan(CACHE_TTL_MS + 5000);
+    // 写时带当前 provider name，未来升级 embedding 算法时旧缓存能被识别
+    expect(arg.providerName).toBe("keyword-hash-v2");
   });
 
   it("时间敏感 query 不写", async () => {
