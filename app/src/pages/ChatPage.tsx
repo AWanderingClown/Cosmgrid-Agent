@@ -21,6 +21,7 @@ import { routeMessage } from "@/lib/llm/smart-router";
 import { isSmartRoutingEnabled } from "@/lib/app-settings";
 import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
 import { compressHistory, type ChatMsg } from "@/lib/llm/context-compressor";
+import { buildTimePreamble } from "@/lib/llm/context-preamble";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 
@@ -558,8 +559,13 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
       }
     }
 
+    // 给模型塞一条「当前时间」system 小抄（用户界面不显示）——否则模型答不出"今天几号"，只能瞎猜。
+    // 只发一条、放最前面，最省 token；compressHistory 会保留 system 消息不裁掉。
     // v0.9 阶段7：智能路由开启时，超长历史先抽取式裁剪省 token（system 与最近消息保留）
-    let outgoing: ChatMsg[] = newMessages.map((m) => ({ role: m.role, content: m.content }));
+    let outgoing: ChatMsg[] = [
+      { role: "system", content: buildTimePreamble() },
+      ...newMessages.map((m) => ({ role: m.role, content: m.content })),
+    ];
     if (smart) {
       outgoing = compressHistory(outgoing, {
         noticeText: (n) => t("chat.contextTrimmed", { count: n }),
