@@ -7,6 +7,7 @@
     "ok": "OK",
     "delete": "Delete",
     "edit": "Edit",
+    "close": "Close",
     "save": "Save",
     "create": "Create",
     "loading": "Loading...",
@@ -49,9 +50,12 @@
   "chat": {
     "userLabel": "You",
     "assistantLabel": "CosmGrid Assistant",
+    "altBot": "Bot",
+    "altEmpty": "Empty",
     "newChat": "New Chat",
     "untitledChat": "Untitled chat",
     "conversations": "Conversations",
+    "renameChat": "Rename",
     "deleteConvConfirm": "Delete this conversation? This cannot be undone.",
     "loadError": "Failed to load",
     "noCredential": "API credential not found",
@@ -62,6 +66,16 @@
     "contextTrimmed": "[{{count}} earlier messages omitted to save tokens]",
     "requestInterrupted": "Request interrupted",
     "smartPick": "Smart Pick",
+    "smartPickResult": {
+      "title": "Smart Pick",
+      "noModels": "No models available yet. Add and enable at least one model in Providers before using Smart Pick.",
+      "noPick": "Couldn't find a suitable model to recommend — please check your model setup.",
+      "switched": "Switched to {{name}} based on your question.",
+      "switchedRule": "Switched to {{name}} (recommended by role-capability score).",
+      "alreadyBest": "{{name}} is already the best pick — no switch needed.",
+      "reasonLabel": "Why: ",
+      "emptyHint": "Tip: type your question below first, then click Smart Pick for a more accurate, content-based recommendation."
+    },
     "usage": "Usage",
     "inputTokens": "In: {{count}}",
     "outputTokens": "Out: {{count}}",
@@ -116,7 +130,21 @@
     "deleteFailed": "Delete failed",
     "updateFailed": "Update failed",
     "loadFailed": "Failed to load providers",
-    "deleteProviderFull": "Delete Provider Configuration"
+    "deleteProviderFull": "Delete Provider Configuration",
+    "editProviderName": "Edit name",
+    "edit": {
+      "providerTitle": "Edit provider",
+      "providerDesc": "Change the provider's display name",
+      "credentialTitle": "Edit credential",
+      "credentialDesc": "Change the credential name, endpoint URL and API Key",
+      "modelTitle": "Edit model",
+      "modelDesc": "Change the model's display name, context window and roles",
+      "nameLabel": "Name",
+      "displayNameLabel": "Display name",
+      "contextWindowLabel": "Context window (tokens)",
+      "apiKeyKeep": "Leave blank to keep current key",
+      "apiKeyHint": "Only overwrites when you enter a new key; blank means no change."
+    }
   },
   "addProvider": {
     "title": "Add Provider",
@@ -246,6 +274,11 @@
     "title": "Project Workspace",
     "desc": "Manage multi-agent collaboration projects. Build on industrial-grade workflow templates to let your AI team automate complex development, review, and deployment tasks.",
     "createButton": "New Project",
+    "editButton": "Edit project",
+    "editDialog": {
+      "title": "Edit project",
+      "desc": "Change the project's title and description"
+    },
     "empty": {
       "title": "Nothing Here Yet",
       "desc": "Create a new project to launch your first AI automation pipeline."
@@ -317,6 +350,9 @@
     "custom": "Custom",
     "reset": "Reset: {{rule}}",
     "used": "Updated usage",
+    "editDialog": {
+      "title": "Edit Usage Plan"
+    },
     "createDialog": {
       "title": "Add Usage Plan",
       "provider": "Provider",
@@ -475,6 +511,16 @@
       "saved": "Saved"
     },
     "notFound": "Project not found",
+    "returnToHub": "Return to Hub",
+    "descFallback": "Experimental Neural Project",
+    "activeSequence": "Active Sequence",
+    "initialization": "Initialization",
+    "accumulatedCost": "Accumulated Cost",
+    "neuralLoad": "Neural Load",
+    "deployFinish": "Deploy & Finish",
+    "operationalTimeline": "Operational Timeline",
+    "coreCheckpoints": "Core Checkpoints",
+    "neuralMemory": "Neural Memory",
     "coreWorkflow": "Core Workflow",
     "timeline": "Timeline",
     "checkpoints": "Checkpoints",
@@ -494,7 +540,8 @@
       "switching": "Switching",
       "apiKeyMissing": "API Key Missing",
       "initFailed": "Initialization Failed",
-      "syncing": "Synchronizing Environment..."
+      "syncing": "Synchronizing Environment...",
+      "errorPrefix": "ERROR"
     },
     "stageStatus": {
       "ready": "Ready",

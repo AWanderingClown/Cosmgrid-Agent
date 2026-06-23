@@ -1,6 +1,6 @@
 // ChatPage - 重构为 "Cosmic Cyber" 视觉风格
 import { memo, useEffect, useRef, useState } from "react";
-import { Bot, Send, Square, User, Zap, Sparkles, Cpu, PanelRight, X, Activity, Swords, Plus, Trash2, MessageSquare, ChevronDown } from "lucide-react";
+import { Bot, Send, Square, User, Zap, Sparkles, Cpu, PanelRight, X, Activity, Swords, Plus, Trash2, MessageSquare, ChevronDown, Pencil, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -85,7 +85,7 @@ const MessageItem = memo(function MessageItem({
           {!isAssistant ? (
             <User className="w-5 h-5" />
           ) : (
-            <img src={cosmgridLogo} className={cn("w-7 h-7", isStreaming && "animate-pulse-slow")} alt="Bot" />
+            <img src={cosmgridLogo} className={cn("w-7 h-7", isStreaming && "animate-pulse-slow")} alt={t("chat.altBot")} />
           )}
         </div>
         <div className="flex-1 space-y-2 min-w-0">
@@ -120,6 +120,7 @@ function ConversationSwitcher({
   onSwitch,
   onNew,
   onDelete,
+  onRename,
 }: {
   conversations: Conversation[];
   activeId: string | null;
@@ -127,10 +128,23 @@ function ConversationSwitcher({
   onSwitch: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
+  onRename: (id: string, title: string) => void;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+
+  function startRename(c: Conversation) {
+    setEditingId(c.id);
+    setDraft(c.title);
+  }
+  function commitRename() {
+    if (editingId && draft.trim()) onRename(editingId, draft.trim());
+    setEditingId(null);
+    setDraft("");
+  }
 
   // 点面板外部 / 按 Esc 关闭
   useEffect(() => {
@@ -189,6 +203,7 @@ function ConversationSwitcher({
               <div
                 key={c.id}
                 onClick={() => {
+                  if (editingId === c.id) return;
                   onSwitch(c.id);
                   setOpen(false);
                 }}
@@ -198,18 +213,61 @@ function ConversationSwitcher({
                 )}
               >
                 <MessageSquare className="w-3.5 h-3.5 shrink-0 opacity-70" />
-                <span className="flex-1 truncate">{c.title || t("chat.untitledChat")}</span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDelete(c.id);
-                  }}
-                  title={t("common.delete")}
-                  className="opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity shrink-0"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                {editingId === c.id ? (
+                  <input
+                    autoFocus
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === "Enter") commitRename();
+                      if (e.key === "Escape") {
+                        setEditingId(null);
+                        setDraft("");
+                      }
+                    }}
+                    className="flex-1 min-w-0 bg-white/10 rounded-md px-1.5 py-0.5 text-sm outline-none ring-1 ring-primary/40 text-foreground"
+                  />
+                ) : (
+                  <span className="flex-1 truncate">{c.title || t("chat.untitledChat")}</span>
+                )}
+                {editingId === c.id ? (
+                  <button
+                    type="button"
+                    onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); commitRename(); }}
+                    title={t("common.save")}
+                    className="text-primary hover:text-primary/80 transition-colors shrink-0"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startRename(c);
+                      }}
+                      title={t("chat.renameChat")}
+                      className="opacity-0 group-hover:opacity-100 hover:text-primary transition-opacity shrink-0"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDelete(c.id);
+                      }}
+                      title={t("common.delete")}
+                      className="opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity shrink-0"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -226,7 +284,7 @@ interface ChatPageProps {
 
 export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
   const { t } = useTranslation();
-  const { confirm } = useConfirm();
+  const { confirm, alert } = useConfirm();
   const [availableModels, setAvailableModels] = useState<ModelListItem[]>([]);
   const [credentials, setCredentials] = useState<CredentialListItem[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>("");
@@ -358,6 +416,18 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
       } catch {
         setMessages([]);
       }
+    }
+  }
+
+  async function handleRenameConversation(id: string, title: string) {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    // 先乐观更新 UI，再落库（落库失败不回滚，下次加载以库为准）
+    setConversationList((prev) => prev.map((c) => (c.id === id ? { ...c, title: trimmed } : c)));
+    try {
+      await dbConversations.rename(id, trimmed);
+    } catch {
+      // 改名落库失败不阻断
     }
   }
 
@@ -560,26 +630,54 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
   }
 
   async function handleSmartPick() {
-    if (availableModels.length === 0) return;
+    const title = t("chat.smartPickResult.title");
+    // 没有模型可推荐：明确告知去配置
+    if (availableModels.length === 0) {
+      await alert({ title, description: t("chat.smartPickResult.noModels") });
+      return;
+    }
     const text = inputRef.current?.value.trim() ?? "";
+    const currentId = selectedModelId;
 
     // 智能路由开启 + 有输入：用 SmartRouter 按真实表现评分选模型，并展示决策理由
     if (isSmartRoutingEnabled() && text) {
       try {
         const routed = await routeMessage(text, availableModels);
         if (routed) {
+          const name = routed.model.displayName ?? routed.model.name;
+          const reason = routed.decisionLog.reasons[0] ?? "";
           setSelectedModelId(routed.model.id);
-          setSwitchNotice(routed.decisionLog.reasons[0] ?? null);
+          setSwitchNotice(reason || null);
+          await alert({
+            title,
+            description:
+              (routed.model.id === currentId
+                ? t("chat.smartPickResult.alreadyBest", { name })
+                : t("chat.smartPickResult.switched", { name })) +
+              (reason ? `\n\n${t("chat.smartPickResult.reasonLabel")}${reason}` : ""),
+          });
           return;
         }
       } catch {
-        // 路由失败回落 v1
+        // 路由失败回落 v1 规则路由
       }
     }
 
     // 兜底：v1 规则按角色挑能力分最高
     const best = pickBestModelForRole("main_chat", availableModels);
-    if (best) setSelectedModelId(best.id);
+    if (!best) {
+      await alert({ title, description: t("chat.smartPickResult.noPick") });
+      return;
+    }
+    const name = best.displayName ?? best.name;
+    // 输入框为空时，附带一句"先输入问题更精准"的提示
+    const hint = text ? "" : `\n\n${t("chat.smartPickResult.emptyHint")}`;
+    if (best.id === currentId) {
+      await alert({ title, description: t("chat.smartPickResult.alreadyBest", { name }) + hint });
+      return;
+    }
+    setSelectedModelId(best.id);
+    await alert({ title, description: t("chat.smartPickResult.switchedRule", { name }) + hint });
   }
 
   function handleFormSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -617,6 +715,7 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
             onSwitch={(id) => void switchConversation(id)}
             onNew={() => void handleNewChat()}
             onDelete={(id) => void handleDeleteConversation(id)}
+            onRename={(id, title) => void handleRenameConversation(id, title)}
           />
           <div className="h-5 w-px bg-white/10 shrink-0" />
           <div className="relative group">
@@ -712,7 +811,7 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
           <div className="flex flex-col items-center justify-center h-full animate-in fade-in duration-1000">
              <div className="relative mb-8">
                <div className="absolute -inset-4 bg-primary/20 blur-3xl opacity-50" />
-               <img src={cosmgridLogo} className="w-20 h-20 opacity-20 relative" alt="Empty" />
+               <img src={cosmgridLogo} className="w-20 h-20 opacity-20 relative" alt={t("chat.altEmpty")} />
              </div>
              <p className="text-sm font-bold uppercase tracking-[0.4em] text-muted-foreground/30">{t("chat.ready")}</p>
           </div>

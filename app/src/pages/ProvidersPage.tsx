@@ -1,7 +1,7 @@
 // ProvidersPage - 重构为 "Cosmic Cyber" 视觉风格
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, KeyRound, Layers, Trash2, Cpu, Globe, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
+import { Plus, KeyRound, Layers, Trash2, Pencil, Cpu, Globe, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
+import { ProviderEditDialog, type EditTarget } from "@/components/providers/ProviderEditDialog";
 import { type ProviderListItem, type CredentialListItem, type ModelListItem, parseWorkRoles } from "@/lib/api";
 import { providers as dbProviders, apiCredentials as dbCredentials, models as dbModels } from "@/lib/db";
 import { deleteApiKey } from "@/lib/keystore";
@@ -25,6 +26,7 @@ export function ProvidersPage() {
   const [credentials, setCredentials] = useState<CredentialListItem[]>([]);
   const [models, setModels] = useState<ModelListItem[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
 
   async function load() {
     try {
@@ -212,7 +214,17 @@ export function ProvidersPage() {
                                 <Button
                                   variant="ghost"
                                   size="icon"
+                                  onClick={() => setEditTarget({ kind: "credential", data: c })}
+                                  title={t("common.edit")}
+                                  className="rounded-xl hover:bg-primary/10 hover:text-primary"
+                                >
+                                  <Pencil className="w-4 h-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
                                   onClick={() => handleDeleteCredential(c.id)}
+                                  title={t("common.delete")}
                                   className="rounded-xl hover:bg-red-500/10 hover:text-red-500"
                                 >
                                   <Trash2 className="w-4 h-4" />
@@ -287,14 +299,26 @@ export function ProvidersPage() {
                                   >
                                     {m.enabled ? t("providers.disable") : t("providers.enable")}
                                   </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={() => handleDeleteModel(m.id)}
-                                    className="h-8 w-8 rounded-lg hover:bg-red-500/10 hover:text-red-500"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </Button>
+                                  <div className="flex items-center gap-1">
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={() => setEditTarget({ kind: "model", data: m })}
+                                      title={t("common.edit")}
+                                      className="h-8 w-8 rounded-lg hover:bg-primary/10 hover:text-primary"
+                                    >
+                                      <Pencil className="w-3.5 h-3.5" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={() => handleDeleteModel(m.id)}
+                                      title={t("common.delete")}
+                                      className="h-8 w-8 rounded-lg hover:bg-red-500/10 hover:text-red-500"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </Button>
+                                  </div>
                                 </div>
                               </div>
                             );
@@ -303,7 +327,16 @@ export function ProvidersPage() {
                       )}
                     </div>
 
-                    <div className="flex justify-end pt-6 border-t border-white/10">
+                    <div className="flex justify-end gap-2 pt-6 border-t border-white/10">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setEditTarget({ kind: "provider", data: p })}
+                        className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60 hover:text-primary hover:bg-primary/10 rounded-xl px-4"
+                      >
+                        <Pencil className="w-3.5 h-3.5 mr-2" />
+                        {t("providers.editProviderName")}
+                      </Button>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -326,6 +359,12 @@ export function ProvidersPage() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         onSuccess={load}
+      />
+
+      <ProviderEditDialog
+        target={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSaved={load}
       />
     </div>
   );

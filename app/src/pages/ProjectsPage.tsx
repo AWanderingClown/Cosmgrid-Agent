@@ -1,6 +1,6 @@
 // ProjectsPage - 重构为 "Cosmic Cyber" 视觉风格
 import { useEffect, useState } from "react";
-import { ArrowRight, Check, FolderKanban, Plus, Trash2, Calendar, Layout, MapPin, Activity } from "lucide-react";
+import { ArrowRight, Check, FolderKanban, Plus, Trash2, Pencil, Calendar, Layout, MapPin, Activity } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { BUILT_IN_TEMPLATES } from "@/lib/templates";
 import { cn } from "@/lib/utils";
@@ -70,6 +70,12 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
   const [workspacePath, setWorkspacePath] = useState("");
   const [templateId, setTemplateId] = useState<string>("");
 
+  // 编辑项目（标题 + 描述）
+  const [editing, setEditing] = useState<Project | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editDesc, setEditDesc] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+
   async function load() {
     try {
       const [p, tpls] = await Promise.all([dbProjects.list(), dbTemplates.list()]);
@@ -115,6 +121,27 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
     if (!(await confirm({ description: t("projects.deleteConfirm"), destructive: true }))) return;
     await dbProjects.delete(id);
     await load();
+  }
+
+  function openEditDialog(p: Project) {
+    setEditing(p);
+    setEditName(p.name);
+    setEditDesc(p.description ?? "");
+  }
+
+  async function saveEdit() {
+    if (!editing || !editName.trim()) return;
+    setEditSaving(true);
+    try {
+      await dbProjects.update(editing.id, {
+        name: editName.trim(),
+        description: editDesc.trim() || null,
+      });
+      setEditing(null);
+      await load();
+    } finally {
+      setEditSaving(false);
+    }
   }
 
   const selectedTemplate = templates.find((tpl) => tpl.id === templateId) ?? null;
@@ -189,17 +216,32 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
                         </div>
                         <p className="text-sm text-muted-foreground/60 line-clamp-1">{p.description || t("projects.noDescription")}</p>
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="rounded-xl hover:bg-red-500/10 hover:text-red-500 shrink-0"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void deleteProject(p.id);
-                        }}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="rounded-xl hover:bg-primary/10 hover:text-primary"
+                          title={t("projects.editButton")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEditDialog(p);
+                          }}
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="rounded-xl hover:bg-red-500/10 hover:text-red-500"
+                          title={t("common.delete")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void deleteProject(p.id);
+                          }}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
@@ -347,6 +389,54 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
                 </Button>
               </>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 编辑项目：标题 + 描述 */}
+      <Dialog open={editing !== null} onOpenChange={(o) => { if (!o) setEditing(null); }}>
+        <DialogContent className="glass border-white/10 rounded-[2.5rem] max-w-lg p-0 overflow-hidden">
+          <DialogHeader className="p-8 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                <Pencil className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <DialogTitle className="text-xl font-bold tracking-tight">{t("projects.editDialog.title")}</DialogTitle>
+                <DialogDescription className="text-xs">{t("projects.editDialog.desc")}</DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+          <div className="p-8 pt-2 space-y-5">
+            <div className="space-y-2">
+              <Label htmlFor="edit-project-name" className="text-[10px] font-bold uppercase tracking-widest px-1">{t("projects.createDialog.nameLabel")}</Label>
+              <Input
+                id="edit-project-name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder={t("projects.createDialog.namePlaceholder")}
+                className="rounded-xl border-white/10 bg-white/5 h-12"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-project-desc" className="text-[10px] font-bold uppercase tracking-widest px-1">{t("projects.createDialog.descLabel")}</Label>
+              <Input
+                id="edit-project-desc"
+                value={editDesc}
+                onChange={(e) => setEditDesc(e.target.value)}
+                placeholder={t("projects.createDialog.descPlaceholder")}
+                className="rounded-xl border-white/10 bg-white/5 h-12"
+              />
+            </div>
+          </div>
+          <DialogFooter className="p-8 pt-0 gap-3">
+            <Button variant="ghost" onClick={() => setEditing(null)} className="rounded-xl h-11 flex-1">
+              {t("common.cancel")}
+            </Button>
+            <Button onClick={() => void saveEdit()} disabled={editSaving || !editName.trim()} className="rounded-xl h-11 flex-1 bg-primary">
+              {editSaving ? t("projects.createDialog.submitting") : t("common.save")}
+              <Check className="w-4 h-4 ml-2" />
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

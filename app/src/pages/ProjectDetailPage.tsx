@@ -358,7 +358,7 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
         )}
         {streamErr && (
           <div className="px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-xl text-[10px] font-bold text-red-500">
-            ERROR: {streamErr}
+            {t("projectDetail.chat.errorPrefix")}: {streamErr}
           </div>
         )}
       </div>
@@ -500,7 +500,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-8 animate-in fade-in slide-in-from-top-4 duration-700">
           <div className="space-y-4 flex-1">
             <Button variant="ghost" size="sm" onClick={onBack} className="-ml-3 rounded-xl hover:bg-white/10 text-muted-foreground">
-              <ArrowLeft className="w-4 h-4 mr-2" /> Return to Hub
+              <ArrowLeft className="w-4 h-4 mr-2" /> {t("projectDetail.returnToHub")}
             </Button>
             <div className="space-y-1">
               <div className="flex items-center gap-3">
@@ -509,21 +509,21 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                   {projectStatus.label}
                 </div>
               </div>
-              <p className="text-muted-foreground text-sm font-medium opacity-60">{project.description || "Experimental Neural Project"}</p>
+              <p className="text-muted-foreground text-sm font-medium opacity-60">{project.description || t("projectDetail.descFallback")}</p>
             </div>
             <div className="flex flex-wrap items-center gap-6 pt-2">
               <div className="flex flex-col gap-0.5">
-                <span className="text-[9px] font-black text-muted-foreground/40 uppercase tracking-widest">Active Sequence</span>
-                <span className="text-xs font-bold text-primary">{ROLE_LABEL(project.currentStage, t) || "Initialization"}</span>
+                <span className="text-[9px] font-black text-muted-foreground/40 uppercase tracking-widest">{t("projectDetail.activeSequence")}</span>
+                <span className="text-xs font-bold text-primary">{ROLE_LABEL(project.currentStage, t) || t("projectDetail.initialization")}</span>
               </div>
               <div className="w-px h-8 bg-white/5" />
               <div className="flex flex-col gap-0.5">
-                <span className="text-[9px] font-black text-muted-foreground/40 uppercase tracking-widest">Accumulated Cost</span>
+                <span className="text-[9px] font-black text-muted-foreground/40 uppercase tracking-widest">{t("projectDetail.accumulatedCost")}</span>
                 <span className="text-xs font-bold font-mono text-emerald-400">{formatCost(totalCost)}</span>
               </div>
               <div className="w-px h-8 bg-white/5" />
               <div className="flex flex-col gap-0.5">
-                <span className="text-[9px] font-black text-muted-foreground/40 uppercase tracking-widest">Neural Load</span>
+                <span className="text-[9px] font-black text-muted-foreground/40 uppercase tracking-widest">{t("projectDetail.neuralLoad")}</span>
                 <span className="text-xs font-bold font-mono">{totalTokens.toLocaleString()} <span className="text-[9px] opacity-40">TKN</span></span>
               </div>
             </div>
@@ -537,7 +537,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                 onClick={() => dbProjects.update(project.id, { status: "completed", currentStage: "completed" }).then(load)}
                 className="h-12 px-6 rounded-2xl bg-primary shadow-xl shadow-primary/20 font-bold gap-2"
               >
-                <CheckCircle2 className="w-4 h-4" /> Deploy & Finish
+                <CheckCircle2 className="w-4 h-4" /> {t("projectDetail.deployFinish")}
               </Button>
             )}
           </div>
@@ -549,7 +549,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
           <div className="lg:col-span-2 space-y-6">
             <div className="flex items-center justify-between px-2">
               <h2 className="text-xs font-black uppercase tracking-[0.3em] text-muted-foreground/40 flex items-center gap-2">
-                <Workflow className="w-4 h-4" /> Operational Timeline
+                <Workflow className="w-4 h-4" /> {t("projectDetail.operationalTimeline")}
               </h2>
             </div>
             <div className="space-y-4">
@@ -587,7 +587,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                             </div>
                           </div>
                           <div className="flex items-center gap-3 text-[10px] font-bold text-muted-foreground/40 uppercase tracking-widest">
-                            <span className="flex items-center gap-1"><Cpu className="w-3 h-3" /> {m?.displayName || "System Model"}</span>
+                            <span className="flex items-center gap-1"><Cpu className="w-3 h-3" /> {m?.displayName || t("projectDetail.systemModel")}</span>
                             <span>•</span>
                             <span className="flex items-center gap-1"><Terminal className="w-3 h-3" /> {st.outputTokens} tkn</span>
                           </div>
@@ -597,7 +597,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                       <div className="flex items-center gap-2">
                         {st.status === "pending" ? (
                           <Button onClick={() => startStage(st)} className="rounded-xl h-10 px-5 bg-primary/20 hover:bg-primary text-primary hover:text-primary-foreground transition-all font-bold text-xs uppercase">
-                            Start Sequence
+                            {t("projectDetail.startSequence")}
                           </Button>
                         ) : (
                           <Button
@@ -607,7 +607,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                             className={cn("h-10 px-4 rounded-xl gap-2 font-bold text-xs uppercase", isOpen ? "bg-primary text-primary-foreground" : "hover:bg-white/10")}
                           >
                             <MessageSquare className="w-4 h-4" />
-                            {isOpen ? "Close Logs" : "View Dialog"}
+                            {isOpen ? t("projectDetail.closeLogs") : t("projectDetail.viewDialog")}
                           </Button>
                         )}
                         {isRunning && (
@@ -634,7 +634,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
             <div className="space-y-4">
                <div className="flex items-center justify-between px-2">
                   <h2 className="text-xs font-black uppercase tracking-[0.3em] text-muted-foreground/40 flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4" /> Core Checkpoints
+                    <CheckCircle2 className="w-4 h-4" /> {t("projectDetail.coreCheckpoints")}
                   </h2>
                   <Button size="sm" variant="ghost" onClick={() => setCreateCpOpen(true)} className="h-7 w-7 p-0 rounded-lg bg-primary/10 text-primary hover:bg-primary hover:text-white">
                     <Plus className="w-4 h-4" />
@@ -643,7 +643,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                <div className="space-y-3">
                   {checkpoints.length === 0 ? (
                     <div className="glass border-dashed rounded-[2rem] p-8 text-center opacity-30">
-                       <p className="text-[10px] font-black uppercase tracking-widest">No Records</p>
+                       <p className="text-[10px] font-black uppercase tracking-widest">{t("projectDetail.noRecords")}</p>
                     </div>
                   ) : checkpoints.map(cp => (
                     <Card key={cp.id} className="glass border-white/5 rounded-[1.5rem] p-5 space-y-4 hover:border-primary/30 transition-all">
@@ -657,8 +657,8 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                           <Clock className="w-3 h-3" /> {formatTime(cp.createdAt)}
                        </div>
                        <div className="flex gap-2">
-                          <Button variant="outline" size="sm" onClick={() => setViewCp(cp)} className="flex-1 h-8 rounded-lg text-[10px] uppercase font-bold border-white/10 hover:bg-white/5">Details</Button>
-                          <Button size="sm" onClick={() => setGenCp(cp)} className="flex-1 h-8 rounded-lg text-[10px] uppercase font-bold bg-primary shadow-lg shadow-primary/10">Handoff</Button>
+                          <Button variant="outline" size="sm" onClick={() => setViewCp(cp)} className="flex-1 h-8 rounded-lg text-[10px] uppercase font-bold border-white/10 hover:bg-white/5">{t("projectDetail.details")}</Button>
+                          <Button size="sm" onClick={() => setGenCp(cp)} className="flex-1 h-8 rounded-lg text-[10px] uppercase font-bold bg-primary shadow-lg shadow-primary/10">{t("projectDetail.handoff")}</Button>
                        </div>
                     </Card>
                   ))}
@@ -669,7 +669,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
             <div className="space-y-4">
                <div className="flex items-center justify-between px-2">
                   <h2 className="text-xs font-black uppercase tracking-[0.3em] text-muted-foreground/40 flex items-center gap-2">
-                    <BrainCircuit className="w-4 h-4" /> Neural Memory
+                    <BrainCircuit className="w-4 h-4" /> {t("projectDetail.neuralMemory")}
                   </h2>
                   <Button size="sm" variant="ghost" onClick={() => setAddMemoryOpen(true)} className="h-7 w-7 p-0 rounded-lg bg-accent/10 text-accent hover:bg-accent hover:text-white">
                     <Plus className="w-4 h-4" />
@@ -678,7 +678,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                <div className="space-y-3">
                   {memories.length === 0 ? (
                     <div className="glass border-dashed rounded-[2rem] p-8 text-center opacity-30">
-                       <p className="text-[10px] font-black uppercase tracking-widest">Empty Buffer</p>
+                       <p className="text-[10px] font-black uppercase tracking-widest">{t("projectDetail.emptyBuffer")}</p>
                     </div>
                   ) : memories.map(m => (
                     <Card key={m.id} className="glass border-white/5 rounded-[1.5rem] p-5 space-y-2 group transition-all">

@@ -1,7 +1,7 @@
 // TokenPlansPage - 重构为 "Cosmic Cyber" 视觉风格
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Coins, Trash2, Gauge, Activity, Calendar, ShieldCheck } from "lucide-react";
+import { Plus, Coins, Trash2, Pencil, Gauge, Activity, Calendar, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -47,15 +47,10 @@ export function TokenPlansPage() {
   const [plans, setPlans] = useState<TokenPlan[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [form, setForm] = useState({
-    providerId: "",
-    name: "",
-    planType: "monthly",
-    quotaUnit: "usd",
-    totalQuota: "",
-    resetRule: "",
-  });
+  const emptyForm = { providerId: "", name: "", planType: "monthly", quotaUnit: "usd", totalQuota: "", resetRule: "" };
+  const [form, setForm] = useState(emptyForm);
 
   async function load() {
     try {
@@ -72,18 +67,47 @@ export function TokenPlansPage() {
     void load();
   }, []);
 
-  async function handleCreate() {
+  function openCreate() {
+    setEditingId(null);
+    setForm(emptyForm);
+    setDialogOpen(true);
+  }
+
+  function openEdit(p: TokenPlan) {
+    setEditingId(p.id);
+    setForm({
+      providerId: p.providerId,
+      name: p.name,
+      planType: p.planType,
+      quotaUnit: p.quotaUnit,
+      totalQuota: p.totalQuota != null ? String(p.totalQuota) : "",
+      resetRule: p.resetRule ?? "",
+    });
+    setDialogOpen(true);
+  }
+
+  function closeDialog() {
+    setDialogOpen(false);
+    setEditingId(null);
+    setForm(emptyForm);
+  }
+
+  async function handleSubmit() {
     if (!form.providerId || !form.name) return;
-    await dbTokenPlans.create({
+    const payload = {
       providerId: form.providerId,
       name: form.name,
       planType: form.planType,
       quotaUnit: form.quotaUnit,
       totalQuota: form.totalQuota ? Number(form.totalQuota) : null,
       resetRule: form.resetRule || null,
-    });
-    setDialogOpen(false);
-    setForm({ providerId: "", name: "", planType: "monthly", quotaUnit: "usd", totalQuota: "", resetRule: "" });
+    };
+    if (editingId) {
+      await dbTokenPlans.update(editingId, payload);
+    } else {
+      await dbTokenPlans.create(payload);
+    }
+    closeDialog();
     await load();
   }
 
@@ -125,7 +149,7 @@ export function TokenPlansPage() {
             </p>
           </div>
           <Button
-            onClick={() => setDialogOpen(true)}
+            onClick={openCreate}
             disabled={providers.length === 0}
             className="rounded-xl px-6 h-11 bg-primary shadow-lg shadow-primary/20 hover:scale-105 transition-all"
           >
@@ -173,14 +197,26 @@ export function TokenPlansPage() {
                           </div>
                         </div>
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleDelete(p.id)}
-                        className="rounded-xl hover:bg-red-500/10 hover:text-red-500 transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => openEdit(p)}
+                          title={t("common.edit")}
+                          className="rounded-xl hover:bg-primary/10 hover:text-primary transition-colors"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleDelete(p.id)}
+                          title={t("common.delete")}
+                          className="rounded-xl hover:bg-red-500/10 hover:text-red-500 transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
                     </div>
 
                     <div className="space-y-3">
@@ -240,12 +276,12 @@ export function TokenPlansPage() {
         )}
       </div>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={dialogOpen} onOpenChange={(o) => { if (!o) closeDialog(); }}>
         <DialogContent className="glass border-white/10 rounded-[2rem] max-w-md">
           <DialogHeader>
             <DialogTitle className="text-xl font-bold flex items-center gap-2">
-              <Plus className="w-5 h-5 text-primary" />
-              {t("tokenPlans.createDialog.title")}
+              {editingId ? <Pencil className="w-5 h-5 text-primary" /> : <Plus className="w-5 h-5 text-primary" />}
+              {editingId ? t("tokenPlans.editDialog.title") : t("tokenPlans.createDialog.title")}
             </DialogTitle>
           </DialogHeader>
 
@@ -327,11 +363,11 @@ export function TokenPlansPage() {
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="ghost" onClick={() => setDialogOpen(false)} className="rounded-xl h-11">
+            <Button variant="ghost" onClick={closeDialog} className="rounded-xl h-11">
               {t("common.cancel")}
             </Button>
-            <Button onClick={handleCreate} className="rounded-xl h-11 px-8 bg-primary shadow-lg shadow-primary/20">
-              {t("tokenPlans.createDialog.confirm")}
+            <Button onClick={() => void handleSubmit()} className="rounded-xl h-11 px-8 bg-primary shadow-lg shadow-primary/20">
+              {editingId ? t("common.save") : t("tokenPlans.createDialog.confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>
