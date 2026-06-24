@@ -113,6 +113,24 @@ describe("conversations + 主对话", () => {
     expect((await db.conversations.listMainChats()).some((c) => c.id === c2.id)).toBe(false);
     expect(await db.messages.listByConversation(c2.id)).toHaveLength(0);
   });
+
+  it("orchestration 列存在且读写 JSON 往返", async () => {
+    const c = await db.conversations.create({ title: "c-orch", projectId: null });
+    // 初始为空
+    expect(await db.conversations.getOrchestration(c.id)).toBeNull();
+    // 写入再读出
+    const json = JSON.stringify({ version: 1, nodes: [{ id: "n1", kind: "planning" }], currentNodeId: "n1" });
+    await db.conversations.saveOrchestration(c.id, json);
+    expect(await db.conversations.getOrchestration(c.id)).toBe(json);
+  });
+
+  it("saveOrchestration 不 bump updated_at（后台编排不顶到侧栏最前）", async () => {
+    const c = await db.conversations.create({ title: "orch-ts", projectId: null });
+    const before = (await db.conversations.list()).find((x) => x.id === c.id)!.updatedAt;
+    await db.conversations.saveOrchestration(c.id, JSON.stringify({ version: 1, nodes: [], currentNodeId: null }));
+    const after = (await db.conversations.list()).find((x) => x.id === c.id)!.updatedAt;
+    expect(after).toBe(before);
+  });
 });
 
 describe("messages", () => {

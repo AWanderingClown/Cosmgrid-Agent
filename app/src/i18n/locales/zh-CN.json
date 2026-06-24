@@ -49,7 +49,7 @@
   },
   "chat": {
     "userLabel": "授权用户",
-    "assistantLabel": "CosmGrid 助手",
+    "assistantLabel": "CosmGrid Ai",
     "altBot": "助手",
     "altEmpty": "空状态",
     "newChat": "新对话",
@@ -66,6 +66,24 @@
     "contextTrimmed": "[较早的 {{count}} 条消息已省略以节省 token]",
     "requestInterrupted": "请求中断",
     "smartPick": "智能推荐",
+    "workspace": {
+      "choose": "工作文件夹",
+      "clear": "解绑文件夹",
+      "pickTitle": "选择 AI 的工作文件夹"
+    },
+    "permission": {
+      "read": "只读",
+      "confirm": "确认写",
+      "auto": "自动",
+      "readHint": "只读：AI 只能读文件、搜索、看 git，不改任何东西",
+      "confirmHint": "确认写：AI 写文件或跑命令前弹窗给你看改动，按确认才执行",
+      "autoHint": "自动：AI 写文件/跑命令不再逐个弹窗（信任的活才用）"
+    },
+    "tools": {
+      "confirmTitle": "AI 请求一个操作，请确认",
+      "approve": "确认执行",
+      "reject": "拒绝"
+    },
     "smartPickResult": {
       "title": "智能推荐",
       "noModels": "还没有可用模型。请先到「模型供应商」配置并启用至少一个模型，再用智能推荐。",
@@ -100,7 +118,31 @@
       "fallback": "故障切换",
       "switchedNote": "限额自动切换",
       "inTokens": "输入",
-      "outTokens": "输出"
+      "outTokens": "输出",
+      "currentActivity": "当前活动",
+      "idle": "空闲，等你发话"
+    },
+    "thinking": "思考中",
+    "replying": "回复中",
+    "queued": "排队中",
+    "inputDraftHint": "模型回复中… 可以继续发，会排队依次处理",
+    "orchestrator": {
+      "panelTitle": "工作节点",
+      "panelEmpty": "聊几句，AI 会自动把这次任务拆成工作节点",
+      "currentBadge": "当前",
+      "nodeKinds": {
+        "planning": "规划",
+        "coding": "写代码",
+        "testing": "测试",
+        "review": "审查",
+        "chat": "对话"
+      },
+      "receiptPlanned": "已规划 {{count}} 个工作节点 · 当前「{{node}}」用 {{model}}",
+      "receiptEntered": "进入「{{node}}」节点 · 自动用 {{model}}",
+      "receiptSwitched": "「{{node}}」节点自动切到 {{model}}",
+      "receiptReason": "判断依据：{{reason}}",
+      "receiptNoModel": "（暂无可用模型，先去接入页配置）",
+      "detailNodes": "节点规划"
     }
   },
   "providers": {
@@ -149,6 +191,27 @@
   "addProvider": {
     "title": "添加供应商",
     "desc": "填一次，Provider + 凭证 + Model 一起建好",
+    "presetLabel": "快速选择厂商（自动填好地址和模型，只需粘 API Key）",
+    "presetCustom": "自定义",
+    "getApiKey": "去这里拿 API Key",
+    "fetchModels": {
+      "button": "拉取可用模型",
+      "loading": "拉取中…",
+      "pickLabel": "选一个模型",
+      "pickPlaceholder": "从拉取到的模型里选",
+      "pickHint": "已拉取 {{count}} 个真实可用模型，从中选即可，不会填错名字",
+      "errors": {
+        "unauthorized": "API Key 无效或未授权，请检查 Key",
+        "notFound": "接口地址不对（404），请检查 Base URL",
+        "unsupported": "该类型不支持自动拉取模型（如 CLI 订阅），请手动填模型名",
+        "noBaseUrl": "请先填 Base URL",
+        "noKey": "请先粘 API Key",
+        "empty": "没拉到模型，请手动填模型名",
+        "timeout": "拉取超时，请重试或检查网络",
+        "network": "网络错误，拉取失败",
+        "unknown": "拉取失败，请手动填模型名"
+      }
+    },
     "providerName": "供应商名称",
     "providerNamePlaceholder": "我的 Claude",
     "website": "官网",
@@ -531,7 +594,7 @@
     "altUser": "用户",
     "chat": {
       "userLabel": "授权用户",
-      "assistantLabel": "CosmGrid 助手",
+      "assistantLabel": "CosmGrid Ai",
       "placeholder": "向智能体下达指令...",
       "awaiting": "等待指令",
       "endpointFailed": "端点连接失败",

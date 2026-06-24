@@ -49,7 +49,7 @@
   },
   "chat": {
     "userLabel": "You",
-    "assistantLabel": "CosmGrid Assistant",
+    "assistantLabel": "CosmGrid Ai",
     "altBot": "Bot",
     "altEmpty": "Empty",
     "newChat": "New Chat",
@@ -66,6 +66,24 @@
     "contextTrimmed": "[{{count}} earlier messages omitted to save tokens]",
     "requestInterrupted": "Request interrupted",
     "smartPick": "Smart Pick",
+    "workspace": {
+      "choose": "Workspace",
+      "clear": "Unbind folder",
+      "pickTitle": "Choose the AI's working folder"
+    },
+    "permission": {
+      "read": "Read-only",
+      "confirm": "Confirm writes",
+      "auto": "Auto",
+      "readHint": "Read-only: AI can read files, search, and view git — it changes nothing",
+      "confirmHint": "Confirm writes: before writing files or running commands, AI shows the change and waits for approval",
+      "autoHint": "Auto: AI writes files / runs commands without per-action prompts (use for trusted work)"
+    },
+    "tools": {
+      "confirmTitle": "AI is requesting an action — please confirm",
+      "approve": "Approve",
+      "reject": "Reject"
+    },
     "smartPickResult": {
       "title": "Smart Pick",
       "noModels": "No models available yet. Add and enable at least one model in Providers before using Smart Pick.",
@@ -100,7 +118,31 @@
       "fallback": "Fallback",
       "switchedNote": "Auto-switched on limit",
       "inTokens": "In",
-      "outTokens": "Out"
+      "outTokens": "Out",
+      "currentActivity": "Current Activity",
+      "idle": "Idle — your turn"
+    },
+    "thinking": "Thinking",
+    "replying": "Replying",
+    "queued": "Queued",
+    "inputDraftHint": "Model is replying… keep typing, messages are queued and handled in order",
+    "orchestrator": {
+      "panelTitle": "Work Nodes",
+      "panelEmpty": "Chat a bit — the AI will break this task into work nodes automatically",
+      "currentBadge": "Current",
+      "nodeKinds": {
+        "planning": "Planning",
+        "coding": "Coding",
+        "testing": "Testing",
+        "review": "Review",
+        "chat": "Chat"
+      },
+      "receiptPlanned": "Planned {{count}} work nodes · current \"{{node}}\" uses {{model}}",
+      "receiptEntered": "Entered \"{{node}}\" node · auto-using {{model}}",
+      "receiptSwitched": "\"{{node}}\" node auto-switched to {{model}}",
+      "receiptReason": "Why: {{reason}}",
+      "receiptNoModel": "(No usable model — configure one on the providers page)",
+      "detailNodes": "Node plan"
     }
   },
   "providers": {
@@ -149,6 +191,27 @@
   "addProvider": {
     "title": "Add Provider",
     "desc": "One form creates the Provider, credential, and model together.",
+    "presetLabel": "Quick pick a provider (auto-fills URL & model — just paste your API key)",
+    "presetCustom": "Custom",
+    "getApiKey": "Get an API key here",
+    "fetchModels": {
+      "button": "Fetch available models",
+      "loading": "Fetching…",
+      "pickLabel": "Pick a model",
+      "pickPlaceholder": "Choose from fetched models",
+      "pickHint": "Fetched {{count}} real available models — pick one, no typos possible",
+      "errors": {
+        "unauthorized": "Invalid or unauthorized API key — please check it",
+        "notFound": "Wrong endpoint (404) — please check the Base URL",
+        "unsupported": "This type can't auto-fetch models (e.g. CLI subscription) — enter the model name manually",
+        "noBaseUrl": "Please enter a Base URL first",
+        "noKey": "Please paste an API key first",
+        "empty": "No models returned — enter the model name manually",
+        "timeout": "Fetch timed out — retry or check your network",
+        "network": "Network error — fetch failed",
+        "unknown": "Fetch failed — enter the model name manually"
+      }
+    },
     "providerName": "Provider Name",
     "providerNamePlaceholder": "My Claude",
     "website": "Website",
@@ -531,7 +594,7 @@
     "altUser": "User",
     "chat": {
       "userLabel": "You",
-      "assistantLabel": "CosmGrid Assistant",
+      "assistantLabel": "CosmGrid Ai",
       "placeholder": "Command the agent...",
       "awaiting": "Awaiting Instruction",
       "endpointFailed": "Endpoint Failed",

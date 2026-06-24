@@ -32,7 +32,9 @@ REGISTRY.set("anthropic", {
 REGISTRY.set("openai", {
   factory: (modelName, apiKey, baseUrl) => {
     const provider = createOpenAI({ apiKey, ...(baseUrl && { baseURL: baseUrl }) });
-    return provider(modelName);
+    // 必须用 .chat() 走 /chat/completions：@ai-sdk/openai 3.x 的 provider(id) 默认走 Responses API
+    // (/responses)，而绝大多数 OpenAI 兼容服务（含 OpenAI 自家旧模型、第三方）只实现 /chat/completions。
+    return provider.chat(modelName);
   },
 });
 
@@ -52,7 +54,9 @@ REGISTRY.set("openai-compatible", {
       throw new Error("openai-compatible provider requires a baseUrl on the credential (e.g. https://api.deepseek.com/v1)");
     }
     const provider = createOpenAI({ apiKey, baseURL: baseUrl });
-    return provider(modelName);
+    // DeepSeek / GLM / Qwen / Kimi 等只实现 /chat/completions，没有 /responses。
+    // 必须 .chat()，否则 provider(id) 默认发到 /responses → 这些服务一律 404（误报"模型不存在"）。
+    return provider.chat(modelName);
   },
 });
 

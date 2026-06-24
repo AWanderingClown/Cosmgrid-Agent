@@ -5,6 +5,11 @@
     <style>
       .st0 {
         fill: url(#_未命名的渐变_70);
+        stroke: url(#_未命名的渐变_70);
+        stroke-width: 14;
+        stroke-linejoin: round;
+        stroke-linecap: round;
+        paint-order: stroke fill;
       }
     </style>
     <linearGradient id="_未命名的渐变_70" data-name="未命名的渐变 70" x1="261.91" y1="182.3" x2="689.32" y2="609.71" gradientTransform="translate(0 42.59)" gradientUnits="userSpaceOnUse">

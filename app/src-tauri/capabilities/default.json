@@ -17,6 +17,10 @@
     "store:allow-save",
     "store:allow-load",
     {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*" }, { "url": "http://*" }]
+    },
+    {
       "identifier": "fs:allow-read-text-file",
       "allow": [{ "path": "$HOME/**" }]
     },
@@ -39,6 +43,7 @@
     {
       "identifier": "fs:allow-mkdir",
       "allow": [{ "path": "$HOME/**" }]
-    }
+    },
+    "dialog:allow-open"
   ]
 }

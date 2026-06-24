@@ -213,7 +213,7 @@ function App() {
 
         <main className="flex-1 overflow-hidden">
           <div className="h-full w-full" style={{ display: page === "chat" ? "block" : "none" }}>
-            <ChatPage onOpenDebate={(topic) => { setDebateSeed(topic); setPage("debate"); }} />
+            <ChatPage active={page === "chat"} onOpenDebate={(topic) => { setDebateSeed(topic); setPage("debate"); }} />
           </div>
           <div className="h-full w-full rounded-3xl overflow-hidden" style={{ display: page === "providers" ? "block" : "none" }}>
             <ProvidersPage />

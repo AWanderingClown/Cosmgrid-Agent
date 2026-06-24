@@ -196,6 +196,14 @@ export async function initSchema(): Promise<void> {
     )
   `);
 
+  // 迁移：主对话「编排者模式」——给旧库的 conversations 补 orchestration 列（存节点状态 JSON）。
+  // 新库 CREATE 时未含该列（保持基线 schema 干净）；旧库靠幂等 ALTER 补上。
+  await addColumnIfMissing(db, "conversations", "orchestration", "TEXT");
+
+  // 迁移：主对话「工作文件夹」——给会话绑一个本地目录，AI 在此目录内读/改/跑命令（工具层 ToolContext.workspacePath）。
+  // 符合产品真北：工作文件夹挂在「对话」上（上下文是中心），不强绑项目工作区。旧库靠幂等 ALTER 补上。
+  await addColumnIfMissing(db, "conversations", "workspace_path", "TEXT");
+
   await db.execute(`
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
@@ -812,6 +820,7 @@ export interface ConversationRow {
   project_id: string | null;
   title: string;
   default_model_id: string | null;
+  workspace_path: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -821,8 +830,23 @@ export interface Conversation {
   projectId: string | null;
   title: string;
   defaultModelId: string | null;
+  /** 本地工作文件夹（AI 工具在此目录内读/改/跑命令）；未绑定为 null */
+  workspacePath: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// 单一映射出口：加字段时只改这里，杜绝多处 SELECT mapper 漏字段。
+function mapConversation(r: ConversationRow): Conversation {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    title: r.title,
+    defaultModelId: r.default_model_id,
+    workspacePath: r.workspace_path,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
 }
 
 export interface MessageRow {
@@ -855,14 +879,7 @@ export const conversations = {
     const rows = await db.select<ConversationRow[]>(
       "SELECT * FROM conversations ORDER BY updated_at DESC"
     );
-    return rows.map((r) => ({
-      id: r.id,
-      projectId: r.project_id,
-      title: r.title,
-      defaultModelId: r.default_model_id,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-    }));
+    return rows.map(mapConversation);
   },
 
   async create(input: { title: string; defaultModelId?: string | null; projectId?: string | null }): Promise<Conversation> {
@@ -875,8 +892,7 @@ export const conversations = {
       [id, input.projectId ?? null, input.title, input.defaultModelId ?? null, ts, ts]
     );
     const rows = await db.select<ConversationRow[]>("SELECT * FROM conversations WHERE id = $1", [id]);
-    const r = rows[0]!;
-    return { id: r.id, projectId: r.project_id, title: r.title, defaultModelId: r.default_model_id, createdAt: r.created_at, updatedAt: r.updated_at };
+    return mapConversation(rows[0]!);
   },
 
   // 主对话（无项目归属）的单例会话：取最近一条 project_id IS NULL 的会话，没有则建一条。
@@ -888,7 +904,7 @@ export const conversations = {
     );
     const r = rows[0];
     if (r) {
-      return { id: r.id, projectId: r.project_id, title: r.title, defaultModelId: r.default_model_id, createdAt: r.created_at, updatedAt: r.updated_at };
+      return mapConversation(r);
     }
     return this.create({ title, defaultModelId: defaultModelId ?? null, projectId: null });
   },
@@ -899,14 +915,7 @@ export const conversations = {
     const rows = await db.select<ConversationRow[]>(
       "SELECT * FROM conversations WHERE project_id IS NULL ORDER BY updated_at DESC"
     );
-    return rows.map((r) => ({
-      id: r.id,
-      projectId: r.project_id,
-      title: r.title,
-      defaultModelId: r.default_model_id,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-    }));
+    return rows.map(mapConversation);
   },
 
   // 改标题（首条消息自动命名 / 用户手动重命名）。顺带 bump updated_at 让它排到最前。
@@ -925,6 +934,28 @@ export const conversations = {
   async delete(id: string): Promise<void> {
     const db = await getDb();
     await db.execute("DELETE FROM conversations WHERE id = $1", [id]);
+  },
+
+  // 读编排者节点状态 JSON（没有则 null）。编排是后台锦上添花，列可能不存在的旧库已被 initSchema 迁移补上。
+  async getOrchestration(id: string): Promise<string | null> {
+    const db = await getDb();
+    const rows = await db.select<Array<{ orchestration: string | null }>>(
+      "SELECT orchestration FROM conversations WHERE id = $1",
+      [id]
+    );
+    return rows[0]?.orchestration ?? null;
+  },
+
+  // 写编排者节点状态 JSON。故意不 bump updated_at——后台编排不该把会话顶到侧栏最前。
+  async saveOrchestration(id: string, json: string): Promise<void> {
+    const db = await getDb();
+    await db.execute("UPDATE conversations SET orchestration = $1 WHERE id = $2", [json, id]);
+  },
+
+  // 绑定/解绑会话的本地工作文件夹（传 null 解绑）。不 bump updated_at——绑目录不算新消息。
+  async setWorkspacePath(id: string, path: string | null): Promise<void> {
+    const db = await getDb();
+    await db.execute("UPDATE conversations SET workspace_path = $1 WHERE id = $2", [path, id]);
   },
 };
 

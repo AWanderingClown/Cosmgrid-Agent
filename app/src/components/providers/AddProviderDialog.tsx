@@ -2,7 +2,7 @@
 // v0.3：apiFetch → db.ts 直连 SQLite，API Key → keystore
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
+import { Loader2, Download, ExternalLink } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -15,10 +15,15 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 import { type WorkRole } from "@/lib/api";
 import { providers as dbProviders, apiCredentials as dbCredentials, models as dbModels } from "@/lib/db";
 import { saveApiKey, deleteApiKey } from "@/lib/keystore";
 import { inferModelCapabilities } from "@/lib/llm/model-capabilities";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { PROVIDER_PRESETS, type ProviderPreset } from "@/lib/llm/provider-presets";
+import { fetchAvailableModels } from "@/lib/llm/fetch-models";
 import { ApiKeyInput } from "./ApiKeyInput";
 import { ProviderTypeSelect, type ProviderTypeValue } from "./ProviderTypeSelect";
 import { BasicFormFields } from "./BasicFormFields";
@@ -77,6 +82,47 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
   const [rolesEditedManually, setRolesEditedManually] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 厂商预设 + 拉取模型
+  const [presetId, setPresetId] = useState<string | null>(null);
+  const [apiKeyUrl, setApiKeyUrl] = useState<string | null>(null);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [fetchedModels, setFetchedModels] = useState<string[]>([]);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  // 选一个厂商预设：自动带出 type / 名称 / baseUrl / 官网 / 默认模型，用户只需粘 key
+  function applyPreset(preset: ProviderPreset) {
+    setPresetId(preset.id);
+    setProviderType(preset.providerType);
+    setProviderName(preset.name);
+    setBaseUrl(preset.baseUrl);
+    setWebsite(preset.website ?? "");
+    setContextWindow(preset.defaultContextWindow);
+    setApiKeyUrl(preset.apiKeyUrl ?? null);
+    setFetchedModels([]);
+    setFetchError(null);
+    handleModelNameChange(preset.defaultModel);
+  }
+
+  // 粘 key 后拉取该厂商账号下真实可用的模型，避免手敲填错名字
+  async function handleFetchModels() {
+    setFetchingModels(true);
+    setFetchError(null);
+    setFetchedModels([]);
+    try {
+      const r = await fetchAvailableModels({ providerType, baseUrl, apiKey });
+      if (r.ok) {
+        setFetchedModels(r.models);
+        // 若当前模型名不在真实列表里，自动选第一个真实模型，省得用户还得手动对
+        if (!r.models.includes(modelName)) handleModelNameChange(r.models[0]!);
+      } else {
+        setFetchError(t(`addProvider.fetchModels.errors.${r.errorKey}`));
+      }
+    } catch {
+      setFetchError(t("addProvider.fetchModels.errors.unknown"));
+    } finally {
+      setFetchingModels(false);
+    }
+  }
 
   // 填模型名时自动识别它适合的角色（用户没手动改过的前提下）
   function handleModelNameChange(name: string) {
@@ -180,9 +226,50 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6">
+          {/* 厂商预设：点一下自动带出 类型/名称/Base URL/官网/默认模型，只需再粘 API Key。
+              「自定义」清空回到手动；选了任何厂商都仍可手改下面每一项。 */}
+          <div className="space-y-2">
+            <Label>{t("addProvider.presetLabel")}</Label>
+            <div className="flex flex-wrap gap-2">
+              {PROVIDER_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => applyPreset(p)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors",
+                    presetId === p.id
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "border-border hover:bg-muted",
+                  )}
+                >
+                  {p.name}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  setPresetId(null);
+                  setApiKeyUrl(null);
+                  setFetchedModels([]);
+                  setFetchError(null);
+                }}
+                className={cn(
+                  "px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors",
+                  presetId === null ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted",
+                )}
+              >
+                {t("addProvider.presetCustom")}
+              </button>
+            </div>
+          </div>
+
           <ProviderTypeSelect
             value={providerType}
             onChange={(v) => {
+              // 手动改协议类型 = 走自定义，清掉预设关联
+              setPresetId(null);
+              setApiKeyUrl(null);
               setProviderType(v);
               setBaseUrl(DEFAULT_BASE_URLS[v]);
             }}
@@ -225,7 +312,51 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
                 required
                 placeholder="sk-ant-..."
               />
+              {apiKeyUrl && (
+                <button
+                  type="button"
+                  onClick={() => void openUrl(apiKeyUrl).catch(() => {})}
+                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  {t("addProvider.getApiKey")}
+                </button>
+              )}
             </>
+          )}
+
+          {/* 拉取真实模型列表：粘 key 后点一下，从该厂商账号下真实可用模型里选，杜绝填错名字。
+              对「所有」非 CLI 厂商都显示（含自定义）——这样不在预设里的任意 OpenAI 兼容厂商也能一键拉取。 */}
+          {!isCli && (
+            <div className="space-y-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void handleFetchModels()}
+                disabled={fetchingModels || !apiKey || !baseUrl}
+              >
+                {fetchingModels ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                {fetchingModels ? t("addProvider.fetchModels.loading") : t("addProvider.fetchModels.button")}
+              </Button>
+              {fetchedModels.length > 0 && (
+                <div className="space-y-1">
+                  <Label>{t("addProvider.fetchModels.pickLabel")}</Label>
+                  <Select value={fetchedModels.includes(modelName) ? modelName : ""} onValueChange={handleModelNameChange}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={t("addProvider.fetchModels.pickPlaceholder")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {fetchedModels.map((m) => (
+                        <SelectItem key={m} value={m}>{m}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">{t("addProvider.fetchModels.pickHint", { count: fetchedModels.length })}</p>
+                </div>
+              )}
+              {fetchError && <p className="text-xs text-destructive">{fetchError}</p>}
+            </div>
           )}
 
           <ModelConfigFields

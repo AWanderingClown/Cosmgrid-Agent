@@ -26,4 +26,18 @@ describe("provider-factory registry", () => {
     const lm = getLanguageModel("openai-compatible", "deepseek-chat", "sk-test", "https://api.deepseek.com/v1");
     expect(lm).toBeDefined();
   });
+
+  // 回归：@ai-sdk/openai 3.x 的 provider(id) 默认走 Responses API(/responses)，DeepSeek/GLM/Qwen 等只有
+  // /chat/completions → 一律 404 误报"模型不存在"。必须用 .chat()。锁死端点是 chat 而非 responses。
+  it("openai-compatible 走 chat 补全端点（不是 responses）", () => {
+    const lm = getLanguageModel("openai-compatible", "deepseek-chat", "sk-test", "https://api.deepseek.com") as { provider: string };
+    expect(lm.provider).toContain("chat");
+    expect(lm.provider).not.toContain("responses");
+  });
+
+  it("原生 openai 同样走 chat 补全端点", () => {
+    const lm = getLanguageModel("openai", "gpt-4o", "sk-test") as { provider: string };
+    expect(lm.provider).toContain("chat");
+    expect(lm.provider).not.toContain("responses");
+  });
 });
