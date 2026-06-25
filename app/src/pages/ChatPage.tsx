@@ -1,6 +1,6 @@
 // ChatPage - 重构为 "Cosmic Cyber" 视觉风格
 import { memo, useEffect, useRef, useState } from "react";
-import { Bot, Send, Square, User, Zap, Sparkles, Cpu, PanelRight, X, Activity, Swords, Plus, Trash2, MessageSquare, ChevronDown, Pencil, Check, Pin, FolderOpen, Lock, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Bot, Send, Square, User, Zap, Sparkles, Cpu, PanelRight, X, Activity, Swords, Plus, Trash2, MessageSquare, ChevronDown, Pencil, Check, Pin, FolderOpen, Lock, ShieldAlert, ShieldCheck, Paperclip } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -26,6 +26,8 @@ import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
 import { compressHistory, type ChatMsg } from "@/lib/llm/context-compressor";
 import { buildTimePreamble } from "@/lib/llm/context-preamble";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
+import { ingestFile, ingestPath, toUserCoreMessage, parseAttachments, type Attachment } from "@/lib/llm/attachments";
+import { listen } from "@tauri-apps/api/event";
 import {
   planNodes,
   resolveOrchestration,
@@ -60,6 +62,8 @@ interface ChatMessage {
   kind?: "chat" | "receipt";
   /** kind==="receipt" 时的回执内容（一行小字 + 点开详情） */
   receipt?: ReceiptContent;
+  /** 拖拽/粘贴的附件（图片走多模态 / 文本文件贴内容） */
+  attachments?: Attachment[];
 }
 
 /** 编排者折叠回执：一行摘要 + 可展开详情 */
@@ -102,6 +106,7 @@ function dbMessagesToChat(hist: DbMessage[], models: ModelListItem[]): ChatMessa
       kind: "chat",
       modelLabel: (m.modelId ? models.find((x) => x.id === m.modelId)?.displayName : undefined) ?? undefined,
       usage: m.outputTokens > 0 ? { inputTokens: m.inputTokens, outputTokens: m.outputTokens } : undefined,
+      attachments: parseAttachments(m.attachments),
     });
   }
   return out;
@@ -119,12 +124,15 @@ const MessageItem = memo(function MessageItem({
   text,
   isStreaming,
   elapsedLabel,
+  attachments,
 }: {
   role: "user" | "assistant";
   text: string;
   isStreaming: boolean;
   /** 流式进行时的计时文案（如 "5s"），让用户看到"模型在工作/思考"，慢模型也不慌 */
   elapsedLabel?: string;
+  /** 该消息的附件（图片缩略图 / 文本文件名 chip），仅展示 */
+  attachments?: Attachment[];
 }) {
   const { t } = useTranslation();
   const isAssistant = role === "assistant";
@@ -168,6 +176,23 @@ const MessageItem = memo(function MessageItem({
             )}
           >
             {text}
+            {attachments && attachments.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {attachments.map((a) =>
+                  a.kind === "image" ? (
+                    <img key={a.id} src={a.dataUrl} alt={a.name} className="w-16 h-16 object-cover rounded-lg border border-white/10" />
+                  ) : a.kind === "folder" ? (
+                    <span key={a.id} className="inline-flex items-center gap-1 text-xs bg-primary/10 text-primary rounded-lg px-2 py-1 border border-primary/30">
+                      <FolderOpen className="w-3 h-3" /> {a.name}
+                    </span>
+                  ) : (
+                    <span key={a.id} className="inline-flex items-center gap-1 text-xs bg-white/10 rounded-lg px-2 py-1">
+                      <Paperclip className="w-3 h-3" /> {a.name}
+                    </span>
+                  ),
+                )}
+              </div>
+            )}
             {isStreaming && isAssistant && text !== "" && (
               <span className="inline-block w-2 h-5 ml-1 bg-primary/40 animate-pulse rounded-sm align-middle" />
             )}
@@ -389,6 +414,9 @@ function ConversationSwitcher({
 // 工具权限三档：只读 → 确认写 → 自动。默认 read，最安全。
 type PermissionMode = "read" | "confirm" | "auto";
 
+/** 排队待发的一条：文字 + 可选附件 */
+type PendingSend = { text: string; attachments?: Attachment[] };
+
 interface ChatPageProps {
   /** 用户在输入框写下"多方案权衡"类问题时，点"开对弈"会带着这条话题跳到对弈页 */
   onOpenDebate?: (topic: string) => void;
@@ -408,7 +436,9 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamElapsedMs, setStreamElapsedMs] = useState(0);
   // 消息队列：模型回复时用户还能继续发，发的句子排队，模型回完自动串行处理（不打断、不中断工作）
-  const [pendingQueue, setPendingQueue] = useState<string[]>([]);
+  const [pendingQueue, setPendingQueue] = useState<PendingSend[]>([]);
+  // 拖拽/粘贴的附件草稿：发送前可预览/删除
+  const [draftAttachments, setDraftAttachments] = useState<Attachment[]>([]);
   const drainingRef = useRef(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [switchNotice, setSwitchNotice] = useState<string | null>(null);
@@ -440,7 +470,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
 
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // 自动滚动到底部
   useEffect(() => {
@@ -659,7 +689,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     }
   }
 
-  async function handleSend(text: string) {
+  async function handleSend(text: string, attachments?: Attachment[]) {
     // 编排自动挡：当前节点已绑定模型 → 本轮就用它（上一轮后台编排已定好，零延迟）。
     // 直接走 setSelectedModelId 让 UI 跟上，但**不经 handleModelChange**——那是用户手动切的路径，
     // 会记 switched_up 负反馈；系统自己换的不能污染评分。
@@ -691,6 +721,17 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       return;
     }
 
+    // 附件图片：只有 CLI 模型（claude/codex 本机）真不能传图，拦住提示换 API；
+    // API 模型一律放行——支持看图的就直接处理，不支持的由 API 报错自然反馈，不硬编码名单
+    const hasImage = attachments?.some((a) => a.kind === "image");
+    if (hasImage && primaryIsCli) {
+      setStreamError(t("chat.attachments.cliNoImage"));
+      return;
+    }
+    // 拖入的文件夹：绑定为 AI 的工作文件夹（本次工具调用直接用这个路径，不靠异步 state）
+    const folderAtt = attachments?.find((a) => a.kind === "folder");
+    if (folderAtt) setWorkspacePath(folderAtt.path);
+
     // 主对话落库：确保会话存在，用户消息先写库（关 app/崩溃也不丢）
     let convId = conversationId;
     if (!convId) {
@@ -705,7 +746,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     let userId: string = crypto.randomUUID();
     if (convId) {
       try {
-        userId = (await dbMessages.create({ conversationId: convId, role: "user", content: text })).id;
+        userId = (await dbMessages.create({ conversationId: convId, role: "user", content: text, attachments: attachments?.length ? JSON.stringify(attachments) : null })).id;
       } catch {
         // 写库失败降级用内存 id，不阻断
       }
@@ -728,7 +769,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         .catch(() => {});
     };
 
-    const userMsg: ChatMessage = { id: userId, role: "user", content: text };
+    const userMsg: ChatMessage = { id: userId, role: "user", content: text, ...(attachments?.length ? { attachments } : {}) };
     const assistantId = crypto.randomUUID();
     const assistantMsg: ChatMessage = { id: assistantId, role: "assistant", content: "", modelLabel: model.displayName ?? model.name };
 
@@ -776,11 +817,14 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     // （排序规则见 rankFallbackModels，已带单测）。streamWithFallback 会把同一份对话历史
     // 带给下一个模型，所以限额自动换不丢上下文。
     const chain = [primary];
+    const hasImageChain = attachments?.some((a) => a.kind === "image") ?? false;
     for (const cand of rankFallbackModels(model, availableModels, "main_chat")) {
       const fbCred = credentials.find((c) => c.providerId === cand.providerId);
       if (!fbCred) continue;
       // CLI 备用模型无 Key；API 备用模型缺 Key 则跳过
       const fbIsCli = isCliProviderType(cand.provider?.type ?? "");
+      // 带图消息：CLI 不支持图 → 跳过；API 模型一律允许（不支持图的由 API 报错）
+      if (hasImageChain && fbIsCli) continue;
       let fbKey = "";
       if (!fbIsCli) {
         const k = await getApiKey(fbCred.id);
@@ -796,18 +840,20 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
 
     // 工作文件夹已绑 + 主模型非 CLI → 给模型挂文件工具（读/搜/git-read，写/bash 视权限档）。
     // CLI 模型（claude/codex spawn）自带工具，不挂；构造失败则退化为纯聊天，不阻断。
+    // 拖入文件夹时，本次工具调用直接用 folder 路径（不靠异步 setWorkspacePath 更新）
+    const effectiveWorkspace = folderAtt?.path ?? workspacePath;
     let tools: ReturnType<typeof buildAiSdkTools> | undefined;
     let workspacePreamble: string | null = null;
-    if (workspacePath && !primaryIsCli) {
+    if (effectiveWorkspace && !primaryIsCli) {
       try {
         const includeWrite = permissionMode !== "read";
         tools = buildAiSdkTools(createDefaultToolRegistry({ includeWrite }), {
-          workspacePath,
+          workspacePath: effectiveWorkspace,
           conversationId: conversationId ?? undefined,
           // auto 档：写操作不弹窗直接放行；confirm 档：每个写操作走 requestConfirm 等用户按确认。
           confirm: permissionMode === "auto" ? async () => true : requestConfirm,
         });
-        workspacePreamble = await buildWorkspacePreamble(workspacePath);
+        workspacePreamble = await buildWorkspacePreamble(effectiveWorkspace);
       } catch {
         // 构造工具/读自述失败 → 退化为纯聊天
         tools = undefined;
@@ -820,10 +866,15 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     // 绑了工作文件夹再追一条「项目自述」system（CLAUDE.md/AGENTS.md/README.md），让 AI 一进项目就懂上下文。
     // v0.9 阶段7：智能路由开启时，超长历史先抽取式裁剪省 token（system 与最近消息保留）
     // 注意：编排者折叠回执（kind==="receipt"）绝不进 prompt——它是给用户看的工作记录，不是对话内容。
+    const tooLargeNotice = (name: string) => t("chat.attachments.fileTooLarge", { name });
     let outgoing: ChatMsg[] = [
       { role: "system", content: buildTimePreamble() },
       ...(workspacePreamble ? [{ role: "system" as const, content: workspacePreamble }] : []),
-      ...newMessages.filter((m) => m.kind !== "receipt").map((m) => ({ role: m.role, content: m.content })),
+      ...newMessages.filter((m) => m.kind !== "receipt").map((m): ChatMsg =>
+        m.role === "user" && m.attachments && m.attachments.length > 0
+          ? toUserCoreMessage(m.content, m.attachments, { tooLargeNotice })
+          : { role: m.role, content: m.content }
+      ),
     ];
     if (smart) {
       outgoing = compressHistory(outgoing, {
@@ -980,7 +1031,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     const next = pendingQueue[0]!;
     drainingRef.current = true;
     setPendingQueue((q) => q.slice(1));
-    void handleSend(next).finally(() => {
+    void handleSend(next.text, next.attachments).finally(() => {
       drainingRef.current = false;
     });
     // handleSend 不是稳定引用，但每次都读当时最新 state，故意只依赖触发条件
@@ -1076,11 +1127,80 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const text = String(formData.get("input") ?? "").trim();
-    if (!text) return;
+    const atts = draftAttachments;
+    // 纯空不允许；但只拖图无文字也允许发
+    if (!text && atts.length === 0) return;
     // 一律入队，由 drain effect 串行处理：空闲时立刻发，回复中则排队，回完自动接着发。
-    setPendingQueue((q) => [...q, text]);
+    setPendingQueue((q) => [...q, { text, ...(atts.length ? { attachments: atts } : {}) }]);
+    setDraftAttachments([]);
     (e.currentTarget as HTMLFormElement).reset();
     setShowDebateHint(false);
+  }
+
+  // 拖拽/粘贴 → 附件草稿。图片走多模态，文本文件读内容贴 prompt，其它提示不支持
+  async function addFiles(files: FileList | File[]) {
+    const arr = Array.from(files);
+    const next: Attachment[] = [];
+    for (const f of arr) {
+      const res = await ingestFile(f);
+      if ("error" in res) {
+        if (res.error === "unsupported") setStreamError(t("chat.attachments.unsupportedType"));
+        else if (res.error === "image-too-large") setStreamError(t("chat.attachments.imageTooLarge", { mb: 20 }));
+      } else {
+        next.push(res);
+      }
+    }
+    if (next.length) setDraftAttachments((prev) => [...prev, ...next]);
+  }
+  // Tauri 拖拽（dragDropEnabled:true）：tauri://drag-drop 给的是磁盘路径数组，不是浏览器 File
+  async function handleDroppedPaths(paths: string[]) {
+    const unique = [...new Set(paths)]; // 防 Tauri 重复给同一路径
+    for (const p of unique) {
+      const res = await ingestPath(p);
+      if ("error" in res) {
+        if (res.error === "unsupported") setStreamError(t("chat.attachments.unsupportedType"));
+        else if (res.error === "image-too-large") setStreamError(t("chat.attachments.imageTooLarge", { mb: 20 }));
+        else setStreamError(t("chat.attachments.unsupportedType"));
+      } else {
+        setDraftAttachments((prev) => [...prev, res]);
+      }
+    }
+  }
+  useEffect(() => {
+    let cancelled = false;
+    let un: (() => void) | undefined;
+    void listen<{ paths: string[] }>("tauri://drag-drop", (e) => {
+      void handleDroppedPaths(e.payload.paths ?? []);
+    }).then((fn) => {
+      if (cancelled) {
+        fn(); // React StrictMode dev 双 mount 会多注册一个 listener，立即注销
+      } else {
+        un = fn;
+      }
+    });
+    return () => {
+      cancelled = true;
+      un?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  function handlePaste(e: React.ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (const it of items) {
+      if (it.kind === "file") {
+        const f = it.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length) {
+      e.preventDefault();
+      void addFiles(files);
+    }
+  }
+  function removeAttachment(id: string) {
+    setDraftAttachments((prev) => prev.filter((a) => a.id !== id));
   }
 
   const selectedModel = availableModels.find(m => m.id === selectedModelId);
@@ -1313,6 +1433,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
                   text={m.content}
                   isStreaming={streamingThis}
                   elapsedLabel={streamingThis ? formatElapsed(streamElapsedMs) : undefined}
+                  attachments={m.attachments}
                 />
               );
             })}
@@ -1325,7 +1446,24 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
                   </div>
                   <div className="flex-1 min-w-0 space-y-1">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-amber-500/70">{t("chat.queued")}</span>
-                    <div className="text-sm text-foreground/80 whitespace-pre-wrap break-words">{q}</div>
+                    <div className="text-sm text-foreground/80 whitespace-pre-wrap break-words">{q.text}</div>
+                    {q.attachments && q.attachments.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {q.attachments.map((a) =>
+                          a.kind === "image" ? (
+                            <img key={a.id} src={a.dataUrl} alt={a.name} className="w-10 h-10 object-cover rounded-md border border-white/10" />
+                          ) : a.kind === "folder" ? (
+                            <span key={a.id} className="inline-flex items-center gap-1 text-[10px] bg-primary/10 text-primary rounded-md px-1.5 py-0.5 border border-primary/30">
+                              <FolderOpen className="w-2.5 h-2.5" /> {a.name}
+                            </span>
+                          ) : (
+                            <span key={a.id} className="inline-flex items-center gap-1 text-[10px] bg-white/10 rounded-md px-1.5 py-0.5">
+                              <Paperclip className="w-2.5 h-2.5" /> {a.name}
+                            </span>
+                          ),
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1362,12 +1500,36 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         )}
         <form
           onSubmit={handleFormSubmit}
+          onPaste={handlePaste}
           className="max-w-4xl mx-auto glass rounded-[2.5rem] border border-white/20 shadow-2xl p-2.5 flex gap-3 pointer-events-auto group transition-all duration-500 hover:border-primary/30"
         >
-          <div className="flex-1 relative">
-            <input
+          <div className="flex-1 relative flex flex-col">
+            {draftAttachments.length > 0 && (
+              <div className="flex flex-wrap gap-2 px-6 pt-2">
+                {draftAttachments.map((a) => (
+                  <div key={a.id} className="relative group/att">
+                    {a.kind === "image" ? (
+                      <img src={a.dataUrl} alt={a.name} className="w-14 h-14 object-cover rounded-lg border border-white/10" />
+                    ) : a.kind === "folder" ? (
+                      <span className="inline-flex items-center gap-1 text-xs rounded-lg px-2 py-1 border bg-primary/10 border-primary/30 text-primary">
+                        <FolderOpen className="w-3 h-3" /> {a.name}
+                      </span>
+                    ) : (
+                      <span className={cn("inline-flex items-center gap-1 text-xs rounded-lg px-2 py-1 border", a.tooLarge ? "bg-muted/20 border-dashed text-muted-foreground" : "bg-white/10 border-white/10")}>
+                        <Paperclip className="w-3 h-3" /> {a.name}
+                      </span>
+                    )}
+                    <button type="button" onClick={() => removeAttachment(a.id)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center shadow-lg opacity-0 group-hover/att:opacity-100 transition-opacity">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <textarea
               ref={inputRef}
               name="input"
+              rows={1}
               placeholder={
                 isStreaming
                   ? t("chat.inputDraftHint")
@@ -1376,8 +1538,18 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
                   : t("chat.inputPlaceholderFallback")
               }
               autoComplete="off"
-              onChange={(e) => setShowDebateHint(shouldSuggestDebate(e.target.value))}
-              className="w-full bg-transparent border-none outline-none focus:outline-none focus:ring-0 text-sm px-6 py-4 placeholder:text-muted-foreground/40 font-medium"
+              onChange={(e) => {
+                setShowDebateHint(shouldSuggestDebate(e.target.value));
+                e.target.style.height = "auto";
+                e.target.style.height = Math.min(e.target.scrollHeight, 192) + "px";
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  (e.currentTarget.form as HTMLFormElement | null)?.requestSubmit();
+                }
+              }}
+              className="w-full bg-transparent border-none outline-none focus:outline-none focus:ring-0 text-sm px-6 py-4 placeholder:text-muted-foreground/40 font-medium resize-none max-h-[12rem] overflow-y-auto"
             />
           </div>
           <div className="flex items-center pr-1.5">

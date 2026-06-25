@@ -25,13 +25,13 @@
 
 完整方案文档（2026-06-22 已收口到项目内 `项目文档/`，全部文档归一处）：
 - 文档路径：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/Cosmgrid-Agent-独立多模型AI工作平台完整方案.md`
-- 文档版本：v0.4（2517 行，进度横幅已同步到 v0.7-v0.9 完成）
+- 文档版本：v0.9（2026-06-24 同步现状；进度横幅 v0.7-v0.9 全完成）
 - 同目录还有：诚实审查报告 / 改进增强方案 / 竞品对比；`项目文档/归档文件/` 存使命已完成的历史规划与技术侦察
 - ⚠️ `项目文档/` 已在 `.gitignore`（过程文档不入版本管理，本地保留）
 
 ## 进度与当前任务
 
-> ⚠️ 进度以 git 提交历史为准（本段 2026-06-22 同步到 v0.9 / v0.7.5 Stable）。
+> ⚠️ 进度以 git 提交历史为准（本段 2026-06-24 复核同步到 v0.9 / v0.7.5 Stable）。
 
 - ✅ v0.1 数据底座
 - ✅ v0.2 多模型对话 + workRoles（API 接入页 + 对话页 + Vercel AI SDK）
@@ -53,13 +53,19 @@
   - ✅ 语义缓存（`semantic-cache`，关键词哈希 embedding 占位，transformers.js 真 embedding 留 v0.9.1）+ 抽取式上下文压缩（`context-compressor`，零 LLM 成本）
   - ✅ StatsPage 用量统计 + 隐式反馈学习 Step B（用户换更强模型 → 给上个模型记 `switched_up` 负反馈喂回评分）
 - ✅ v0.7.5 Stable UI 美化（当前 About 页版本号）
+- ✅ v0.9 后迭代（2026-06-24）：主对话多会话（侧栏切换/新建/删除 + 首条消息自动命名，分支 `feat/main-chat-multi-conversation`）；品牌 logo 换 dock 图标；i18n 清 31 个孤儿 key（559→528）；安全债 4 条全清；项目文档归一处整理（14 文档全在 `项目文档/`）
 
-### 🔜 下一步（待定，按「产品真北」+ 两份审查报告校准）
+### 🔜 下一步（2026-06-24 复核，按「产品真北」+ 改进增强方案校准）
 
-v0.7-v0.9 主线已落地。下一步不照旧路线图推，按 `项目文档/Cosmgrid-Agent-改进增强方案-2026-06-22.md`：
-- **第一梯队**：SmartRouter 去死锁（Step A 已做）→ Step B 隐式反馈（已做）；LSP 桥接进工具执行层；对弈自动建议
+v0.7-v0.9 主线已落地。第一梯队改进（SmartRouter 去死锁 Step A+B / 写后类型检查 diagnostics / 对弈自动建议）**全做完了**。按 `项目文档/Cosmgrid-Agent-改进增强方案-2026-06-22.md`（已 06-24 刷新）：
+- **真仍未做**：增强-4 MCP 接入口子；transformers.js 真 embedding（v0.9.1，现用关键词哈希保底）；Step B 其余采集点（重答/回滚/确认弹窗）；待办② 上下文护照条
 - **明确不做**：bash sidecar / git worktree 隔离 / 技能市场（详见改进方案）
-- **已知安全债（2026-06-22 审查实测，按需修）**：① API Key 是 `plugin-store` 明文 JSON，但 Settings UI 谎称"keychain 加密"——文案必须改诚实或真接 keychain；② [App.tsx](app/src/App.tsx) `dbError` 被吞、永远渲染不出故障页；③ SettingsPage"管理数据库"是死按钮；④ 根目录 15 个 `vite_ssr_*.mjs` 调试垃圾待删
+- **已知安全债（2026-06-24 代码实测复核，前一轮文档已过期）**：
+  - ✅ ① API Key 仍是 [keystore.ts](app/src/lib/keystore.ts) 的 `cosmgrid-keys.json` 明文 JSON（非系统 keychain，文件本身明文）——但 Settings UI Badge 文案已改诚实为「本地明文文件」/「Local file」，i18n 残留的「keychain 插件」placeholder 也已改诚实。**真接 keychain 得换 `keyring` crate，留作可选增强，非阻塞。**
+  - ✅ ② [App.tsx](app/src/App.tsx) `dbError` 故障页已正常渲染（`if (dbError)` 出图标+错误详情+reload 按钮），不再被吞
+  - ✅ ③ SettingsPage「管理数据库」按钮已整个移除，`manageDb` i18n key 成孤儿（定义了无人引用），按钮债不存在
+  - ✅ ④ 根目录 `vite_ssr_*.mjs` 调试垃圾已清空
+  - **真现状：4 条全清，无阻塞安全债。** 下次若再写「已知债」，必须先 grep/Read 代码复核再落笔，避免文档过期骗自己
 
 ### ⚠️ 架构返工（v0.3，✅ 已完成，保留作技术坑记录）
 
@@ -88,7 +94,7 @@ v0.1/v0.2 用的「Prisma + 内嵌 Hono(Node) server」有**打包死局**：Pri
 
 **package.json 起步**：直接抄 CC Switch 的依赖列表（路径 `/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/技术参考/cc-switch-main/package.json`）
 
-## 数据表（v0.1 起 14 张，随 v0.6-v0.9 增至 20 张；2026-06-22 删死表 conversation_model_snapshots 后 **19 张**；建表 DDL 全在 [db.ts](app/src/lib/db.ts) `initSchema()`）
+## 数据表（核心 13 张 + v0.6+ 新增 6 张 = 共 **19 张**；死表 conversation_model_snapshots 已删；建表 DDL 全在 [db.ts](app/src/lib/db.ts) `initSchema()`）
 
 **资源层（4）**：providers / api_credentials / token_plans / models
 **模板层（2）**：project_templates / project_template_roles

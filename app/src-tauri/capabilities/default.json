@@ -21,20 +21,24 @@
       "allow": [{ "url": "https://*" }, { "url": "http://*" }]
     },
     {
+      "identifier": "fs:allow-read-file",
+      "allow": [{ "path": "**" }]
+    },
+    {
       "identifier": "fs:allow-read-text-file",
-      "allow": [{ "path": "$HOME/**" }]
+      "allow": [{ "path": "**" }]
     },
     {
       "identifier": "fs:allow-read-dir",
-      "allow": [{ "path": "$HOME/**" }]
+      "allow": [{ "path": "**" }]
     },
     {
       "identifier": "fs:allow-exists",
-      "allow": [{ "path": "$HOME/**" }]
+      "allow": [{ "path": "**" }]
     },
     {
       "identifier": "fs:allow-stat",
-      "allow": [{ "path": "$HOME/**" }]
+      "allow": [{ "path": "**" }]
     },
     {
       "identifier": "fs:allow-write-text-file",

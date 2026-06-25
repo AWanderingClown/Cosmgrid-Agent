@@ -9,12 +9,8 @@
     "edit": "编辑",
     "close": "关闭",
     "save": "保存",
-    "create": "创建",
     "loading": "加载中...",
     "error": "错误",
-    "success": "成功",
-    "optional": "（可选）",
-    "required": "*",
     "dbErrorTitle": "本地数据库打开失败",
     "dbErrorDesc": "应用无法初始化数据库（可能是文件被备份程序占用、磁盘已满，或数据目录不可写）。先尝试重启；若仍失败，请检查数据目录。",
     "dbErrorRetry": "重启"
@@ -43,8 +39,7 @@
       "settings": "设置"
     },
     "alerts": {
-      "goToHandle": "前往处理",
-      "dismiss": "忽略"
+      "goToHandle": "前往处理"
     }
   },
   "chat": {
@@ -64,7 +59,6 @@
     "switchedTo": "切换至 {{name}}",
     "cacheHit": "命中缓存 · {{days}} 天前回答过",
     "contextTrimmed": "[较早的 {{count}} 条消息已省略以节省 token]",
-    "requestInterrupted": "请求中断",
     "smartPick": "智能推荐",
     "workspace": {
       "choose": "工作文件夹",
@@ -108,6 +102,19 @@
     "suggestDebate": "这个问题有多种方案，适合让 3 个模型对弈（出方案 / 反驳 / 裁判）",
     "suggestDebateBtn": "开对弈",
     "footer": "安全连接 • {{version}} • 由 CosmGrid 驱动",
+    "attachments": {
+      "dropHere": "拖入文件或图片",
+      "dragOver": "松开以添加附件",
+      "addFile": "添加文件",
+      "removeAttachment": "移除",
+      "imageTooLarge": "图片过大（>{{mb}}MB），请压缩或放进工作区让 AI 读取",
+      "fileTooLarge": "文件过大：{{name}}，建议放进工作区让 AI 读取",
+      "unsupportedType": "暂不支持直接拖入此文件，请放进工作区让 AI 读取",
+      "cliNoImage": "CLI 模型暂不支持图片拖入，请换 API 模型",
+      "imageLabel": "图片",
+      "fileLabel": "文件",
+      "folderSetAsWorkspace": "已绑定为 AI 的工作文件夹：{{path}}。跟 AI 说「读里面的文件」它就能读"
+    },
     "workPanel": {
       "title": "工作面板",
       "close": "收起",
@@ -128,7 +135,6 @@
     "inputDraftHint": "模型回复中… 可以继续发，会排队依次处理",
     "orchestrator": {
       "panelTitle": "工作节点",
-      "panelEmpty": "聊几句，AI 会自动把这次任务拆成工作节点",
       "currentBadge": "当前",
       "nodeKinds": {
         "planning": "规划",
@@ -171,7 +177,6 @@
     "deleteModel": "确定删除这个模型？",
     "deleteFailed": "删除失败",
     "updateFailed": "更新失败",
-    "loadFailed": "加载失败",
     "deleteProviderFull": "彻底删除供应商配置",
     "editProviderName": "编辑名称",
     "edit": {
@@ -230,11 +235,9 @@
     "cliPathLabel": "CLI 可执行文件路径（可选）",
     "cliHint": "留空则自动用系统里的 claude/codex。无需 API Key——直接用你本机已登录的订阅额度。",
     "apiKey": "API Key",
-    "apiKeyPlaceholder": "粘贴你的 API Key",
     "show": "显示",
     "hide": "隐藏",
     "baseUrl": "Base URL",
-    "baseUrlPlaceholder": "https://api.example.com/v1",
     "testConnection": "测试连接",
     "testing": "测试中...",
     "connectSuccess": "连接成功",
@@ -246,7 +249,6 @@
     "displayName": "显示名",
     "displayNamePlaceholder": "例如 Opus 4.8",
     "contextWindow": "上下文窗口",
-    "contextWindowPlaceholder": "例如 200000",
     "workRoles": "工作角色",
     "workRolesHint": "至少选择 1 个工作角色",
     "submitting": "添加中...",
@@ -320,7 +322,6 @@
     "desc": "定义不同协作场景下的 AI 专家组合。系统会自动根据各个模型的评分，为您推荐最擅长该领域的 AI 节点。",
     "available": "可用方案模板",
     "builtIn": "内置",
-    "noRoles": "未分配角色",
     "rolesCount": "共包含 {{count}} 个协作节点",
     "smartAssign": "智能一键分配",
     "saveAs": "另存模板",
@@ -381,15 +382,6 @@
     "running": "处理中",
     "interrupted": "已终止",
     "ready": "就绪"
-  },
-  "stageStatus": {
-    "pending": "等待启动",
-    "active": "运行中",
-    "paused": "已暂停",
-    "completed": "已归档",
-    "failed": "系统故障",
-    "ready": "等待启动",
-    "running": "处理中"
   },
   "tokenPlans": {
     "sectionLabel": "实时监控中",
@@ -481,7 +473,6 @@
     "noData": "暂无用量数据，去对话页聊几句就有了。",
     "perfTitle": "模型真实表现（智能路由依据）",
     "perfEmpty": "样本积累中——每个模型每类任务满 30 次后，智能路由才会据此评分选模型。",
-    "perfWindow": "样本",
     "toolsTitle": "AI 工具操作记录",
     "toolsEmpty": "AI 还没动过文件或命令。在项目里给它工作区路径后，它读/改文件、跑命令都会记在这里。",
     "toolStatus": {
@@ -517,7 +508,6 @@
         "title": "本地数据库",
         "desc": "所有的对话、API 凭证和项目数据均存储在本地 SQLite 数据库中。"
       },
-      "manageDb": "管理数据库",
       "apiKey": {
         "title": "API 密钥存储",
         "desc": "密钥存于本地独立文件（cosmgrid-keys.json），不写入数据库。注意：该文件为明文，请勿在共用或不可信的电脑上使用。"
@@ -535,7 +525,6 @@
     "skip": "跳过引导",
     "neverShow": "下次不再弹",
     "prev": "上一步",
-    "next": "下一步",
     "done": "我懂了，开始用",
     "nextWithTarget": "下一步（跳到 {{target}}）",
     "nextTarget": {
@@ -584,23 +573,16 @@
     "operationalTimeline": "操作时间线",
     "coreCheckpoints": "核心检查点",
     "neuralMemory": "神经记忆",
-    "coreWorkflow": "核心工作流",
-    "timeline": "时间线",
-    "checkpoints": "检查点",
-    "memories": "记忆",
     "emptyBuffer": "缓冲区为空",
     "loadError": "加载失败",
     "altBot": "助手",
-    "altUser": "用户",
     "chat": {
       "userLabel": "授权用户",
       "assistantLabel": "CosmGrid Ai",
       "placeholder": "向智能体下达指令...",
       "awaiting": "等待指令",
       "endpointFailed": "端点连接失败",
-      "streamFailed": "流式响应失败",
       "failsafeSwitched": "故障保护：已切换至 {{name}}",
-      "switching": "切换中",
       "apiKeyMissing": "API Key 缺失",
       "initFailed": "初始化失败",
       "syncing": "正在同步环境...",
@@ -646,7 +628,6 @@
       "saveFailed": "保存失败",
       "titleLabel": "标题 *",
       "titlePlaceholder": "例如：前端组件 v1 完成，准备交给后端联调",
-      "cancel": "取消",
       "create": "创建",
       "saving": "保存中…"
     },
@@ -682,7 +663,6 @@
       "targetRole": "目标角色",
       "targetRolePlaceholder": "选择下一个接手的工作角色",
       "hint": "接力包会把检查点所有字段拼成 markdown，存一条 handoff_packets 记录。",
-      "cancel": "取消",
       "generate": "生成",
       "generating": "生成中…",
       "failed": "生成失败"
@@ -697,13 +677,12 @@
       "titleRequired": "标题和内容都必填",
       "saveFailed": "保存失败",
       "titleLabel": "标题 *",
-      "titlePlaceholder": "例如：API Key 用 keychain 插件不入库",
+      "titlePlaceholder": "例如：API Key 用独立明文文件存储，不入 SQLite",
       "contentLabel": "内容 *",
       "contentPlaceholder": "这条记忆讲什么 / 为什么这么决定 / 将来哪个项目能用上",
       "tagsLabel": "标签（可选，逗号分隔）",
       "tagsPlaceholder": "例如：auth, 减负, v0.3",
       "tagsHint": "标签用于跨项目检索时跟项目描述 / 其他记忆匹配",
-      "cancel": "取消",
       "save": "保存"
     }
   }

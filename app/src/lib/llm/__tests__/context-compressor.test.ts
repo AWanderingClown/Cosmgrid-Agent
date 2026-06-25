@@ -69,14 +69,14 @@ describe("compressHistory", () => {
     for (let i = 0; i < 10; i++) ms.push(msg("user", `m${i}-${"x".repeat(300)}`));
     const r = compressHistory(ms, { maxTokens: 400, minRecent: 2 });
     const last = r.messages[r.messages.length - 1]!;
-    expect(last.content.startsWith("m9")).toBe(true);
+    expect(typeof last.content === "string" && last.content.startsWith("m9")).toBe(true);
   });
 
   it("自定义省略提示文案", () => {
     const ms: ChatMsg[] = [];
     for (let i = 0; i < 20; i++) ms.push(msg("user", "x".repeat(300)));
     const r = compressHistory(ms, { maxTokens: 500, minRecent: 2, noticeText: (n) => `省略了${n}条` });
-    expect(r.messages[0]!.content).toMatch(/省略了\d+条/);
+    expect(String(r.messages[0]!.content)).toMatch(/省略了\d+条/);
   });
 });
 

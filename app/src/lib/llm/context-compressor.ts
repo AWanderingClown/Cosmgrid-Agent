@@ -7,14 +7,24 @@
 //   - 若有裁掉，插一条 system 提示"前 N 条较早消息已省略"
 // LLM 摘要版（保留关键决策再压缩）留到 v0.9.1。
 
+import type { UserContentPart } from "./attachments";
+
 export interface ChatMsg {
   role: "user" | "assistant" | "system";
-  content: string;
+  content: string | UserContentPart[];
 }
 
-/** 粗略 token 估算：CJK 约 1 token/字，拉丁约 1 token/4 字符。取折中 chars/3。 */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 3);
+/** 粗略 token 估算：CJK 约 1 token/字，拉丁约 1 token/4 字符。取折中 chars/3。
+ *  兼容多模态 content（数组）：text part 按 chars/3，每图固定估 1000 token（base64 占位粗估）。 */
+export function estimateTokens(content: string | UserContentPart[]): number {
+  if (typeof content === "string") return Math.ceil(content.length / 3);
+  let len = 0;
+  let images = 0;
+  for (const p of content) {
+    if (p.type === "text") len += p.text.length;
+    else images++;
+  }
+  return Math.ceil(len / 3) + images * 1000;
 }
 
 export function estimateMessagesTokens(messages: ChatMsg[]): number {

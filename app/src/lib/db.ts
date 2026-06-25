@@ -214,10 +214,13 @@ export async function initSchema(): Promise<void> {
       input_tokens INTEGER NOT NULL DEFAULT 0,
       output_tokens INTEGER NOT NULL DEFAULT 0,
       cost REAL NOT NULL DEFAULT 0,
+      attachments TEXT,
       created_at TEXT NOT NULL,
       FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
     )
   `);
+  // 迁移：消息附件（拖拽图片/文件，存 JSON）。旧库靠幂等 ALTER 补上。
+  await addColumnIfMissing(db, "messages", "attachments", "TEXT");
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS checkpoints (
@@ -858,6 +861,7 @@ export interface MessageRow {
   input_tokens: number;
   output_tokens: number;
   cost: number;
+  attachments: string | null;
   created_at: string;
 }
 
@@ -870,6 +874,7 @@ export interface DbMessage {
   inputTokens: number;
   outputTokens: number;
   cost: number;
+  attachments?: string | null;
   createdAt: string;
 }
 
@@ -975,6 +980,7 @@ export const messages = {
       inputTokens: r.input_tokens,
       outputTokens: r.output_tokens,
       cost: r.cost,
+      attachments: r.attachments,
       createdAt: r.created_at,
     }));
   },
@@ -987,14 +993,15 @@ export const messages = {
     inputTokens?: number;
     outputTokens?: number;
     cost?: number;
+    attachments?: string | null;
   }): Promise<DbMessage> {
     const db = await getDb();
     const id = newId();
     const ts = now();
     await db.execute(
       `INSERT INTO messages
-        (id, conversation_id, role, content, model_id, input_tokens, output_tokens, cost, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        (id, conversation_id, role, content, model_id, input_tokens, output_tokens, cost, attachments, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
       [
         id,
         input.conversationId,
@@ -1004,12 +1011,13 @@ export const messages = {
         input.inputTokens ?? 0,
         input.outputTokens ?? 0,
         input.cost ?? 0,
+        input.attachments ?? null,
         ts,
       ]
     );
     const rows = await db.select<MessageRow[]>("SELECT * FROM messages WHERE id = $1", [id]);
     const r = rows[0]!;
-    return { id: r.id, conversationId: r.conversation_id, role: r.role, content: r.content, modelId: r.model_id, inputTokens: r.input_tokens, outputTokens: r.output_tokens, cost: r.cost, createdAt: r.created_at };
+    return { id: r.id, conversationId: r.conversation_id, role: r.role, content: r.content, modelId: r.model_id, inputTokens: r.input_tokens, outputTokens: r.output_tokens, cost: r.cost, attachments: r.attachments, createdAt: r.created_at };
   },
 };
 

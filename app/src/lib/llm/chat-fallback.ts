@@ -17,19 +17,28 @@
 //    不再混用 LlmErrorCategory。
 // 5. 链式调用：models 数组按顺序尝试，跳过 cooldown 的，遇到非 shouldFallback 的错就终止。
 
-import { streamText, stepCountIs, type ToolSet } from "ai";
+import { streamText, stepCountIs, type ToolSet, type ModelMessage } from "ai";
 import { getLanguageModel } from "./provider-factory";
 import { classifyLlmError, type LlmErrorCategory } from "./error-classifier";
 import { isInCooldown, markModelFailed, markModelSucceeded } from "./model-cooldown";
 import { recordUsageEvent, type RecordUsageParams } from "./usage-tracker";
-import { isCliProviderType } from "./cli-protocol";
+import { isCliProviderType, type CliMessage } from "./cli-protocol";
 import { streamViaCli } from "./cli-engine";
 import { classifyMessageComplexity } from "./message-router";
+import type { ChatMsg } from "./context-compressor";
 
-/** 从对话里取最后一条 user 消息推断难度桶（role 默认值） */
-function inferRole(messages: Array<{ role: string; content: string }>): string {
+/** 从对话里取最后一条 user 消息推断难度桶（role 默认值）。兼容多模态 content（数组取 text part）。 */
+function inferRole(messages: ChatMsg[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]!.role === "user") return classifyMessageComplexity(messages[i]!.content);
+    const m = messages[i]!;
+    if (m.role === "user") {
+      const c = m.content;
+      const text =
+        typeof c === "string"
+          ? c
+          : c.filter((p) => p.type === "text").map((p) => ("text" in p ? p.text : "")).join("");
+      return classifyMessageComplexity(text);
+    }
   }
   return "main_chat";
 }
@@ -128,7 +137,7 @@ export function toModelEndpoint(
  */
 export async function streamWithFallback(
   models: ModelEndpoint[],
-  messages: Array<{ role: "user" | "assistant" | "system"; content: string }>,
+  messages: ChatMsg[],
   callbacks: StreamCallbacks,
   options: {
     signal?: AbortSignal;
@@ -178,13 +187,21 @@ export async function streamWithFallback(
 
       if (isCliProviderType(target.providerType)) {
         // CLI 引擎路径：spawn 本机 claude/codex 吃订阅额度（baseUrl 复用为可执行文件路径）
+        // CLI 不支持图片——带图消息的 chain 已在 ChatPage 过滤掉 CLI 端点；这里防御性把数组 content 折叠成纯文本
+        const cliMessages: CliMessage[] = messages.map((m) => ({
+          role: m.role as "user" | "assistant" | "system",
+          content:
+            typeof m.content === "string"
+              ? m.content
+              : m.content.filter((p) => p.type === "text").map((p) => ("text" in p ? p.text : "")).join(""),
+        }));
         const cliResult = await streamViaCli(
           {
             providerType: target.providerType,
             modelName: target.modelName,
             ...(target.baseUrl ? { program: target.baseUrl } : {}),
           },
-          messages,
+          cliMessages,
           { onDelta: callbacks.onDelta },
           options.signal ? { signal: options.signal } : {},
         );
@@ -196,7 +213,7 @@ export async function streamWithFallback(
         const lm = getLanguageModel(target.providerType, target.modelName, target.apiKey, target.baseUrl);
         const result = streamText({
           model: lm,
-          messages,
+          messages: messages as unknown as ModelMessage[],
           // 传了 tools 才开工具调用 + 多步循环（stopWhen 防死循环）
           ...(options.tools ? { tools: options.tools, stopWhen: stepCountIs(options.maxToolSteps ?? 8) } : {}),
           ...(options.signal ? { abortSignal: options.signal } : {}),

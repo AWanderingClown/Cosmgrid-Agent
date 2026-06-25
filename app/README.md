@@ -62,11 +62,11 @@ app/
 │   │   └── OnboardingModal.tsx   #   首次启动引导
 │   ├── components/               # 通用组件（shadcn/ui + 自定义）
 │   ├── lib/
-│   │   ├── db.ts                 #   tauri-plugin-sql 直连 SQLite，14 张表 CRUD
+│   │   ├── db.ts                 #   tauri-plugin-sql 直连 SQLite，19 张表 CRUD
 │   │   ├── keystore.ts           #   API Key 存取（plugin-store，不入库明文）
-│   │   ├── api.ts / schemas.ts   #   数据访问 + Zod 校验
+│   │   ├── api.ts               #   数据访问（schemas.ts 已删）
 │   │   ├── templates.ts          #   内置项目模板
-│   │   └── llm/                  #   LLM 适配层（13 个文件）
+│   │   └── llm/                  #   LLM 适配层（provider-factory / cli-engine / smart-router / semantic-cache / debate / tools 等）
 │   │       ├── provider-factory.ts      # provider 工厂 + 缓存（API 直连路径）
 │   │       ├── cli-protocol.ts          # CLI 引擎协议层（纯逻辑可单测，JSONL 解析 + 受控 env）
 │   │       ├── cli-engine.ts            # CLI 引擎 spawn 层（接 Rust spawn_cli_stream）
@@ -97,6 +97,9 @@ app/
 - ✅ **v0.5** 首次启动引导 + 新建项目向导
 - ✅ **v0.6** 长期记忆 + RAG（项目级记忆 + 跨项目关键词检索）
 - ✅ **UI 美化** 整体视觉打磨
-- 🔧 **v0.7（部分提前）** CLI 引擎落地——spawn 本机 `claude` / `codex` 吃订阅五小时额度（对订阅锁死在官方端的 Claude/Codex，是痛点 1「限额无缝续」的解法）。代码已在工作区，截至 2026-06-21 尚未提交。其余 v0.7 项（只读工具层 / 系统托盘 / 三平台打包）待按「产品真北」重评估。
+- ✅ **v0.7** 工具执行层 + CLI 引擎：只读工具（read/glob/grep/git-read）+ 写工具（write/edit/bash + 确认 + git 回滚）+ Rust `spawn_cli_stream` spawn 本机 claude/codex 吃订阅额度（abort → `kill_cli` SIGKILL）
+- ✅ **v0.8** 多模型对弈（出方案/反驳/裁判同台 + DebatePage + ChatPage 自动建议）
+- ✅ **v0.9** 智能省 token（SmartRouter v2 评分路由 + 语义缓存 + 上下文压缩 + StatsPage + 隐式反馈学习）
+- 🔧 **v0.9 后** 主对话多会话（侧栏切换/新建/删除）、品牌 logo、i18n 清理、安全债全清、文档归一处（2026-06-24）
 
 > 数据库表结构见主方案文档第 9 节；产品定位与真实痛点见第 1~2 节。

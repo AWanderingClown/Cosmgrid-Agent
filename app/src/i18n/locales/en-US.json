@@ -9,12 +9,8 @@
     "edit": "Edit",
     "close": "Close",
     "save": "Save",
-    "create": "Create",
     "loading": "Loading...",
     "error": "Error",
-    "success": "Success",
-    "optional": "(optional)",
-    "required": "*",
     "dbErrorTitle": "Failed to open the local database",
     "dbErrorDesc": "The app could not initialize its database (it may be locked by a backup, the disk is full, or the data directory is not writable). Try restarting; if it persists, check the data directory.",
     "dbErrorRetry": "Restart"
@@ -43,8 +39,7 @@
       "settings": "Settings"
     },
     "alerts": {
-      "goToHandle": "Go to",
-      "dismiss": "Dismiss"
+      "goToHandle": "Go to"
     }
   },
   "chat": {
@@ -64,7 +59,6 @@
     "switchedTo": "Switched to {{name}}",
     "cacheHit": "Cache hit · answered {{days}}d ago",
     "contextTrimmed": "[{{count}} earlier messages omitted to save tokens]",
-    "requestInterrupted": "Request interrupted",
     "smartPick": "Smart Pick",
     "workspace": {
       "choose": "Workspace",
@@ -108,6 +102,19 @@
     "suggestDebate": "This question has multiple viable approaches — let 3 models debate it (propose / critique / judge)",
     "suggestDebateBtn": "Open debate",
     "footer": "Secure connection • {{version}} • Powered by CosmGrid",
+    "attachments": {
+      "dropHere": "Drop files or images",
+      "dragOver": "Drop to attach",
+      "addFile": "Add file",
+      "removeAttachment": "Remove",
+      "imageTooLarge": "Image too large (>{{mb}}MB), compress or put it in workspace for AI to read",
+      "fileTooLarge": "File too large: {{name}}, put it in workspace for AI to read",
+      "unsupportedType": "Unsupported file type, put it in workspace for AI to read",
+      "cliNoImage": "CLI models do not support image drop, use an API model",
+      "imageLabel": "Image",
+      "fileLabel": "File",
+      "folderSetAsWorkspace": "Bound as AI's working folder: {{path}}. Tell AI \"read the files in it\""
+    },
     "workPanel": {
       "title": "Work Panel",
       "close": "Collapse",
@@ -128,7 +135,6 @@
     "inputDraftHint": "Model is replying… keep typing, messages are queued and handled in order",
     "orchestrator": {
       "panelTitle": "Work Nodes",
-      "panelEmpty": "Chat a bit — the AI will break this task into work nodes automatically",
       "currentBadge": "Current",
       "nodeKinds": {
         "planning": "Planning",
@@ -171,7 +177,6 @@
     "deleteModel": "Delete this model?",
     "deleteFailed": "Delete failed",
     "updateFailed": "Update failed",
-    "loadFailed": "Failed to load providers",
     "deleteProviderFull": "Delete Provider Configuration",
     "editProviderName": "Edit name",
     "edit": {
@@ -230,11 +235,9 @@
     "cliPathLabel": "CLI executable path (optional)",
     "cliHint": "Leave blank to auto-use claude/codex from your PATH. No API key needed — uses the subscription you're already logged into locally.",
     "apiKey": "API Key",
-    "apiKeyPlaceholder": "Paste your API key",
     "show": "Show",
     "hide": "Hide",
     "baseUrl": "Base URL",
-    "baseUrlPlaceholder": "https://api.example.com/v1",
     "testConnection": "Test Connection",
     "testing": "Testing...",
     "connectSuccess": "Connected",
@@ -246,7 +249,6 @@
     "displayName": "Display Name",
     "displayNamePlaceholder": "e.g. Opus 4.8",
     "contextWindow": "Context Window",
-    "contextWindowPlaceholder": "e.g. 200000",
     "workRoles": "Work Roles",
     "workRolesHint": "Pick at least one",
     "submitting": "Adding...",
@@ -320,7 +322,6 @@
     "desc": "Define AI expert combinations for different collaboration scenarios. The system auto-recommends the best-suited AI for each role based on model ratings.",
     "available": "Available Templates",
     "builtIn": "Built-in",
-    "noRoles": "No roles assigned",
     "rolesCount": "{{count}} collaboration nodes",
     "smartAssign": "Smart Auto-Assign",
     "saveAs": "Save as Template",
@@ -381,15 +382,6 @@
     "running": "Running",
     "interrupted": "Interrupted",
     "ready": "Ready"
-  },
-  "stageStatus": {
-    "pending": "Pending Start",
-    "active": "Running",
-    "paused": "Paused",
-    "completed": "Archived",
-    "failed": "System Failure",
-    "ready": "Awaiting Start",
-    "running": "Processing"
   },
   "tokenPlans": {
     "sectionLabel": "Real-time Monitoring",
@@ -481,7 +473,6 @@
     "noData": "No usage yet — chat a bit and it'll show up here.",
     "perfTitle": "Real model performance (routing basis)",
     "perfEmpty": "Building samples — once each model has 30+ calls per task type, smart routing scores models from this.",
-    "perfWindow": "samples",
     "toolsTitle": "AI tool activity",
     "toolsEmpty": "The AI hasn't touched files or commands yet. Once a project has a workspace path, its reads/edits/commands show up here.",
     "toolStatus": {
@@ -517,7 +508,6 @@
         "title": "Local Database",
         "desc": "All conversations, API credentials, and project data are stored in a local SQLite database."
       },
-      "manageDb": "Manage Database",
       "apiKey": {
         "title": "API Key Storage",
         "desc": "Keys are stored in a separate local file (cosmgrid-keys.json), kept out of the database. Note: this file is plaintext — avoid using on shared or untrusted machines."
@@ -535,7 +525,6 @@
     "skip": "Skip Guide",
     "neverShow": "Don't show again",
     "prev": "Back",
-    "next": "Next",
     "done": "Got it, let's start",
     "nextWithTarget": "Next (jump to {{target}})",
     "nextTarget": {
@@ -584,23 +573,16 @@
     "operationalTimeline": "Operational Timeline",
     "coreCheckpoints": "Core Checkpoints",
     "neuralMemory": "Neural Memory",
-    "coreWorkflow": "Core Workflow",
-    "timeline": "Timeline",
-    "checkpoints": "Checkpoints",
-    "memories": "Memories",
     "emptyBuffer": "Empty Buffer",
     "loadError": "Load Failed",
     "altBot": "Bot",
-    "altUser": "User",
     "chat": {
       "userLabel": "You",
       "assistantLabel": "CosmGrid Ai",
       "placeholder": "Command the agent...",
       "awaiting": "Awaiting Instruction",
       "endpointFailed": "Endpoint Failed",
-      "streamFailed": "Stream Failed",
       "failsafeSwitched": "Failsafe: Switched to {{name}}",
-      "switching": "Switching",
       "apiKeyMissing": "API Key Missing",
       "initFailed": "Initialization Failed",
       "syncing": "Synchronizing Environment...",
@@ -646,7 +628,6 @@
       "saveFailed": "Save failed",
       "titleLabel": "Title *",
       "titlePlaceholder": "e.g. Frontend v1 done, ready for backend integration",
-      "cancel": "Cancel",
       "create": "Create",
       "saving": "Saving…"
     },
@@ -682,7 +663,6 @@
       "targetRole": "Target Role",
       "targetRolePlaceholder": "Pick the next role to hand off to",
       "hint": "The handoff packet combines all checkpoint fields into markdown and saves it as a handoff_packets record.",
-      "cancel": "Cancel",
       "generate": "Generate",
       "generating": "Generating…",
       "failed": "Generation failed"
@@ -697,13 +677,12 @@
       "titleRequired": "Title and content are both required",
       "saveFailed": "Save failed",
       "titleLabel": "Title *",
-      "titlePlaceholder": "e.g. API Keys stored in keychain plugin, not in DB",
+      "titlePlaceholder": "e.g. API Keys stored in a separate plaintext file, not in SQLite",
       "contentLabel": "Content *",
       "contentPlaceholder": "What this memory covers / why the decision / future project use",
       "tagsLabel": "Tags (optional, comma-separated)",
       "tagsPlaceholder": "e.g. auth, ux, v0.3",
       "tagsHint": "Tags help cross-project search match this memory with descriptions / other memories",
-      "cancel": "Cancel",
       "save": "Save"
     }
   }
