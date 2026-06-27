@@ -1,6 +1,6 @@
 // db.ts 集成测试：用 node:sqlite 真跑 SQL（不是浅 mock execute）
 // 覆盖此前 0% 的表 + initSchema 全部 DDL。$N 占位符转 ? 按出现顺序绑定（支持重复 $1）。
-import { describe, it, expect, beforeAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 
 type SqlVal = string | number | bigint | null | Uint8Array;
@@ -174,6 +174,214 @@ describe("usageEvents", () => {
     const since = new Date(Date.now() + 60_000).toISOString(); // 未来时间，应过滤掉所有现有
     const list = await db.usageEvents.list(since);
     expect(list).toHaveLength(0);
+  });
+
+  it("阶段 F1：role_kind 字段写入 → 读取保留", async () => {
+    // 创建时带 roleKind
+    const id = await db.usageEvents.create({
+      modelId: "mC", role: "main_chat", roleKind: "leader",
+      inputTokens: 100, outputTokens: 50, cost: 0.02,
+    });
+    const list = await db.usageEvents.list();
+    const e = list.find((x) => x.id === id);
+    expect(e?.roleKind).toBe("leader");
+  });
+
+  it("阶段 F1：role_kind 不传 → 落 NULL（旧数据兼容）", async () => {
+    const id = await db.usageEvents.create({
+      modelId: "mD", role: "main_chat",
+      // 没传 roleKind
+    });
+    const list = await db.usageEvents.list();
+    const e = list.find((x) => x.id === id);
+    expect(e?.roleKind).toBeNull();
+  });
+
+  it("阶段 F1：role_kind='stage'（ProjectDetailPage 路径）能落库", async () => {
+    const id = await db.usageEvents.create({
+      modelId: "mE", role: "hard_task", roleKind: "stage",
+    });
+    const list = await db.usageEvents.list();
+    expect(list.find((x) => x.id === id)?.roleKind).toBe("stage");
+  });
+});
+
+describe("阶段 F1：aggregateUsageByActorRole（端到端集成）", () => {
+  // beforeEach 清表：测试用同一个 sqlite in-memory，跨 it 累积会污染断言
+  beforeEach(async () => {
+    // 直接走 sqlite.prepare 清（adapter 不暴露通用 DELETE）
+    sqlite.exec("DELETE FROM usage_events");
+  });
+
+  it("★ 必查：3 跳 chain + 1 nudge 重答 → DB role_kind 落对 → 聚合分对", async () => {
+    // 模拟 E2a runChain 3 跳 chain：architect → frontend → backend
+    // + 第 2 跳 nudge 重答（同一 frontend 角色再来一次）
+    await db.usageEvents.create({ modelId: "mA", role: "planning", roleKind: "architect", cost: 0.10 });
+    await db.usageEvents.create({ modelId: "mB", role: "frontend", roleKind: "frontend", cost: 0.20 });
+    // nudge 重答同一 frontend
+    await db.usageEvents.create({ modelId: "mB", role: "frontend", roleKind: "frontend", cost: 0.20 });
+    await db.usageEvents.create({ modelId: "mC", role: "backend", roleKind: "backend", cost: 0.15 });
+
+    // 聚合（动态 import 避免循环依赖——测试直接在 db 上下文里 import）
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const result = await aggregateUsageByActorRole({});
+
+    // 期望：3 个 roleKind（architect/frontend/backend），frontend totalCost=0.40 (nudge 累加)
+    expect(result).toHaveLength(3);
+    const architect = result.find((r) => r.roleKind === "architect");
+    const frontend = result.find((r) => r.roleKind === "frontend");
+    const backend = result.find((r) => r.roleKind === "backend");
+    expect(architect?.totalCost).toBeCloseTo(0.10);
+    expect(frontend?.totalCost).toBeCloseTo(0.40); // ★ nudge 重答累加
+    expect(backend?.totalCost).toBeCloseTo(0.15);
+    // 同 roleKind + 同 modelId 合并一行（nudge 累加）：rows[0].cost = 0.40 (0.20+0.20)
+    expect(frontend?.rows[0]!.cost).toBeCloseTo(0.40);
+    expect(frontend?.rows[0]!.calls).toBe(2);
+  });
+
+  it("★ 必查：ChatPage 主对话 leader actor_role='leader' 落库 + 聚合独立组", async () => {
+    await db.usageEvents.create({ modelId: "mLeader", role: "main_chat", roleKind: "leader", cost: 0.05 });
+
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const result = await aggregateUsageByActorRole({});
+    const leaderGroup = result.find((r) => r.roleKind === "leader");
+    expect(leaderGroup).toBeDefined();
+    expect(leaderGroup?.totalCost).toBeCloseTo(0.05);
+  });
+
+  it("★ 必查：ProjectDetailPage stage actor_role='stage' 落库 + 聚合独立组（跟 leader 可分）", async () => {
+    await db.usageEvents.create({ modelId: "mLeader", role: "main_chat", roleKind: "leader", cost: 0.05 });
+    await db.usageEvents.create({ modelId: "mStage", role: "hard_task", roleKind: "stage", cost: 0.10 });
+
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const result = await aggregateUsageByActorRole({});
+    expect(result.find((r) => r.roleKind === "leader")?.totalCost).toBeCloseTo(0.05);
+    expect(result.find((r) => r.roleKind === "stage")?.totalCost).toBeCloseTo(0.10);
+  });
+
+  it("★ 必查：NULL roleKind 当独立'未分类'组（不过滤），排最后", async () => {
+    await db.usageEvents.create({ modelId: "mA", role: "main_chat", roleKind: "leader", cost: 0.05 });
+    await db.usageEvents.create({ modelId: "mB", role: "main_chat", cost: 0.03 }); // roleKind=NULL（旧数据）
+
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const result = await aggregateUsageByActorRole({});
+    // 2 个组：leader + NULL
+    expect(result).toHaveLength(2);
+    expect(result[0]!.roleKind).toBe("leader");
+    expect(result[1]!.roleKind).toBeNull(); // NULL 排最后
+    // modelId 实际是 "mB"（测试创建时设了 modelId）—— (unknown model) 占位只在 modelId 真为 NULL 时触发
+    expect(result[1]!.rows[0]!.modelId).toBe("mB");
+  });
+
+  it("projectId 过滤聚合", async () => {
+    await db.usageEvents.create({ modelId: "m1", projectId: "pA", roleKind: "leader", cost: 0.01 });
+    await db.usageEvents.create({ modelId: "m2", projectId: "pB", roleKind: "leader", cost: 0.02 });
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const result = await aggregateUsageByActorRole({ projectId: "pA" });
+    expect(result).toHaveLength(1);
+    expect(result[0]!.totalCost).toBeCloseTo(0.01);
+  });
+
+  // ====== H4 阶段 F1：aggregateUsageByActorRole 边界（review F1-9）======
+
+  it("★ modelId=NULL → rows[0].modelId='(unknown model)' 占位", async () => {
+    await db.usageEvents.create({ roleKind: "leader", cost: 0.05 });
+    // 不传 modelId
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const result = await aggregateUsageByActorRole({});
+    expect(result[0]!.rows[0]!.modelId).toBe("(unknown model)");
+  });
+
+  it("cost=0 + tokens=0 边界：能聚合不报错", async () => {
+    await db.usageEvents.create({ modelId: "mFree", roleKind: "leader", cost: 0, inputTokens: 0, outputTokens: 0 });
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const result = await aggregateUsageByActorRole({});
+    expect(result[0]!.totalCost).toBe(0);
+    expect(result[0]!.totalCalls).toBe(1);
+  });
+
+  it("★ 同 roleKind + 同 modelId 多行 → SUM 累加正确（5+5+5=15）", async () => {
+    await db.usageEvents.create({ modelId: "mA", roleKind: "frontend", cost: 5 });
+    await db.usageEvents.create({ modelId: "mA", roleKind: "frontend", cost: 5 });
+    await db.usageEvents.create({ modelId: "mA", roleKind: "frontend", cost: 5 });
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const result = await aggregateUsageByActorRole({});
+    const frontend = result.find((r) => r.roleKind === "frontend");
+    expect(frontend?.totalCost).toBeCloseTo(15);
+    expect(frontend?.totalCalls).toBe(3);
+    // 单 modelId 合并到一行
+    expect(frontend?.rows).toHaveLength(1);
+  });
+
+  it("★ 3 个非 NULL roleKind → 字母序排列（architect < backend < frontend）", async () => {
+    await db.usageEvents.create({ modelId: "m", roleKind: "frontend", cost: 0.10 });
+    await db.usageEvents.create({ modelId: "m", roleKind: "architect", cost: 0.20 });
+    await db.usageEvents.create({ modelId: "m", roleKind: "backend", cost: 0.30 });
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const result = await aggregateUsageByActorRole({});
+    // 字母序：architect < backend < frontend
+    expect(result.map((r) => r.roleKind)).toEqual(["architect", "backend", "frontend"]);
+  });
+
+  it("★ 同 roleKind 3 个 model → 按 cost DESC 排序（mB>mA>mC）", async () => {
+    await db.usageEvents.create({ modelId: "mA", roleKind: "frontend", cost: 0.10 });
+    await db.usageEvents.create({ modelId: "mB", roleKind: "frontend", cost: 0.50 });
+    await db.usageEvents.create({ modelId: "mC", roleKind: "frontend", cost: 0.01 });
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const result = await aggregateUsageByActorRole({});
+    const frontend = result.find((r) => r.roleKind === "frontend")!;
+    expect(frontend.rows.map((r) => r.modelId)).toEqual(["mB", "mA", "mC"]);
+  });
+
+  it("★ NULL roleKind × 多 model → 独立'未分类'组 + 多 row 累加", async () => {
+    await db.usageEvents.create({ modelId: "mA", cost: 0.05 }); // roleKind 旧数据 NULL
+    await db.usageEvents.create({ modelId: "mB", cost: 0.10 }); // roleKind 旧数据 NULL
+    await db.usageEvents.create({ modelId: "mA", cost: 0.05 }); // 同 modelId 累加
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const result = await aggregateUsageByActorRole({});
+    const nullGroup = result.find((r) => r.roleKind === null)!;
+    expect(nullGroup.totalCost).toBeCloseTo(0.20);
+    expect(nullGroup.rows).toHaveLength(2); // mA 合并 + mB
+  });
+
+  it("★ stage vs RoleId 共存 → 按 actor_role 字符串精确分组（stage 不被当 RoleId 解析）", async () => {
+    await db.usageEvents.create({ modelId: "m", roleKind: "frontend", cost: 0.10 });
+    await db.usageEvents.create({ modelId: "m", roleKind: "stage", cost: 0.20 });
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const result = await aggregateUsageByActorRole({});
+    // 2 个独立组：frontend（RoleId）+ stage（命名空间外）
+    expect(result).toHaveLength(2);
+    expect(result.find((r) => r.roleKind === "frontend")?.totalCost).toBeCloseTo(0.10);
+    expect(result.find((r) => r.roleKind === "stage")?.totalCost).toBeCloseTo(0.20);
+  });
+
+  it("空表 → 返 []（不崩）", async () => {
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const result = await aggregateUsageByActorRole({});
+    expect(result).toEqual([]);
+  });
+
+  it("since 时间过滤：未来时间 → 返 []", async () => {
+    await db.usageEvents.create({ modelId: "m", roleKind: "leader", cost: 0.05 });
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const result = await aggregateUsageByActorRole({ since: future });
+    expect(result).toEqual([]);
+  });
+
+  it("projectId + since 同时过滤", async () => {
+    const now = new Date();
+    const past = new Date(now.getTime() - 60_000).toISOString();
+    const future = new Date(now.getTime() + 60_000).toISOString();
+    await db.usageEvents.create({ modelId: "m1", projectId: "pA", roleKind: "leader", cost: 0.01 });
+    await db.usageEvents.create({ modelId: "m2", projectId: "pB", roleKind: "leader", cost: 0.02 });
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const result = await aggregateUsageByActorRole({ projectId: "pA", since: past });
+    expect(result).toHaveLength(1);
+    expect(result[0]!.totalCost).toBeCloseTo(0.01);
+    // since=future → 0 条
+    const result2 = await aggregateUsageByActorRole({ projectId: "pA", since: future });
+    expect(result2).toEqual([]);
   });
 });
 
@@ -450,5 +658,32 @@ describe("seedBuiltInTemplates", () => {
     await db.seedBuiltInTemplates();
     const after2 = (await db.projectTemplates.list()).length;
     expect(after2).toBe(after1);
+  });
+});
+
+describe("getRoleBindingsForTemplate（阶段 D tidy：空字符串占位不进 Map）", () => {
+  it("seed 完后默认 8 角色模板：modelId 都是空字符串占位 → Map 为空（编排走 fallback 自动选）", async () => {
+    await db.seedBuiltInTemplates();
+    // 找「默认 8 角色」内置模板
+    const tpl = (await db.projectTemplates.list()).find((t) => t.name === "默认 8 角色");
+    expect(tpl).toBeDefined();
+    const bindings = await db.projectTemplateRoles.getRoleBindingsForTemplate(tpl!.id);
+    expect(bindings.size).toBe(0); // 所有行的 modelId 是 '' → 全部跳过
+  });
+
+  it("用户给某角色配了真实 modelId → 该角色进 Map；其它空串占位仍跳过", async () => {
+    await db.seedBuiltInTemplates();
+    const tpl = (await db.projectTemplates.list()).find((t) => t.name === "默认 8 角色");
+    expect(tpl).toBeDefined();
+
+    // 给 frontend 角色绑一个真实 modelId（先用已存在的 models 表里的任意一个；这里用占位字符串测试——resolveOrchestration L2 会再校验 availableModels）
+    const rows = await db.projectTemplateRoles.listByTemplate(tpl!.id);
+    const frontendRow = rows.find((r) => r.workRole === "frontend");
+    expect(frontendRow).toBeDefined();
+    await db.projectTemplateRoles.update(frontendRow!.id, { modelId: "model-real-frontend" });
+
+    const bindings = await db.projectTemplateRoles.getRoleBindingsForTemplate(tpl!.id);
+    expect(bindings.size).toBe(1); // 只有 frontend 进 Map
+    expect(bindings.get("frontend")).toBe("model-real-frontend");
   });
 });

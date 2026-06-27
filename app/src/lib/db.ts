@@ -4,6 +4,7 @@
 
 import Database from "@tauri-apps/plugin-sql";
 import { BUILT_IN_TEMPLATES } from "./templates";
+import { ROLE_IDS, type RoleId } from "./llm/orchestrator";
 
 // ============ 单例 ============
 
@@ -40,6 +41,34 @@ async function addColumnIfMissing(
   const cols = await db.select<Array<{ name: string }>>(`PRAGMA table_info(${table})`);
   if (!cols.some((c) => c.name === column)) {
     await db.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+  }
+}
+
+/** 阶段 D：给指定会话查"8 角色绑定"。
+ *  - 有 project → 查 project 的模板 → getRoleBindingsForTemplate
+ *  - 无 project → 用"默认 8 角色"内置模板作兜底（ChatPage 主对话无 project 也能用角色绑定）
+ *  - 查不到任何模板/绑定失败 → 返回空 Map（编排 fallback 自动选，原行为不变）
+ *  - 单测可覆盖：mock dbConversations.getById 即可 */
+export async function getRoleBindingsForConversation(convId: string): Promise<Map<RoleId, string>> {
+  try {
+    const conv = await conversations.getById(convId);
+    let templateId: string | null = null;
+    if (conv?.projectId) {
+      const proj = await projects.getById(conv.projectId);
+      templateId = proj?.templateId ?? null;
+    }
+    if (!templateId) {
+      const db = await getDb();
+      const rows = await db.select<Array<{ id: string }>>(
+        'SELECT id FROM project_templates WHERE name = $1 AND is_built_in = 1 LIMIT 1',
+        ['默认 8 角色'],
+      );
+      templateId = rows[0]?.id ?? null;
+    }
+    if (!templateId) return new Map();
+    return projectTemplateRoles.getRoleBindingsForTemplate(templateId);
+  } catch {
+    return new Map();
   }
 }
 
@@ -281,13 +310,23 @@ export async function initSchema(): Promise<void> {
   // 新库 CREATE 时已含；旧库 IF NOT EXISTS 不改已存在表，故需幂等 ALTER。
   await addColumnIfMissing(db, "usage_events", "outcome", "TEXT");
 
+  // 阶段 F1：给旧库的 usage_events 补 role_kind 列（actor 维度：leader/architect/frontend/.../stage/null）。
+  // - 跟现有 `role` 列（workRole 难度桶：main_chat/planning/...）配对清晰，不撞名
+  // - 聚合默认不过滤 NULL（review F1-1：leader 占比 80%+，NULL 是真实数据）
+  // - NOT NULL 约束由 TypeScript 层保障（roleKind: RoleId | 'stage' | null）
+  await addColumnIfMissing(db, "usage_events", "role_kind", "TEXT");
+
   // 索引：① setOutcomeForLatest 按 model_id + outcome IS NULL 取最近一条（隐式反馈热路径）；
-  //        ② usageEvents.list 按 created_at 过滤/排序（统计 + SmartRouter 数据源）。
+  //        ② usageEvents.list 按 created_at 过滤/排序（统计 + SmartRouter 数据源）；
+  //        ③ F1 阶段：按 role_kind × model_id 聚合（覆盖 GROUP BY 前缀 + 时间排序）
   await db.execute(
     "CREATE INDEX IF NOT EXISTS idx_usage_events_model_outcome ON usage_events(model_id, created_at DESC) WHERE outcome IS NULL"
   );
   await db.execute(
     "CREATE INDEX IF NOT EXISTS idx_usage_events_created ON usage_events(created_at)"
+  );
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_usage_events_role_kind_model ON usage_events(role_kind, model_id, created_at DESC)"
   );
 
   // v0.6 项目级长期记忆（4.11 记忆分层 + 5.6 RAG）
@@ -421,6 +460,34 @@ export async function seedBuiltInTemplates(): Promise<void> {
        VALUES ($1,$2,$3,$4,1,0,$5,$6)
        ON CONFLICT(name) WHERE is_built_in = 1 DO NOTHING`,
       [id, tpl.name, tpl.descriptionKey, tpl.icon, ts, ts]
+    );
+    // 阶段 D：给"默认 8 角色"内置模板额外 seed 8 条 RoleId 行（workRole=RoleId，modelId=null），
+    // 让用户在 TemplatesPage 编辑后即生效。workRole=RoleId 一列一义，老模板 13 枚举 workRole 行不在 8 角色绑定路径里解释。
+    if (tpl.workRoles.every((r) => (ROLE_IDS as readonly string[]).includes(r))) {
+      await seedDefaultRoleRowsForTemplate(tpl.name);
+    }
+  }
+}
+
+/** 阶段 D 辅助：给"默认 8 角色"模板 seed 8 条 RoleId=workRole 行
+ *  - model_id 用空字符串占位（schema 约束 NOT NULL，用户没绑前显示空下拉；getRoleBindingsForTemplate 看到空字符串 falsy 会跳过）
+ *  - ON CONFLICT(template_id, work_role) DO NOTHING：已 seed 过的不重复插入
+ *  - 仅写 workRole IN ROLE_IDS 的行；老 13 枚举 workRole 行不在此函数职责范围内 */
+async function seedDefaultRoleRowsForTemplate(templateName: string): Promise<void> {
+  const db = await getDb();
+  const tplRows = await db.select<Array<{ id: string }>>(
+    "SELECT id FROM project_templates WHERE name = $1 AND is_built_in = 1 LIMIT 1",
+    [templateName],
+  );
+  const templateId = tplRows[0]?.id;
+  if (!templateId) return;
+  for (let i = 0; i < ROLE_IDS.length; i++) {
+    const role = ROLE_IDS[i]!;
+    await db.execute(
+      `INSERT INTO project_template_roles (id, template_id, work_role, model_id, fallback_model_id, "order", system_prompt, enabled)
+       VALUES ($1,$2,$3,'',NULL,$4,NULL,1)
+       ON CONFLICT(template_id, work_role) DO NOTHING`,
+      [newId(), templateId, role, i],
     );
   }
 }
@@ -941,6 +1008,16 @@ export const conversations = {
     await db.execute("DELETE FROM conversations WHERE id = $1", [id]);
   },
 
+  // 阶段 D：查单个会话（拿到 projectId，用于查模板 → 角色绑定）。没找到返 null。
+  async getById(id: string): Promise<Conversation | null> {
+    const db = await getDb();
+    const rows = await db.select<ConversationRow[]>(
+      "SELECT * FROM conversations WHERE id = $1 LIMIT 1",
+      [id],
+    );
+    return rows[0] ? mapConversation(rows[0]) : null;
+  },
+
   // 读编排者节点状态 JSON（没有则 null）。编排是后台锦上添花，列可能不存在的旧库已被 initSchema 迁移补上。
   async getOrchestration(id: string): Promise<string | null> {
     const db = await getDb();
@@ -1233,6 +1310,26 @@ export const projectTemplateRoles = {
   async delete(id: string): Promise<void> {
     const db = await getDb();
     await db.execute("DELETE FROM project_template_roles WHERE id = $1", [id]);
+  },
+
+  /** 阶段 D：从指定模板读"8 角色绑定"（workRole=RoleId 行）→ Map<RoleId, modelId>
+   *  - 一列一义：只查 workRole IN ROLE_IDS 的行；老模板的 13 枚举 workRole 行不进 Map
+   *  - enabled=false 的行不进 Map（用户禁用的角色不参与编排）
+   *  - modelId 空/全空白不进 Map（用户没绑 = 不该塞个空绑定到 Map，编排 L2 会用空字符串查 availableModels 失败再走 L3 fallback——多走一步弯路；这里直接跳过更干净）
+   *  - 返回 Map 而非 Record：调用方 resolveOrchestration 直接 roleBindings.get(role) 查
+   *  - 纯函数；无 IO 副作用（除了 listByTemplate 的 SELECT）
+   */
+  async getRoleBindingsForTemplate(templateId: string): Promise<Map<RoleId, string>> {
+    const rows = await this.listByTemplate(templateId);
+    const map = new Map<RoleId, string>();
+    const allowedRoles = new Set<string>(ROLE_IDS);
+    for (const r of rows) {
+      if (!allowedRoles.has(r.workRole)) continue; // 老 13 枚举 workRole 行跳过（一列一义）
+      if (!r.enabled) continue; // 禁用的角色跳过
+      if (!r.modelId || !r.modelId.trim()) continue; // 空字符串/全空白占位行跳过（不把空绑定塞进 Map——省编排 L2 多走一步 fallback）
+      map.set(r.workRole as RoleId, r.modelId);
+    }
+    return map;
   },
 };
 
@@ -1953,6 +2050,8 @@ export const usageEvents = {
     modelId?: string | null;
     projectId?: string | null;
     role?: string | null;
+    /** 阶段 F1：actor 维度（leader/architect/frontend/.../stage/null） */
+    roleKind?: string | null;
     inputTokens?: number;
     outputTokens?: number;
     cacheCreationTokens?: number;
@@ -1966,10 +2065,10 @@ export const usageEvents = {
     const ts = now();
     await db.execute(
       `INSERT INTO usage_events
-        (id, provider_id, api_credential_id, model_id, project_id, role,
+        (id, provider_id, api_credential_id, model_id, project_id, role, role_kind,
          input_tokens, output_tokens, cache_creation_tokens, cache_hit_tokens,
          cost, success, interrupted, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
       [
         id,
         input.providerId ?? null,
@@ -1977,6 +2076,8 @@ export const usageEvents = {
         input.modelId ?? null,
         input.projectId ?? null,
         input.role ?? null,
+        // 阶段 F1：role_kind 透传（undefined → NULL；review F1-1 聚合不过滤 NULL）
+        input.roleKind ?? null,
         input.inputTokens ?? 0,
         input.outputTokens ?? 0,
         input.cacheCreationTokens ?? 0,
@@ -2014,15 +2115,18 @@ export const usageEvents = {
     const db = await getDb();
     const rows = sinceTs
       ? await db.select<any[]>(
-          "SELECT model_id, role, input_tokens, output_tokens, cost, success, created_at FROM usage_events WHERE created_at >= $1 ORDER BY created_at ASC",
+          "SELECT id, model_id, role, role_kind, input_tokens, output_tokens, cost, success, created_at FROM usage_events WHERE created_at >= $1 ORDER BY created_at ASC",
           [sinceTs],
         )
       : await db.select<any[]>(
-          "SELECT model_id, role, input_tokens, output_tokens, cost, success, created_at FROM usage_events ORDER BY created_at ASC",
+          "SELECT id, model_id, role, role_kind, input_tokens, output_tokens, cost, success, created_at FROM usage_events ORDER BY created_at ASC",
         );
     return rows.map((r) => ({
+      id: r.id,
       modelId: r.model_id,
       role: r.role,
+      // 阶段 F1：role_kind 透传到聚合（NULL → 未分类组）
+      roleKind: r.role_kind ?? null,
       inputTokens: r.input_tokens,
       outputTokens: r.output_tokens,
       cost: r.cost,
@@ -2033,8 +2137,11 @@ export const usageEvents = {
 };
 
 export interface UsageEventRow {
+  id: string;
   modelId: string | null;
   role: string | null;
+  /** 阶段 F1：actor 维度（leader/architect/frontend/.../stage/null） */
+  roleKind: string | null;
   inputTokens: number;
   outputTokens: number;
   cost: number;

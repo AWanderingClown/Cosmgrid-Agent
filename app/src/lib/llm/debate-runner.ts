@@ -5,6 +5,7 @@
 
 import { generateText } from "ai";
 import { getLanguageModel } from "./provider-factory";
+import { resolveMaxOutputTokens } from "./model-limits";
 import { recordUsageEvent } from "./usage-tracker";
 import { isCliProviderType } from "./cli-protocol";
 import { streamViaCli } from "./cli-engine";
@@ -35,7 +36,8 @@ export const realRunRole: RunRole = async ({ systemPrompt, userPrompt, config })
     outputTokens = cli.outputTokens;
   } else {
     const lm = getLanguageModel(config.providerType, config.modelName, config.apiKey, config.baseUrl);
-    const res = await generateText({ model: lm, system: systemPrompt, prompt: userPrompt });
+    // 按 models.dev 该模型真实输出上限给足预算，避免推理型模型把额度耗在思考、正文被截断
+    const res = await generateText({ model: lm, system: systemPrompt, prompt: userPrompt, maxOutputTokens: resolveMaxOutputTokens(config.modelName) });
     content = res.text;
     inputTokens = res.usage?.inputTokens ?? 0;
     outputTokens = res.usage?.outputTokens ?? 0;

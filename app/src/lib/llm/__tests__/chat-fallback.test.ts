@@ -105,6 +105,54 @@ describe("streamWithFallback - 主模型正常", () => {
   });
 });
 
+describe("阶段 F1 H2：actorRole 透传到 recordUsageEvent（review F1-1/-7）", () => {
+  beforeEach(() => {
+    mocks.streamText.mockReset();
+    vi.mocked(recordUsageEvent).mockReset();
+    _resetCooldowns();
+  });
+
+  it("actorRole='leader' → recordUsageEvent 入参含 roleKind='leader'（ChatPage 主对话场景）", async () => {
+    mocks.streamText.mockReturnValueOnce(makeSuccessStream(["hi"]));
+    const cbs: StreamCallbacks = { onDelta: () => {} };
+    await streamWithFallback([primary], [{ role: "user", content: "x" }], cbs, {
+      actorRole: "leader",
+    });
+    expect(vi.mocked(recordUsageEvent)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(recordUsageEvent).mock.calls[0]![0]).toMatchObject({ roleKind: "leader" });
+  });
+
+  it("actorRole=undefined → recordUsageEvent 入参不设 roleKind 字段（让 db 层 ?? null 兜底 → 落 NULL → 聚合'未分类'组）", async () => {
+    mocks.streamText.mockReturnValueOnce(makeSuccessStream(["hi"]));
+    const cbs: StreamCallbacks = { onDelta: () => {} };
+    await streamWithFallback([primary], [{ role: "user", content: "x" }], cbs);
+    // 不传 options.actorRole → spread 守门（line 301 ...(params.roleKind !== undefined ? { roleKind } : {})）
+    // → 入参对象上不该有 roleKind 字段
+    const calledArg = vi.mocked(recordUsageEvent).mock.calls[0]![0] as unknown as Record<string, unknown>;
+    expect("roleKind" in calledArg).toBe(false);
+  });
+
+  it("actorRole=null → recordUsageEvent 入参 roleKind=null（明确归'未分类'组，区别于 undefined）", async () => {
+    mocks.streamText.mockReturnValueOnce(makeSuccessStream(["hi"]));
+    const cbs: StreamCallbacks = { onDelta: () => {} };
+    await streamWithFallback([primary], [{ role: "user", content: "x" }], cbs, {
+      actorRole: null,
+    });
+    expect(vi.mocked(recordUsageEvent)).toHaveBeenCalledTimes(1);
+    const calledArg = vi.mocked(recordUsageEvent).mock.calls[0]![0] as unknown as Record<string, unknown>;
+    expect(calledArg.roleKind).toBeNull();
+  });
+
+  it("actorRole='stage' → recordUsageEvent 入参含 roleKind='stage'（ProjectDetailPage stage 路径）", async () => {
+    mocks.streamText.mockReturnValueOnce(makeSuccessStream(["hi"]));
+    const cbs: StreamCallbacks = { onDelta: () => {} };
+    await streamWithFallback([primary], [{ role: "user", content: "x" }], cbs, {
+      actorRole: "stage",
+    });
+    expect(vi.mocked(recordUsageEvent).mock.calls[0]![0]).toMatchObject({ roleKind: "stage" });
+  });
+});
+
 describe("streamWithFallback - 主模型失败分类", () => {
   it.each<[number, string, boolean]>([
     [401, "auth_invalid", true],

@@ -73,3 +73,43 @@ describe("recordUsageEvent — role 落盘", () => {
     expect(mocks.create).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("阶段 F1 H3：roleKind 透传 + spread 守门（review F1-7）", () => {
+  beforeEach(() => {
+    mocks.create.mockClear();
+    mocks.create.mockResolvedValue(undefined);
+  });
+
+  it("roleKind='frontend' → usageEvents.create 入参含 roleKind='frontend'", async () => {
+    await recordUsageEvent({ ...baseParams, roleKind: "frontend" }, { awaitWrite: true });
+    expect(mocks.create.mock.calls[0]![0]).toMatchObject({ roleKind: "frontend" });
+  });
+
+  it("roleKind=undefined → 入参对象不含 roleKind 字段（spread 守门，让 db 层 ?? null 兜底）", async () => {
+    await recordUsageEvent(baseParams, { awaitWrite: true });
+    const calledArg = mocks.create.mock.calls[0]![0] as Record<string, unknown>;
+    expect("roleKind" in calledArg).toBe(false);
+  });
+
+  it("roleKind=null → 入参 roleKind=null（明确归'未分类'组，区别于 undefined）", async () => {
+    await recordUsageEvent({ ...baseParams, roleKind: null }, { awaitWrite: true });
+    const calledArg = mocks.create.mock.calls[0]![0] as Record<string, unknown>;
+    expect(calledArg.roleKind).toBeNull();
+  });
+
+  it("roleKind='stage' → 入参含 roleKind='stage'（stage 不是 RoleId，是合法 actor_role 值）", async () => {
+    await recordUsageEvent({ ...baseParams, roleKind: "stage" }, { awaitWrite: true });
+    expect(mocks.create.mock.calls[0]![0]).toMatchObject({ roleKind: "stage" });
+  });
+
+  it("role 和 roleKind 同存不互相覆盖（两者独立维度）", async () => {
+    await recordUsageEvent(
+      { ...baseParams, role: "hard", roleKind: "frontend" },
+      { awaitWrite: true },
+    );
+    expect(mocks.create.mock.calls[0]![0]).toMatchObject({
+      role: "hard",        // workRole 难度桶：不变
+      roleKind: "frontend", // 阶段 F1 新增：actor 维度
+    });
+  });
+});

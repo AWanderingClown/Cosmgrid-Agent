@@ -10,6 +10,7 @@
 import { generateObject } from "ai";
 import { z } from "zod";
 import type { LanguageModel } from "./provider-factory";
+import { resolveMaxOutputTokens } from "./model-limits";
 
 export const checkpointDraftSchema = z.object({
   title: z.string().describe("检查点标题，简短概括这次交接的内容"),
@@ -47,6 +48,8 @@ export async function generateCheckpointDraft(
   const { object } = await generateObject({
     model: languageModel,
     schema: checkpointDraftSchema,
+    // 按模型真实上限给足预算，避免推理型模型的结构化 JSON 被截断 → 解析失败
+    maxOutputTokens: resolveMaxOutputTokens(languageModel.modelId),
     prompt: `你是一个项目交接助手。下面是某个工作阶段里 AI 和用户的完整对话记录，请基于这段对话生成一份"检查点"——
 也就是把当前工作进展总结成一份交接备忘录，让下一个 AI/角色接手时能快速理解上下文，不用重新读完整对话。
 

@@ -10,7 +10,7 @@ const store = new Map<string, string>();
   clear: () => store.clear(),
 };
 
-import { isSmartRoutingEnabled, setSmartRoutingEnabled } from "../app-settings";
+import { isSmartRoutingEnabled, setSmartRoutingEnabled, getPermissionMode, setPermissionMode } from "../app-settings";
 
 describe("智能路由开关", () => {
   beforeEach(() => store.clear());
@@ -28,5 +28,30 @@ describe("智能路由开关", () => {
     setSmartRoutingEnabled(false);
     setSmartRoutingEnabled(true);
     expect(isSmartRoutingEnabled()).toBe(true);
+  });
+});
+
+describe("权限档持久化", () => {
+  beforeEach(() => store.clear());
+
+  it("默认 read（最安全，未设置过时）", () => {
+    expect(getPermissionMode()).toBe("read");
+  });
+
+  it("切到 confirm 后再读回就是 confirm", () => {
+    setPermissionMode("confirm");
+    expect(getPermissionMode()).toBe("confirm");
+  });
+
+  it("切到 auto 后能切回 read", () => {
+    setPermissionMode("auto");
+    expect(getPermissionMode()).toBe("auto");
+    setPermissionMode("read");
+    expect(getPermissionMode()).toBe("read");
+  });
+
+  it("localStorage 脏写（非三档之一）降级回 read，绝不让 UI 拿到非法值", () => {
+    store.set("cosmgrid.permissionMode", "garbage_value");
+    expect(getPermissionMode()).toBe("read");
   });
 });
