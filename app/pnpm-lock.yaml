@@ -68,6 +68,9 @@ importers:
       i18next-browser-languagedetector:
         specifier: ^8.2.1
         version: 8.2.1
+      ignore:
+        specifier: ^7.0.5
+        version: 7.0.5
       lucide-react:
         specifier: ^0.460.0
         version: 0.460.0(react@19.2.7)
@@ -2091,6 +2094,10 @@ packages:
     peerDependenciesMeta:
       typescript:
         optional: true
+
+  ignore@7.0.5:
+    resolution: {integrity: sha512-Hs59xBNfUIunMFgWAbGX5cq6893IbWg4KnrjbYwX3tx0ztorVgTDA6B2sxf8ejHJ4wz8BqGUMYlnzNBer5NvGg==}
+    engines: {node: '>= 4'}
 
   immediate@3.0.6:
     resolution: {integrity: sha512-XXOFtyqDjNDAQxVfYxuF7g9Il/IbWmmlQg2MYKOH8ExIT1qg6xc4zyS3HaEEATgs1btfzxq15ciUiY7gjSXRGQ==}
@@ -4457,6 +4464,8 @@ snapshots:
   i18next@26.3.1(typescript@5.8.3):
     optionalDependencies:
       typescript: 5.8.3
+
+  ignore@7.0.5: {}
 
   immediate@3.0.6: {}
 

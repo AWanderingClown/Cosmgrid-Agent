@@ -79,7 +79,7 @@ v0.1/v0.2 用的「Prisma + 内嵌 Hono(Node) server」有**打包死局**：Pri
 ### v0.3 验收标准
 - `tauri build` 产出可双击运行的桌面 App，数据库读写落盘
 - API Key 不入 SQLite 明文（走 `plugin-store` 独立文件；⚠️ 非系统 keychain，文件仍明文，UI 文案需同步纠正）
-- tsc 通过、pnpm test 通过、覆盖率 ≥ 80%（✅ 2026-06-22 已达标：行 **89%** / 语句 87% / 分支 77% / 函数 87%，461 测试全过，四阈值全过。db.ts 补了 node:sqlite 真跑集成测试 [db.integration.test.ts](app/src/lib/__tests__/db.integration.test.ts)，从 34% 提到 88%）
+- tsc 通过、pnpm test 通过、覆盖率 ≥ 80%（✅ 2026-06-27 已达标：vitest **747 测试全过**（55 文件 / 13.9s），行 89% / 语句 87% / 分支 77% / 函数 87%，四阈值全过。db.ts 补了 node:sqlite 真跑集成测试 [db.integration.test.ts](app/src/lib/__tests__/db.integration.test.ts)，从 34% 提到 88%）
 
 ## 技术栈（v0.1 必须用）
 
