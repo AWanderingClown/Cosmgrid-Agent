@@ -338,7 +338,7 @@ describe("handoffPackets", () => {
     // mock t: 返回 i18nKey 对应的原中文 label（验证 v0.6 行为）
     const tMock = (k: string, opts?: Record<string, unknown>) => {
       const map: Record<string, string> = {
-        "handoffMarkdown.title": `接力包 → ${opts?.role ?? ""}`,
+        "handoffMarkdown.title": `交接包 → ${opts?.role ?? ""}`,
         "handoffMarkdown.sourceCheckpoint": `_原检查点：${opts?.title ?? ""}_`,
         "handoffMarkdown.generatedAt": `_生成时间：${opts?.time ?? ""}_`,
         "handoffMarkdown.empty": "（未填）",
@@ -355,7 +355,7 @@ describe("handoffPackets", () => {
       return map[k] ?? k;
     };
     const md = renderHandoffMarkdown(cp, "backend", tMock);
-    expect(md).toContain("# 接力包 → backend");
+    expect(md).toContain("# 交接包 → backend");
     expect(md).toContain("## 目标（Goal）");
     expect(md).toContain("## 已完成（Completed Summary）");
     expect(md).toContain("## 当前上下文（Current Context）");
@@ -379,7 +379,7 @@ describe("handoffPackets", () => {
     };
     const md = renderHandoffMarkdown(cp, "frontend", (k: string) => {
       const map: Record<string, string> = {
-        "handoffMarkdown.title": "接力包 → {{role}}",
+        "handoffMarkdown.title": "交接包 → {{role}}",
         "handoffMarkdown.sourceCheckpoint": "_原检查点：{{title}}_",
         "handoffMarkdown.generatedAt": "_生成时间：{{time}}_",
         "handoffMarkdown.empty": "（未填）",
@@ -410,7 +410,7 @@ describe("handoffPackets", () => {
     rows["handoff_packets"] = [];
 
     await handoffPackets.generate("cp-1", "backend", (k: string, opts?: Record<string, unknown>) => {
-      if (k === "handoffMarkdown.title") return `接力包 → ${opts?.role ?? ""}`;
+      if (k === "handoffMarkdown.title") return `交接包 → ${opts?.role ?? ""}`;
       if (k === "handoffMarkdown.sourceCheckpoint") return `_原检查点：${opts?.title ?? ""}_`;
       if (k === "handoffMarkdown.generatedAt") return `_生成时间：${opts?.time ?? ""}_`;
       if (k === "handoffMarkdown.empty") return "（未填）";
@@ -424,7 +424,7 @@ describe("handoffPackets", () => {
     const params = lastCall?.[1] as unknown[] | undefined;
     // 第 7 个参数是 content（id, project_id, checkpoint_id, target_role, target_model_id, format, content）
     const content = params?.[6] as string | undefined;
-    expect(content).toContain("# 接力包 → backend");
+    expect(content).toContain("# 交接包 → backend");
     expect(content).toContain("完成登录页");
   });
 
@@ -433,7 +433,7 @@ describe("handoffPackets", () => {
     await expect(handoffPackets.generate("nope", "backend", (k: string) => k)).rejects.toThrow(/checkpoint nope not found/);
   });
 
-  it("listByProject() 返回项目下的所有接力包", async () => {
+  it("listByProject() 返回项目下的所有交接包", async () => {
     rows["handoff_packets"] = [
       { id: "hf-1", project_id: "proj-1", checkpoint_id: "cp-1", target_role: "backend", target_model_id: null, format: "markdown", content: "x", created_at: "2024-01-01T00:00:00.000Z" },
       { id: "hf-2", project_id: "proj-1", checkpoint_id: "cp-2", target_role: "testing", target_model_id: null, format: "markdown", content: "y", created_at: "2024-01-02T00:00:00.000Z" },

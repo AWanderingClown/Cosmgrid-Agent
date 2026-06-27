@@ -15,7 +15,7 @@ const paramsSchema = z.object({
 type GrepParams = z.infer<typeof paramsSchema>;
 
 /** 单次最多返回的匹配行数 */
-export const GREP_MAX_MATCHES = 200;
+const GREP_MAX_MATCHES = 200;
 
 export const grepTool: ToolDefinition<GrepParams> = {
   name: "grep",

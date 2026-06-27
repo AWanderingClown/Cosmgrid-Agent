@@ -106,8 +106,3 @@ let activeProvider: EmbeddingProvider = keywordEmbeddingProvider;
 export function getEmbeddingProvider(): EmbeddingProvider {
   return activeProvider;
 }
-
-/** 替换 provider（测试 / 未来接 transformers.js 用） */
-export function setEmbeddingProvider(p: EmbeddingProvider): void {
-  activeProvider = p;
-}

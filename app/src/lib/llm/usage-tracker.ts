@@ -46,6 +46,7 @@ export function recordUsageEvent(
         apiCredentialId: params.apiCredentialId,
         modelId: params.modelId,
         projectId: params.projectId ?? null,
+        conversationId: params.conversationId ?? null,
         role,
         // 阶段 F1：role_kind 透传（不传 → NULL；review F1-1 不过滤 NULL）
         ...(params.roleKind !== undefined ? { roleKind: params.roleKind } : {}),

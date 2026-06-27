@@ -7,9 +7,6 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { WORK_ROLES, type WorkRole } from "@/lib/api";
 
-export { WORK_ROLES };
-export type { WorkRole };
-
 interface WorkRoleSelectorProps {
   value: WorkRole[];
   onChange: (roles: WorkRole[]) => void;

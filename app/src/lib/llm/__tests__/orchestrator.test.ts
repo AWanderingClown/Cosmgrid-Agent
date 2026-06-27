@@ -628,16 +628,41 @@ describe("watch 图 + computeChain（阶段 E1：零 LLM，纯逻辑+展示）",
     expect(chain).toEqual(["architect", "frontend", "backend"]); // 按 plan 顺序 + 封顶
   });
 
-  it("computeChain 按 plan.nodes 顺序（不是 ROLE_IDS 顺序）——尊重 LLM 排的 topological", () => {
+  it("computeChain 用 watch 图纠正违反依赖的顺序，同级仍按 plan.nodes 稳定排序", () => {
     const p = plan({
       nodes: [
         { role: "leader", title: "x", status: "active" },
-        { role: "runner", title: "y", status: "planned" },  // 先 runner（违反 watch 图，但 LLM 这么排就算它的）
+        { role: "runner", title: "y", status: "planned" },
         { role: "frontend", title: "z", status: "planned" },
       ],
       currentNodeRole: "runner",
     });
-    expect(computeChain(p)).toEqual(["runner", "frontend"]); // 按 plan 顺序，不重排
+    expect(computeChain(p)).toEqual(["frontend", "runner"]);
+  });
+
+  it("computeChain 对多依赖角色排序：runner 必须排在 frontend/backend 之后", () => {
+    const p = plan({
+      nodes: [
+        { role: "leader", title: "x", status: "active" },
+        { role: "runner", title: "跑", status: "planned" },
+        { role: "backend", title: "后端", status: "planned" },
+        { role: "frontend", title: "前端", status: "planned" },
+      ],
+      currentNodeRole: "runner",
+    });
+    expect(computeChain(p)).toEqual(["backend", "frontend", "runner"]);
+  });
+
+  it("computeChain 只排序本轮出现的角色：缺失的依赖不会被自动补进 chain", () => {
+    const p = plan({
+      nodes: [
+        { role: "leader", title: "x", status: "active" },
+        { role: "tester", title: "测试", status: "planned" },
+        { role: "runner", title: "跑", status: "planned" },
+      ],
+      currentNodeRole: "tester",
+    });
+    expect(computeChain(p)).toEqual(["runner", "tester"]);
   });
 
   it("withChainPlan 不可变：不修改原 state", () => {

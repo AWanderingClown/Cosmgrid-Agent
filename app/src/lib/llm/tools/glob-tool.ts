@@ -13,7 +13,7 @@ const paramsSchema = z.object({
 type GlobParams = z.infer<typeof paramsSchema>;
 
 /** 单次最多返回的匹配文件数 */
-export const GLOB_MAX_RESULTS = 200;
+const GLOB_MAX_RESULTS = 200;
 
 export const globTool: ToolDefinition<GlobParams> = {
   name: "glob",

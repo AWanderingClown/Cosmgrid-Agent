@@ -8,7 +8,7 @@ import { checkPath } from "./path-safety";
 import { getFsAdapter } from "./fs-adapter";
 
 /** 默认最多读 200 行（大文件截断，避免撑爆上下文） */
-export const READ_DEFAULT_LIMIT = 200;
+const READ_DEFAULT_LIMIT = 200;
 
 const paramsSchema = z.object({
   file_path: z.string().describe("要读取的文件路径（相对工作区或绝对路径）"),

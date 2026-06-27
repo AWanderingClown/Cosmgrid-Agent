@@ -14,7 +14,7 @@
 //   3. claude 的 stream-json 里 `rate_limit_event` 带订阅额度剩余，未来可接 Token Plan 显示。
 
 /** 支持的 CLI 引擎类型（对应 Provider.type） */
-export const CLI_PROVIDER_TYPES = ["claude-cli", "codex-cli"] as const;
+const CLI_PROVIDER_TYPES = ["claude-cli", "codex-cli"] as const;
 export type CliProviderType = (typeof CLI_PROVIDER_TYPES)[number];
 
 /** 该 provider type 是否走 CLI 引擎（而非 provider-factory / streamText） */
@@ -35,7 +35,7 @@ export const CLI_DEFAULT_PROGRAM: Record<CliProviderType, string> = {
  * 路由（如 MiniMax）或误判嵌套会话。抹掉后 claude 回落到订阅 OAuth 登录态。
  * 前缀匹配：任何以这些开头的 key 都清。
  */
-export const POLLUTING_ENV_PREFIXES = [
+const POLLUTING_ENV_PREFIXES = [
   "ANTHROPIC_", // BASE_URL / AUTH_TOKEN / API_KEY / MODEL / DEFAULT_*_MODEL …
   "CLAUDECODE",
   "CLAUDE_CODE_",

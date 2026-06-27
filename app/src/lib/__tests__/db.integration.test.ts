@@ -114,6 +114,68 @@ describe("conversations + 主对话", () => {
     expect(await db.messages.listByConversation(c2.id)).toHaveLength(0);
   });
 
+  it("阶段 E3：chain 角色消息元数据能落库并恢复", async () => {
+    const conv = await db.conversations.create({ title: "chain message", projectId: null });
+    const msg = await db.messages.create({
+      conversationId: conv.id,
+      role: "assistant",
+      content: "前端已完成按钮调整",
+      actorRole: "frontend",
+      chainStepIndex: 2,
+      chainStepTotal: 3,
+      chainDone: true,
+    });
+
+    expect(msg.actorRole).toBe("frontend");
+    expect(msg.chainStepIndex).toBe(2);
+    expect(msg.chainStepTotal).toBe(3);
+    expect(msg.chainDone).toBe(true);
+
+    const restored = await db.messages.listByConversation(conv.id);
+    expect(restored.find((m) => m.id === msg.id)).toMatchObject({
+      actorRole: "frontend",
+      chainStepIndex: 2,
+      chainStepTotal: 3,
+      chainDone: true,
+    });
+  });
+
+  it("阶段 E3：chain 消息可更新完成状态，空更新返回原消息，缺失 id 返回 null", async () => {
+    const conv = await db.conversations.create({ title: "chain update", projectId: null });
+    const msg = await db.messages.create({
+      conversationId: conv.id,
+      role: "assistant",
+      content: "",
+      actorRole: "runner",
+      chainStepIndex: 3,
+      chainStepTotal: 3,
+      chainDone: false,
+    });
+
+    const unchanged = await db.messages.updateChainMessage(msg.id, {});
+    expect(unchanged?.content).toBe("");
+    expect(unchanged?.chainDone).toBe(false);
+
+    const updated = await db.messages.updateChainMessage(msg.id, {
+      content: "测试通过",
+      chainDone: true,
+      inputTokens: 11,
+      outputTokens: 22,
+      cost: 0.03,
+      modelId: "m-runner",
+    });
+    expect(updated).toMatchObject({
+      content: "测试通过",
+      chainDone: true,
+      inputTokens: 11,
+      outputTokens: 22,
+      cost: 0.03,
+      modelId: "m-runner",
+    });
+
+    expect(await db.messages.updateChainMessage("missing-message", { content: "x" })).toBeNull();
+  });
+
   it("orchestration 列存在且读写 JSON 往返", async () => {
     const c = await db.conversations.create({ title: "c-orch", projectId: null });
     // 初始为空
@@ -203,6 +265,21 @@ describe("usageEvents", () => {
     });
     const list = await db.usageEvents.list();
     expect(list.find((x) => x.id === id)?.roleKind).toBe("stage");
+  });
+
+  it("阶段 F3：conversationId 能落库，账单可追到具体会话", async () => {
+    const conv = await db.conversations.create({ title: "usage-conv", projectId: null });
+    const id = await db.usageEvents.create({
+      conversationId: conv.id,
+      modelId: "mConv",
+      role: "main_chat",
+      roleKind: "leader",
+      inputTokens: 10,
+      outputTokens: 20,
+      cost: 0.01,
+    });
+    const list = await db.usageEvents.list();
+    expect(list.find((x) => x.id === id)?.conversationId).toBe(conv.id);
   });
 });
 

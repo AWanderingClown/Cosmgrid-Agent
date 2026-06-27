@@ -31,7 +31,7 @@ const zhCNResources = stripDefault(zhCNModule as unknown as Record<string, unkno
 const enUSResources = stripDefault(enUSModule as unknown as Record<string, unknown>);
 
 // 用 createInstance 创建独立实例，不用 i18next 默认单例
-export const i18n = i18next.createInstance();
+const i18n = i18next.createInstance();
 
 export const SUPPORTED_LANGUAGES = ["zh-CN", "en-US"] as const;
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
@@ -96,5 +96,3 @@ export async function initI18n(): Promise<void> {
     JSON.stringify(i18n.t("templates.title")),
   );
 }
-
-export default i18n;

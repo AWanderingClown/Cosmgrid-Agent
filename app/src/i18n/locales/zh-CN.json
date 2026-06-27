@@ -168,7 +168,7 @@
         "architect": "架构评审",
         "frontend": "前端工程师",
         "backend": "后端工程师",
-        "runner": "Runner",
+        "runner": "执行者",
         "tester": "测试工程师",
         "reviewer": "审查工程师",
         "security": "安全工程师"
@@ -436,7 +436,7 @@
   },
   "tokenPlans": {
     "sectionLabel": "实时监控中",
-    "title": "用量资产管理",
+    "title": "用量监控",
     "desc": "集中监控不同供应商的 API 额度消耗，系统将根据您的计划自动触发告警与模型降级策略。",
     "createButton": "新建用量计划",
     "emptyNoProvider": {

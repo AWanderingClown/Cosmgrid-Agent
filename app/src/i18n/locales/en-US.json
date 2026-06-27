@@ -436,7 +436,7 @@
   },
   "tokenPlans": {
     "sectionLabel": "Real-time Monitoring",
-    "title": "Usage Plans",
+    "title": "Usage Monitoring",
     "desc": "Centrally monitor API quota usage across providers. The system will auto-trigger alerts and model fallback strategies based on your plans.",
     "createButton": "New Usage Plan",
     "emptyNoProvider": {

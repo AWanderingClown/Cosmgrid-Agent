@@ -17,9 +17,6 @@ import { bashTool } from "./bash-tool";
 
 export * from "./types";
 export { ToolRegistry } from "./registry";
-export { executeTool } from "./executor";
-export { setFsAdapter, getFsAdapter, type FsAdapter } from "./fs-adapter";
-export { setShellAdapter, getShellAdapter, type ShellAdapter } from "./shell-adapter";
 
 /**
  * 工具集。默认只含只读工具（read/glob/grep/git_read）。

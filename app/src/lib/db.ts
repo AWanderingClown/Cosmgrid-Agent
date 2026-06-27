@@ -250,6 +250,11 @@ export async function initSchema(): Promise<void> {
   `);
   // 迁移：消息附件（拖拽图片/文件，存 JSON）。旧库靠幂等 ALTER 补上。
   await addColumnIfMissing(db, "messages", "attachments", "TEXT");
+  // 迁移：角色接力消息元数据。chain 每跳产出必须随会话恢复，不能只存在 React 内存里。
+  await addColumnIfMissing(db, "messages", "actor_role", "TEXT");
+  await addColumnIfMissing(db, "messages", "chain_step_index", "INTEGER");
+  await addColumnIfMissing(db, "messages", "chain_step_total", "INTEGER");
+  await addColumnIfMissing(db, "messages", "chain_done", "INTEGER");
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS checkpoints (
@@ -315,6 +320,7 @@ export async function initSchema(): Promise<void> {
   // - 聚合默认不过滤 NULL（review F1-1：leader 占比 80%+，NULL 是真实数据）
   // - NOT NULL 约束由 TypeScript 层保障（roleKind: RoleId | 'stage' | null）
   await addColumnIfMissing(db, "usage_events", "role_kind", "TEXT");
+  await addColumnIfMissing(db, "usage_events", "conversation_id", "TEXT");
 
   // 索引：① setOutcomeForLatest 按 model_id + outcome IS NULL 取最近一条（隐式反馈热路径）；
   //        ② usageEvents.list 按 created_at 过滤/排序（统计 + SmartRouter 数据源）；
@@ -929,6 +935,10 @@ export interface MessageRow {
   output_tokens: number;
   cost: number;
   attachments: string | null;
+  actor_role: string | null;
+  chain_step_index: number | null;
+  chain_step_total: number | null;
+  chain_done: number | null;
   created_at: string;
 }
 
@@ -942,7 +952,30 @@ export interface DbMessage {
   outputTokens: number;
   cost: number;
   attachments?: string | null;
+  actorRole?: string | null;
+  chainStepIndex?: number | null;
+  chainStepTotal?: number | null;
+  chainDone?: boolean | null;
   createdAt: string;
+}
+
+function mapMessageRow(r: MessageRow): DbMessage {
+  return {
+    id: r.id,
+    conversationId: r.conversation_id,
+    role: r.role,
+    content: r.content,
+    modelId: r.model_id,
+    inputTokens: r.input_tokens,
+    outputTokens: r.output_tokens,
+    cost: r.cost,
+    attachments: r.attachments,
+    actorRole: r.actor_role,
+    chainStepIndex: r.chain_step_index,
+    chainStepTotal: r.chain_step_total,
+    chainDone: r.chain_done === null ? null : r.chain_done === 1,
+    createdAt: r.created_at,
+  };
 }
 
 export const conversations = {
@@ -1048,18 +1081,7 @@ export const messages = {
       "SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
       [conversationId]
     );
-    return rows.map((r) => ({
-      id: r.id,
-      conversationId: r.conversation_id,
-      role: r.role,
-      content: r.content,
-      modelId: r.model_id,
-      inputTokens: r.input_tokens,
-      outputTokens: r.output_tokens,
-      cost: r.cost,
-      attachments: r.attachments,
-      createdAt: r.created_at,
-    }));
+    return rows.map(mapMessageRow);
   },
 
   async create(input: {
@@ -1071,14 +1093,19 @@ export const messages = {
     outputTokens?: number;
     cost?: number;
     attachments?: string | null;
+    actorRole?: string | null;
+    chainStepIndex?: number | null;
+    chainStepTotal?: number | null;
+    chainDone?: boolean | null;
   }): Promise<DbMessage> {
     const db = await getDb();
     const id = newId();
     const ts = now();
     await db.execute(
       `INSERT INTO messages
-        (id, conversation_id, role, content, model_id, input_tokens, output_tokens, cost, attachments, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        (id, conversation_id, role, content, model_id, input_tokens, output_tokens, cost, attachments,
+         actor_role, chain_step_index, chain_step_total, chain_done, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [
         id,
         input.conversationId,
@@ -1089,12 +1116,43 @@ export const messages = {
         input.outputTokens ?? 0,
         input.cost ?? 0,
         input.attachments ?? null,
+        input.actorRole ?? null,
+        input.chainStepIndex ?? null,
+        input.chainStepTotal ?? null,
+        input.chainDone === undefined || input.chainDone === null ? null : boolToInt(input.chainDone),
         ts,
       ]
     );
     const rows = await db.select<MessageRow[]>("SELECT * FROM messages WHERE id = $1", [id]);
-    const r = rows[0]!;
-    return { id: r.id, conversationId: r.conversation_id, role: r.role, content: r.content, modelId: r.model_id, inputTokens: r.input_tokens, outputTokens: r.output_tokens, cost: r.cost, attachments: r.attachments, createdAt: r.created_at };
+    return mapMessageRow(rows[0]!);
+  },
+
+  async updateChainMessage(id: string, input: {
+    content?: string;
+    chainDone?: boolean | null;
+    inputTokens?: number;
+    outputTokens?: number;
+    cost?: number;
+    modelId?: string | null;
+  }): Promise<DbMessage | null> {
+    const db = await getDb();
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    let i = 1;
+    if (input.content !== undefined) { sets.push(`content = $${i++}`); vals.push(input.content); }
+    if (input.chainDone !== undefined) { sets.push(`chain_done = $${i++}`); vals.push(input.chainDone === null ? null : boolToInt(input.chainDone)); }
+    if (input.inputTokens !== undefined) { sets.push(`input_tokens = $${i++}`); vals.push(input.inputTokens); }
+    if (input.outputTokens !== undefined) { sets.push(`output_tokens = $${i++}`); vals.push(input.outputTokens); }
+    if (input.cost !== undefined) { sets.push(`cost = $${i++}`); vals.push(input.cost); }
+    if (input.modelId !== undefined) { sets.push(`model_id = $${i++}`); vals.push(input.modelId); }
+    if (sets.length === 0) {
+      const rows = await db.select<MessageRow[]>("SELECT * FROM messages WHERE id = $1", [id]);
+      return rows[0] ? mapMessageRow(rows[0]) : null;
+    }
+    vals.push(id);
+    await db.execute(`UPDATE messages SET ${sets.join(", ")} WHERE id = $${i}`, vals);
+    const rows = await db.select<MessageRow[]>("SELECT * FROM messages WHERE id = $1", [id]);
+    return rows[0] ? mapMessageRow(rows[0]) : null;
   },
 };
 
@@ -1461,7 +1519,7 @@ export const projects = {
       [id, input.name, input.description ?? null, input.templateId ?? null, input.workspacePath ?? null, ts, ts]
     );
     // 模板里"角色→模型"的分配已经在模板创建时定下了，新建项目时直接照着模板的角色清单
-    // 生成对应的阶段（否则阶段时间线永远是空的，对话/检查点/接力包都无从谈起）
+    // 生成对应的阶段（否则阶段时间线永远是空的，对话/检查点/交接包都无从谈起）
     if (input.templateId) {
       const roles = await projectTemplateRoles.listByTemplate(input.templateId);
       for (const role of roles.filter((r) => r.enabled)) {
@@ -1892,7 +1950,7 @@ export const checkpoints = {
   },
 };
 
-// ============ handoffPackets CRUD（4.10：接力包 = 检查点字段拼成的 markdown）============
+// ============ handoffPackets CRUD（4.10：交接包 = 检查点字段拼成的 markdown）============
 
 interface HandoffPacketRow {
   id: string;
@@ -1939,7 +1997,7 @@ export interface CreateHandoffPacketInput {
 }
 
 /**
- * 把 Checkpoint 字段拼成给下一个角色看的 markdown 接力包
+ * 把 Checkpoint 字段拼成给下一个角色看的 markdown 交接包
  * v0.7 i18n 化：接受 t 函数，让 markdown 标签跟用户当前语言走
  * （已存的旧 handoff 内容不会被重新翻译——只在新建时用新语言）
  */
@@ -2049,6 +2107,7 @@ export const usageEvents = {
     apiCredentialId?: string | null;
     modelId?: string | null;
     projectId?: string | null;
+    conversationId?: string | null;
     role?: string | null;
     /** 阶段 F1：actor 维度（leader/architect/frontend/.../stage/null） */
     roleKind?: string | null;
@@ -2065,16 +2124,17 @@ export const usageEvents = {
     const ts = now();
     await db.execute(
       `INSERT INTO usage_events
-        (id, provider_id, api_credential_id, model_id, project_id, role, role_kind,
+        (id, provider_id, api_credential_id, model_id, project_id, conversation_id, role, role_kind,
          input_tokens, output_tokens, cache_creation_tokens, cache_hit_tokens,
          cost, success, interrupted, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [
         id,
         input.providerId ?? null,
         input.apiCredentialId ?? null,
         input.modelId ?? null,
         input.projectId ?? null,
+        input.conversationId ?? null,
         input.role ?? null,
         // 阶段 F1：role_kind 透传（undefined → NULL；review F1-1 聚合不过滤 NULL）
         input.roleKind ?? null,
@@ -2115,15 +2175,17 @@ export const usageEvents = {
     const db = await getDb();
     const rows = sinceTs
       ? await db.select<any[]>(
-          "SELECT id, model_id, role, role_kind, input_tokens, output_tokens, cost, success, created_at FROM usage_events WHERE created_at >= $1 ORDER BY created_at ASC",
+          "SELECT id, model_id, project_id, conversation_id, role, role_kind, input_tokens, output_tokens, cost, success, created_at FROM usage_events WHERE created_at >= $1 ORDER BY created_at ASC",
           [sinceTs],
         )
       : await db.select<any[]>(
-          "SELECT id, model_id, role, role_kind, input_tokens, output_tokens, cost, success, created_at FROM usage_events ORDER BY created_at ASC",
+          "SELECT id, model_id, project_id, conversation_id, role, role_kind, input_tokens, output_tokens, cost, success, created_at FROM usage_events ORDER BY created_at ASC",
         );
     return rows.map((r) => ({
       id: r.id,
       modelId: r.model_id,
+      projectId: r.project_id ?? null,
+      conversationId: r.conversation_id ?? null,
       role: r.role,
       // 阶段 F1：role_kind 透传到聚合（NULL → 未分类组）
       roleKind: r.role_kind ?? null,
@@ -2139,6 +2201,8 @@ export const usageEvents = {
 export interface UsageEventRow {
   id: string;
   modelId: string | null;
+  projectId: string | null;
+  conversationId: string | null;
   role: string | null;
   /** 阶段 F1：actor 维度（leader/architect/frontend/.../stage/null） */
   roleKind: string | null;

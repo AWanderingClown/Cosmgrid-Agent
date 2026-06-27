@@ -11,14 +11,12 @@ import { cn } from "@/lib/utils";
 import { parseThinking } from "@/lib/parse-thinking";
 import { deriveArtifacts, type WorkArtifact } from "@/lib/work-artifacts";
 import { WorkArtifacts } from "@/components/work-panel/WorkArtifacts";
-import { HandoffBanner } from "@/components/chat/HandoffBanner";
-import { HandoffStepCard } from "@/components/chat/HandoffStepCard";
 import { ChainProgressBar } from "@/components/chat/ChainProgressBar";
 import { ensureModelLimitsLoaded } from "@/lib/llm/model-limits";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
 import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, toolExecutions, getRoleBindingsForConversation, type Conversation, type DbMessage } from "@/lib/db";
-import { createDefaultToolRegistry, buildAiSdkTools, type ToolConfirmRequest } from "@/lib/llm/tools";
-import { buildWorkspacePreamble } from "@/lib/llm/workspace-context";
+import { type ToolConfirmRequest } from "@/lib/llm/tools";
+import { prepareWorkspaceToolRuntime, type WorkspaceToolRuntime } from "@/lib/llm/workspace-tool-runtime";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getApiKey } from "@/lib/keystore";
 import { streamWithFallback, toModelEndpoint, type ModelEndpoint, type StreamUsage } from "@/lib/llm/chat-fallback";
@@ -35,9 +33,6 @@ import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble } from
 import { evaluateHarness, isClean, buildCorrectionPrompt, detectIntentNoToolCall, buildIntentNudgePrompt, type HarnessVerdict } from "@/lib/llm/harness/feedback";
 import { runChain as runChainImpl } from "@/lib/llm/chain-runner";
 import { type RoleId } from "@/lib/llm/orchestrator";
-import { runHandoffBridge, buildHandoffToolsForAgent, deriveExpertAgentMap } from "@/lib/llm/orchestration/handoff-bridge";
-import { runExpertAgentStep } from "@/lib/llm/orchestration/handoff-runner";
-import { type ExpertAgent } from "@/lib/llm/orchestration/handoff";
 import type { ReadRecord } from "@/lib/llm/harness/verify-claims";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
 import { ingestFile, ingestPath, toUserCoreMessage, parseAttachments, type Attachment } from "@/lib/llm/attachments";
@@ -54,6 +49,8 @@ import {
   parseOrchestration,
   computeChain,
   withChainPlan,
+  ROLE_IDS,
+  ROLE_LABELS,
   type OrchestrationState,
   type OrchestrationTurn,
   type OrchestrationChange,
@@ -127,6 +124,7 @@ function parseReceipt(content: string): ReceiptContent | null {
  *  role="note" 是编排者折叠回执，映射成 kind:"receipt"（坏数据丢弃）。 */
 function dbMessagesToChat(hist: DbMessage[], models: ModelListItem[]): ChatMessage[] {
   const out: ChatMessage[] = [];
+  const validRoles = new Set<string>(ROLE_IDS);
   for (const m of hist) {
     if (m.role === "note") {
       const receipt = parseReceipt(m.content);
@@ -142,6 +140,9 @@ function dbMessagesToChat(hist: DbMessage[], models: ModelListItem[]): ChatMessa
       modelLabel: (m.modelId ? models.find((x) => x.id === m.modelId)?.displayName : undefined) ?? undefined,
       usage: m.outputTokens > 0 ? { inputTokens: m.inputTokens, outputTokens: m.outputTokens } : undefined,
       attachments: parseAttachments(m.attachments),
+      roleId: m.actorRole && validRoles.has(m.actorRole) ? (m.actorRole as RoleId) : undefined,
+      chainStep: m.chainStepIndex && m.chainStepTotal ? { index: m.chainStepIndex, total: m.chainStepTotal } : undefined,
+      chainDone: m.chainDone ?? undefined,
     });
   }
   return out;
@@ -207,6 +208,9 @@ const MessageItem = memo(function MessageItem({
   elapsedLabel,
   attachments,
   harness,
+  roleId,
+  chainStep,
+  chainDone,
 }: {
   role: "user" | "assistant";
   text: string;
@@ -217,6 +221,9 @@ const MessageItem = memo(function MessageItem({
   attachments?: Attachment[];
   /** Harness 校验警告：模型引用了文件但没真读 / 吐了伪工具调用文本 */
   harness?: HarnessWarning;
+  roleId?: RoleId;
+  chainStep?: { index: number; total: number };
+  chainDone?: boolean;
 }) {
   const { t } = useTranslation();
   const isAssistant = role === "assistant";
@@ -256,8 +263,13 @@ const MessageItem = memo(function MessageItem({
               // 助手名要保留大小写 "CosmGrid Ai"，不强制大写；用户标签是中文不受影响
               !isAssistant && "uppercase",
             )}>
-              {isAssistant ? t("chat.assistantLabel") : t("chat.userLabel")}
+              {isAssistant && roleId ? ROLE_LABELS[roleId] : isAssistant ? t("chat.assistantLabel") : t("chat.userLabel")}
             </span>
+            {isAssistant && roleId && chainStep && (
+              <span className="text-[9px] font-mono rounded-full border border-primary/15 bg-primary/10 text-primary/80 px-2 py-0.5">
+                {chainDone ? "✓" : "▶"} {chainStep.index}/{chainStep.total}
+              </span>
+            )}
           </div>
           {isAssistant && harness && (harness.unverifiedPaths.length > 0 || harness.pseudoToolNames.length > 0) && (
             <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
@@ -580,10 +592,6 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   const confirmResolverRef = useRef<((ok: boolean) => void) | null>(null);
   // 编排者节点状态（后台滚动更新）。用 ref 镜像最新值，供 handleSend 闭包同步读取（避免 stale state）。
   const [orchestration, setOrchestration] = useState<OrchestrationState | null>(null);
-  // 阶段4 Handoff：main chat 完成后模型调 handoff 时的路径（length>1 表示发生了 handoff）
-  const [handoffInfo, setHandoffInfo] = useState<{ path: string[]; truncated?: boolean } | null>(null);
-  // T22-2C：每跳 agent 的流式输出独立成消息（id 唯一 + content + done 标记）
-  const [handoffSteps, setHandoffSteps] = useState<{ id: string; agentId: string; content: string; done: boolean }[]>([]);
   const orchestrationRef = useRef<OrchestrationState | null>(null);
   // 阶段 E2b：chain 接力的运行时状态（驱动进度条 + 中止按钮 + 角色消息渲染）
   // 单一来源：chainPlan 来自 orchestration.chainPlan（E1），executedRoles/skippedRoles/abortedRole 来自 E2a runChain 回调
@@ -1072,49 +1080,21 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     // CLI 模型（claude/codex spawn）自带工具，不挂；构造失败则退化为纯聊天，不阻断。
     // 拖入文件夹时，本次工具调用直接用 folder 路径（不靠异步 setWorkspacePath 更新）
     const effectiveWorkspace = folderAtt?.path ?? workspacePath;
-    let tools: ReturnType<typeof buildAiSdkTools> | undefined;
+    let tools: WorkspaceToolRuntime["tools"];
     let workspacePreamble: string | null = null;
 
-    // 阶段4 Handoff：派生 leaderAgent + handoff tools（注入 main chat tools，让模型能调 handoff_to_X）
-    // 简化版：selectedModel 当 leader 兜底，OrchestrationState 当前不含 roleBindings 字段
-    const handoffLeaderAgent: ExpertAgent | null = (() => {
-      if (!selectedModelId) return null;
-      // 把 ModelListItem 适配成 HandoffBridgeModelRef（displayName null fallback 到 name）
-      const adaptedModels = availableModels.map((m) => ({
-        id: m.id,
-        displayName: m.displayName ?? m.name,
-      }));
-      const map = deriveExpertAgentMap({}, selectedModelId, adaptedModels);
-      return map.get("leader") ?? null;
-    })();
     if (effectiveWorkspace && !primaryIsCli) {
       const includeWrite = permissionMode !== "read";
-      // 工具构建（同步）——独立 try。绝不能被 preamble 失败连坐清成 undefined：
-      // 旧写法把两者塞一个 try，preamble 读自述一抛错就把已建好的 tools 一起清空，
-      // 模型这一轮就没工具可调，只能嘴上说"让我用 write"然后 stop。
-      try {
-        tools = buildAiSdkTools(createDefaultToolRegistry({ includeWrite }), {
-          workspacePath: effectiveWorkspace,
-          conversationId: conversationId ?? undefined,
-          // auto 档：写操作不弹窗直接放行；confirm 档：每个写操作走 requestConfirm 等用户按确认。
-          confirm: permissionMode === "auto" ? async () => true : requestConfirm,
-        });
-        // 阶段4 Handoff：合并 handoff 工具（leader 能调 handoff_to_X 触发多 AI 协作）
-        if (handoffLeaderAgent) {
-          tools = { ...tools, ...buildHandoffToolsForAgent(handoffLeaderAgent) };
-        }
-      } catch (err) {
-        // 只有工具构建真失败才清空（极罕见）——preamble 失败不再连坐这里
-        console.error("[tools] 构建工具失败:", err);
-        tools = undefined;
-      }
-      // 读项目自述（异步）——独立 try，失败只丢 preamble，tools 照常带
-      try {
-        workspacePreamble = await buildWorkspacePreamble(effectiveWorkspace);
-      } catch (err) {
-        console.error("[tools] 读项目自述失败（不影响工具）:", err);
-        workspacePreamble = null;
-      }
+      const runtime = await prepareWorkspaceToolRuntime({
+        workspacePath: effectiveWorkspace,
+        includeWrite,
+        conversationId: conversationId ?? undefined,
+        // auto 档：写操作不弹窗直接放行；confirm 档：每个写操作走 requestConfirm 等用户按确认。
+        confirm: permissionMode === "auto" ? async () => true : requestConfirm,
+        includePreamble: true,
+      });
+      tools = runtime.tools;
+      workspacePreamble = runtime.workspacePreamble;
     }
 
     // 给模型塞一条「当前时间」system 小抄（用户界面不显示）——否则模型答不出"今天几号"，只能瞎猜。
@@ -1199,64 +1179,11 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
                 prev.map((m) => (m.id === assistantId ? { ...m, usage: lastUsage, modelLabel: usedModel.displayLabel ?? usedModel.modelName } : m)),
               );
             },
-            // 阶段4 Handoff：streamText 跑完后拿到所有 toolCalls，检查是否调了 handoff_to_X
-            // 失败静默（runHandoffBridge 内部 try/catch + error 填 result），绝不 throw 主对话
-            onFinalToolCalls: (toolCalls) => {
-              if (!handoffLeaderAgent || controller.signal.aborted) return;
-              const agentsMap = new Map<string, ExpertAgent>([[handoffLeaderAgent.id, handoffLeaderAgent]]);
-              void runHandoffBridge({
-                startRoleId: "leader",
-                messages: messages as { role: "user" | "assistant" | "system"; content: string }[],
-                agents: agentsMap,
-                mainChatToolCalls: toolCalls,
-                runStep: async (agent, msgs) => {
-                  // 完整版 runStep：重调 streamWithFallback 跑目标 agent
-                  // 失败抛错 → runHandoffBridge 内部 try/catch → result.error 填
-                  return await runExpertAgentStep(
-                    agent,
-                    msgs as { role: "user" | "assistant" | "system"; content: string }[],
-                    {
-                      availableModels,
-                      credentials,
-                      getApiKey,
-                      signal: controller.signal,
-                      onDelta: (delta) => {
-                        // 兼容：仍然累积到 main chat 的 fullContent（HandoffBanner 上下文）
-                        fullContent += delta;
-                      },
-                      // T22-2C：每跳 agent 流式独立消息
-                      onStepStart: (agentId) => {
-                        const stepId = `handoff-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-                        setHandoffSteps((prev) => [...prev, { id: stepId, agentId, content: "", done: false }]);
-                      },
-                      onStepDelta: (agentId, delta) => {
-                        setHandoffSteps((prev) =>
-                          prev.map((s) => (s.agentId === agentId && !s.done ? { ...s, content: s.content + delta } : s)),
-                        );
-                      },
-                      onStepDone: (agentId) => {
-                        setHandoffSteps((prev) => prev.map((s) => (s.agentId === agentId ? { ...s, done: true } : s)));
-                      },
-                      onSwitched: (label) => {
-                        setSwitchNotice(t("chat.switchedTo", { name: label }));
-                      },
-                    },
-                  );
-                },
-                signal: controller.signal,
-              }).then((result) => {
-                if (result && result.handoffPath.length > 1) {
-                  setHandoffInfo({ path: result.handoffPath, truncated: result.truncated });
-                }
-              }).catch((err) => {
-                console.error("[handoff] bridge failed:", err);
-              });
-            },
           },
           // role = 这条消息的难度桶，落 UsageEvent 供 v0.9 SmartRouter 按 taskType 滚动统计
           // actorRole = 阶段 F1：哪个 actor 跑的（leader 主对话 → 'leader'，chain → role: RoleId，stage → 'stage'）
           // tools：绑了工作文件夹才传，开启多步工具循环（maxToolSteps 防死循环）
-          { signal: controller.signal, role: taskRole, actorRole, ...(tools ? { tools, maxToolSteps: 12 } : {}) },
+          { signal: controller.signal, conversationId: convId ?? undefined, role: taskRole, actorRole, ...(tools ? { tools, maxToolSteps: 12 } : {}) },
         );
         lastResultModelId = result.usedModelId;
         if (controller.signal.aborted) break;
@@ -1448,7 +1375,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     chain: RoleId[];
     roleBindings: Map<RoleId, string>;
     controller: AbortController;
-    tools: ReturnType<typeof buildAiSdkTools> | undefined;
+    tools: WorkspaceToolRuntime["tools"];
     conversationId: string;
     userTask: string;
     messages: ChatMessage[];
@@ -1530,6 +1457,15 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
             const msgId = roleMsgIds[role];
             // E2b：同步 chainExecutedRoles（驱动进度条 done 状态）
             setChainExecutedRoles((prev) => prev.includes(role) ? prev : [...prev, role]);
+            void dbMessages.create({
+              conversationId: args.conversationId,
+              role: "assistant",
+              content,
+              actorRole: role,
+              chainStepIndex: idx + 1,
+              chainStepTotal: total,
+              chainDone: true,
+            }).catch(() => {});
             if (!msgId) return;
             // E2b：标 chainDone=true（渲染层用 ✓）+ content 存原始产出（不带 ✓/角色前缀）
             setMessages((prev) =>
@@ -1545,7 +1481,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       //   - stoppedAt === null → 插"完成"消息
       //   - stoppedAt !== null → 插"中止"消息（用户中止或某跳出错）
       onUsage: (_usage, _model, _fr) => {
-        // E2a/E2b 不做链内 usage 落库 UI，留 F 做 StatsPage
+        // 链内 usage 由每跳 streamWithFallback 统一落库，StatsPage 按 roleKind 聚合。
       },
         },
       });
@@ -1576,9 +1512,16 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       if (result.skippedRoles.length > 0) {
         setChainSkippedRoles(result.skippedRoles);
       }
+      try {
+        setArtifacts(deriveArtifacts(await toolExecutions.listByConversation(args.conversationId)));
+      } catch {
+        // 工件刷新失败不影响已完成的接力消息
+      }
     } catch (err) {
       // 接力失败静默（不阻塞主对话）
       console.error("[chain] 接力执行失败:", err);
+    } finally {
+      setChainRunning(false);
     }
   }
 
@@ -1956,17 +1899,12 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
                   elapsedLabel={streamingThis ? formatElapsed(streamElapsedMs) : undefined}
                   attachments={m.attachments}
                   harness={m.harness}
+                  roleId={m.roleId}
+                  chainStep={m.chainStep}
+                  chainDone={m.chainDone}
                 />
               );
             })}
-            {/* T22-2C：handoff 每跳 agent 流式输出独立消息（跟在 main chat 消息后） */}
-            {handoffSteps.map((s) => (
-              <div key={s.id} className="flex gap-4 px-6 py-2 max-w-4xl mx-auto w-full">
-                <div className="flex-1 min-w-0">
-                  <HandoffStepCard agentId={s.agentId} content={s.content} done={s.done} />
-                </div>
-              </div>
-            ))}
             {/* 排队中的消息：模型回复时用户继续发的句子，淡显 + "排队中"标签，让用户看到没丢、在等着处理 */}
             {isStreaming && pendingQueue.map((q, i) => (
               <div key={`pending-${i}`} className="flex gap-4 px-6 py-4 opacity-50">
@@ -2216,10 +2154,6 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
               )}
             </div>
             {/* 编排者节点地图：已规划节点 + 当前高亮 + 每节点绑定模型（看得见、可接管） */}
-            {/* 阶段4 Handoff：main chat 完成后模型调 handoff 时显示路径横幅 */}
-            {handoffInfo && (
-              <HandoffBanner path={handoffInfo.path} truncated={handoffInfo.truncated} />
-            )}
             {/* 产出物（阶段B）：tool_executions 派生的文件/终端工件，面板主角，模型名不出现 */}
             <WorkArtifacts artifacts={artifacts} />
             {/* 阶段 E2b：watch 接力进度条（单一来源：chainPlan + executedRoles + skippedRoles + abortedRole 派生）*/}
@@ -2233,7 +2167,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
                 onStop={() => abortRef.current?.abort()}
               />
             )}
-            {/* 阶段 E1：watch 接力链（只展示顺序，零执行；E2 才真执行） */}
+            {/* watch 接力链：展示本轮会追加执行的角色顺序 */}
             {orchestration?.chainPlan && orchestration.chainPlan.length > 0 && (
               <div className="glass rounded-2xl p-4 border border-white/5 space-y-2">
                 <div className="text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50">

@@ -138,23 +138,44 @@ export const ROLE_WATCH_GRAPH: Readonly<Record<RoleId, readonly RoleId[]>> = {
 export const MAX_CHAIN_LENGTH = 3;
 
 /**
- * 阶段 E1 纯函数：按 plan.nodes 顺序取前 MAX_CHAIN_LENGTH 个非 leader 角色 → 接力链。
+ * 阶段 E1 纯函数：按 watch 依赖把 plan.nodes 里的角色排成接力链。
  *
  * 设计要点：
- *  - **零 LLM 调用**：plan 来自 C 阶段的 planNodes（已跑一次），这里只切片 + 过滤。
- *  - plan.nodes 是 LLM 排的 topological 顺序，直接复用（不重排，避免 LLM 翻案）。
+ *  - **零 LLM 调用**：plan 来自 C 阶段的 planNodes（已跑一次），这里只做确定性排序。
+ *  - plan.nodes 提供同级角色的稳定顺序；watch 图负责纠正明显违反依赖的先后关系。
  *  - leader 过滤掉（leader 是对话主，不算被接力的角色）。
  *  - 封顶 MAX_CHAIN_LENGTH：硬上限防失控（token 爆炸、用户重点核①③）。
- *  - 看 watch 图**做 sanity 检查**：如果 plan.nodes 顺序违反 watch 依赖（A 在 B 前但 A.watch 含 B），记录为警告但不修复（plan 来自 LLM，让 LLM 负责——E2 真执行时再做软修复）。
  *
  * @returns 接力链（不含 leader），最长 MAX_CHAIN_LENGTH；空数组 = 不接力
  */
 export function computeChain(plan: OrchestrationPlan): RoleId[] {
-  const rolesFromPlan = plan.nodes.map((n) => n.role);
-  // 过滤 leader（leader 是起点，不在被接力链里）
-  const withoutLeader = rolesFromPlan.filter((r) => r !== "leader");
-  // 封顶 MAX_CHAIN_LENGTH
-  return withoutLeader.slice(0, MAX_CHAIN_LENGTH);
+  const roles = plan.nodes
+    .map((n) => n.role)
+    .filter((r, idx, arr) => r !== "leader" && arr.indexOf(r) === idx);
+  const roleSet = new Set<RoleId>(roles);
+  const indegree = new Map<RoleId, number>(roles.map((r) => [r, 0]));
+  const dependents = new Map<RoleId, RoleId[]>(roles.map((r) => [r, []]));
+
+  for (const role of roles) {
+    const deps = ROLE_WATCH_GRAPH[role].filter((dep) => roleSet.has(dep));
+    indegree.set(role, deps.length);
+    for (const dep of deps) dependents.get(dep)?.push(role);
+  }
+
+  const ready = roles.filter((role) => (indegree.get(role) ?? 0) === 0);
+  const ordered: RoleId[] = [];
+  while (ready.length > 0) {
+    const role = ready.shift()!;
+    ordered.push(role);
+    for (const next of dependents.get(role) ?? []) {
+      const remaining = (indegree.get(next) ?? 0) - 1;
+      indegree.set(next, remaining);
+      if (remaining === 0) ready.push(next);
+    }
+  }
+
+  const unresolved = roles.filter((role) => !ordered.includes(role));
+  return [...ordered, ...unresolved].slice(0, MAX_CHAIN_LENGTH);
 }
 
 /**
@@ -263,7 +284,7 @@ export const ROLE_LABELS: Record<RoleId, string> = {
   architect: "方案 / 架构评审",
   frontend: "前端工程师",
   backend: "后端工程师",
-  runner: "代码执行 Runner（build / lint / 起服务）",
+  runner: "代码执行者（build / lint / 起服务）",
   tester: "测试工程师",
   reviewer: "审查工程师（代码质量 / 可维护性）",
   security: "安全工程师（密钥 / 注入 / 支付安全）",

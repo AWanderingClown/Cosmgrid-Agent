@@ -4,7 +4,7 @@ import ignore, { type Ignore } from "ignore";
 import { getFsAdapter, type FsAdapter } from "./fs-adapter";
 
 /** 默认忽略的目录（不下钻，省时省内存）。即使没有 .gitignore 也兜底剪掉这些重目录。 */
-export const DEFAULT_IGNORE_DIRS = new Set([
+const DEFAULT_IGNORE_DIRS = new Set([
   "node_modules", ".git", "dist", "build", ".next", "target", ".venv", "__pycache__",
 ]);
 

@@ -11,7 +11,7 @@ export interface GitReadAdapter {
   run(workspace: string, args: string[]): Promise<ShellResult>;
 }
 
-export const tauriGitRead: GitReadAdapter = {
+const tauriGitRead: GitReadAdapter = {
   run: (workspace, args) => invoke<ShellResult>("git_read", { workspace, args }),
 };
 

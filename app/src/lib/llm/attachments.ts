@@ -6,7 +6,7 @@
 // - 图片走多模态 image part（base64 dataURL），文本文件读内容贴进 prompt，其它不支持
 
 /** 图片附件：存 base64 dataURL，发多模态 part 直接用 */
-export interface ImageAttachment {
+interface ImageAttachment {
   id: string;
   kind: "image";
   name: string;
@@ -15,7 +15,7 @@ export interface ImageAttachment {
 }
 
 /** 文本文件附件：正文已读出（≤20KB）；tooLarge 时不读、不贴正文只提示 */
-export interface TextFileAttachment {
+interface TextFileAttachment {
   id: string;
   kind: "text-file";
   name: string;
@@ -25,7 +25,7 @@ export interface TextFileAttachment {
   tooLarge?: boolean;
 }
 
-export interface FolderAttachment {
+interface FolderAttachment {
   id: string;
   kind: "folder";
   name: string;
@@ -35,8 +35,8 @@ export interface FolderAttachment {
 export type Attachment = ImageAttachment | TextFileAttachment | FolderAttachment;
 
 /** 大小阈值 */
-export const IMAGE_MAX_BYTES = 20 * 1024 * 1024; // 20MB（对齐多数模型 API 单图上限；图片 token 按分辨率算不按字节，base64 传输大但本地无碍）
-export const TEXT_FILE_MAX_BYTES = 200 * 1024; // 200KB（约 50k token，多数模型上下文够用；更大的文件提示放进工作区让 AI 用 read 工具读）
+const IMAGE_MAX_BYTES = 20 * 1024 * 1024; // 20MB（对齐多数模型 API 单图上限；图片 token 按分辨率算不按字节，base64 传输大但本地无碍）
+const TEXT_FILE_MAX_BYTES = 200 * 1024; // 200KB（约 50k token，多数模型上下文够用；更大的文件提示放进工作区让 AI 用 read 工具读）
 
 /** 可直接贴进 prompt 的文本类扩展名（小写，不含点） */
 const TEXT_EXTENSIONS = new Set([

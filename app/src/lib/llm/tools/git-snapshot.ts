@@ -11,14 +11,14 @@ export interface GitSnapshotAdapter {
   commitFile(workspace: string, absPath: string, message: string): Promise<boolean>;
 }
 
-export const tauriGitSnapshot: GitSnapshotAdapter = {
+const tauriGitSnapshot: GitSnapshotAdapter = {
   commitFile: (workspace, absPath, message) =>
     invoke<boolean>("git_commit_file", { workspace, relPath: absPath, message }),
 };
 
 let active: GitSnapshotAdapter = tauriGitSnapshot;
 
-export function getGitSnapshot(): GitSnapshotAdapter {
+function getGitSnapshot(): GitSnapshotAdapter {
   return active;
 }
 

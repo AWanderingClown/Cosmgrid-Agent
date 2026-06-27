@@ -18,7 +18,7 @@ const paramsSchema = z.object({
 type BashParams = z.infer<typeof paramsSchema>;
 
 /** stdout/stderr 各自截断上限 */
-export const BASH_OUTPUT_LIMIT = 5000;
+const BASH_OUTPUT_LIMIT = 5000;
 
 function clip(s: string): string {
   return s.length > BASH_OUTPUT_LIMIT ? s.slice(0, BASH_OUTPUT_LIMIT) + "\n…(截断)" : s;

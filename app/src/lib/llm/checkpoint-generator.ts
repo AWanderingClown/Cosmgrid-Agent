@@ -12,7 +12,7 @@ import { z } from "zod";
 import type { LanguageModel } from "./provider-factory";
 import { resolveMaxOutputTokens } from "./model-limits";
 
-export const checkpointDraftSchema = z.object({
+const checkpointDraftSchema = z.object({
   title: z.string().describe("检查点标题，简短概括这次交接的内容"),
   goal: z.string().describe("这个检查点要达成什么目标"),
   completedSummary: z.string().describe("到目前为止已经完成的工作总结"),

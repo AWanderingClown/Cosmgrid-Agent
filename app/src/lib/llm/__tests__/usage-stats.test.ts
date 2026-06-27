@@ -7,7 +7,7 @@ const NOW = new Date("2026-06-22T12:00:00.000Z");
 
 function ev(over: Partial<UsageEventRow> = {}): UsageEventRow {
   return {
-    id: "evt-default", modelId: "m-1", role: "standard", roleKind: null, inputTokens: 100, outputTokens: 50,
+    id: "evt-default", modelId: "m-1", projectId: null, conversationId: null, role: "standard", roleKind: null, inputTokens: 100, outputTokens: 50,
     cost: 0.01, success: true, createdAt: NOW.toISOString(), ...over,
   };
 }

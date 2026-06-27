@@ -18,10 +18,6 @@ interface ProviderRegistryEntry {
 
 const REGISTRY = new Map<string, ProviderRegistryEntry>();
 
-export function registerProvider(type: string, factory: LanguageModelFactory): void {
-  REGISTRY.set(type, { factory });
-}
-
 REGISTRY.set("anthropic", {
   factory: (modelName, apiKey, baseUrl) => {
     const provider = createAnthropic({ apiKey, ...(baseUrl && { baseURL: baseUrl }) });
@@ -114,8 +110,4 @@ export function getLanguageModel(
   const lm = entry.factory(modelName, apiKey, baseUrl);
   setCache(cacheKey, lm);
   return lm;
-}
-
-export function clearLanguageModelCache(): void {
-  languageModelCache.clear();
 }

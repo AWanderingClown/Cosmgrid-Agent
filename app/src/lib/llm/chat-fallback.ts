@@ -99,8 +99,7 @@ export interface StreamCallbacks {
    */
   onUsage?: (usage: StreamUsage, model: ModelEndpoint, finishReason: string, interrupted: boolean) => void;
   /**
-   * 阶段4 Handoff：streamText 全部 step 跑完后，把累积的所有 toolCalls 一次交给 caller。
-   * caller 用它判断模型是否调了 `handoff_to_X`（用于多 AI 协作接力）。
+   * streamText 全部 step 跑完后，把累积的所有 toolCalls 一次交给 caller。
    * 不传=noop，零侵入。Abort 中断时不调。
    */
   onFinalToolCalls?: (toolCalls: { toolName: string; input?: unknown }[]) => void;
@@ -272,7 +271,7 @@ export async function streamWithFallback(
           callbacks.onDelta(delta);
         }
 
-        // 阶段4 Handoff：把累积的 toolCalls 一次性交给 caller（不传=onFinalToolCalls 即 noop）
+        // 把累积的 toolCalls 一次性交给 caller（不传=onFinalToolCalls 即 noop）
         callbacks.onFinalToolCalls?.(
           stepToolCalls.map((tc) => ({ toolName: tc.toolName, input: tc.input })),
         );

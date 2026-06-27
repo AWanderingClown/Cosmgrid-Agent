@@ -123,7 +123,7 @@ export function buildChainMessages(
       "\n你有真实工具可用（read / write / edit / bash / glob / grep 等）。要操作时**直接调用工具**，不要只描述意图。",
     );
     sysLines.push(
-      "如果用户原始任务里没有明确要求你做的事（如架构师只出方案 / Runner 只跑 build），做你该做的部分就停手——接力链上下一个角色会继续。",
+      "如果用户原始任务里没有明确要求你做的事（如架构师只出方案 / 执行者只跑 build），做你该做的部分就停手——接力链上下一个角色会继续。",
     );
   } else {
     sysLines.push("\n本次你没有可用工具。如需文件操作，请直说让用户配合。");

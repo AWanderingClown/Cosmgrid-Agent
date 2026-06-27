@@ -15,8 +15,8 @@ import { checkPath } from "./path-safety";
 import { getGitReadAdapter } from "./git-read-adapter";
 
 /** log 默认条数上限（避免历史过长撑爆上下文） */
-export const GIT_LOG_DEFAULT_COUNT = 20;
-export const GIT_LOG_MAX_COUNT = 100;
+const GIT_LOG_DEFAULT_COUNT = 20;
+const GIT_LOG_MAX_COUNT = 100;
 /** 输出截断上限（diff 可能很长） */
 export const GIT_READ_OUTPUT_LIMIT = 8000;
 
