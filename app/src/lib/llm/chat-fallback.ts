@@ -25,6 +25,8 @@ import { recordUsageEvent, type RecordUsageParams } from "./usage-tracker";
 import { isCliProviderType, type CliMessage } from "./cli-protocol";
 import { streamViaCli } from "./cli-engine";
 import { classifyMessageComplexity } from "./message-router";
+import { detectDoomLoop, type StepToolCall } from "./harness/doom-loop";
+import { resolveMaxOutputTokens, ensureModelLimitsLoaded } from "./model-limits";
 import type { ChatMsg } from "./context-compressor";
 
 /** 从对话里取最后一条 user 消息推断难度桶（role 默认值）。兼容多模态 content（数组取 text part）。 */
@@ -65,6 +67,10 @@ export interface ModelEndpoint {
 export interface StreamUsage {
   inputTokens: number;
   outputTokens: number;
+  /** 阶段 H：本轮真实工具调用次数（来自 stepToolCalls.length）。
+   *  - 0 + finishReason="stop" + 输出含动手意图 → Harness nudge 重答触发条件之一
+   *  - 加这个字段让 ChatPage 在 onUsage 回调里直接拿到，不用额外暴露 streamText 内部状态 */
+  toolCallCount: number;
 }
 
 /**
@@ -92,6 +98,12 @@ export interface StreamCallbacks {
    * interrupted=true 表示用户主动 abort（不写 usage，标记 interrupted）。
    */
   onUsage?: (usage: StreamUsage, model: ModelEndpoint, finishReason: string, interrupted: boolean) => void;
+  /**
+   * 阶段4 Handoff：streamText 全部 step 跑完后，把累积的所有 toolCalls 一次交给 caller。
+   * caller 用它判断模型是否调了 `handoff_to_X`（用于多 AI 协作接力）。
+   * 不传=noop，零侵入。Abort 中断时不调。
+   */
+  onFinalToolCalls?: (toolCalls: { toolName: string; input?: unknown }[]) => void;
 }
 
 /**
@@ -148,15 +160,27 @@ export async function streamWithFallback(
     /** 消息难度桶（simple/standard/hard），落 UsageEvent 供 v0.9 SmartRouter 滚动统计。
      *  不传则内部按最后一条 user 消息推断（调用方无需各自重复算）。 */
     role?: string;
+    /** 阶段 F1：actor 维度（leader/architect/frontend/.../stage）。
+     *  - 跟 role（workRole 难度桶）配对清晰，不撞名
+     *  - 不传 → NULL（review F1-1：leader 占比 80%+，NULL 是真实数据，聚合不过滤）
+     *  - 调用方责任：必须显式传（ChatPage 主对话 → 'leader'，ProjectDetailPage → 'stage'，runChain 每跳 → role: RoleId） */
+    actorRole?: string | null;
     /** v0.7 阶段4：工具集（read/glob/grep 等）。传了才开启工具调用 + 多步 agentic 循环 */
     tools?: ToolSet;
     /** 工具调用最大步数（防死循环），默认 8 */
     maxToolSteps?: number;
+    /** 单次回答的最大输出 token。不传则用 DEFAULT_MAX_OUTPUT_TOKENS。
+     *  关键：很多 OpenAI 兼容端点（MiniMax 等）不传 max_tokens 时默认值很小，
+     *  推理型模型会把预算花在 <think> 上、正文没写完就被截断 → 必须显式给足。 */
+    maxOutputTokens?: number;
   } = {},
 ): Promise<{ usedModelId: string; switched: boolean }> {
   if (models.length === 0) {
     throw new Error("streamWithFallback: models array cannot be empty");
   }
+
+  // 预热 models.dev 输出上限表（幂等、不阻塞本轮）。首轮没拉到就用 CEILING 兜底，下轮起精确 clamp。
+  void ensureModelLimitsLoaded();
 
   // 跳过 cooldown 中的模型：从前往后找第一个不在 cooldown 的；前面被跳过的都触发 onSwitched("cooldown")
   let startIdx = 0;
@@ -207,29 +231,61 @@ export async function streamWithFallback(
         );
         finishReason = cliResult.finishReason;
         wasAborted = finishReason === "abort" || (options.signal?.aborted ?? false);
-        streamUsage = { inputTokens: cliResult.inputTokens, outputTokens: cliResult.outputTokens };
+        streamUsage = {
+          inputTokens: cliResult.inputTokens,
+          outputTokens: cliResult.outputTokens,
+          toolCallCount: 0, // CLI 引擎本轮不计（spawn claude/codex 用它们自家的工具，不走我们 tool_calls）
+        };
       } else {
         // API 直连路径：Vercel AI SDK streamText
         const lm = getLanguageModel(target.providerType, target.modelName, target.apiKey, target.baseUrl);
+        // 阶段2：本地 abort 控制器——联动用户 signal，doom loop 命中时主动 abort 流
+        const localAbort = new AbortController();
+        const onParentAbort = () => localAbort.abort();
+        options.signal?.addEventListener("abort", onParentAbort);
+        // 阶段2：累计 toolCalls 供 doom loop 检测（连续 3 次相同工具调用 = 死循环，抄 OpenCode）
+        const stepToolCalls: StepToolCall[] = [];
         const result = streamText({
           model: lm,
           messages: messages as unknown as ModelMessage[],
-          // 传了 tools 才开工具调用 + 多步循环（stopWhen 防死循环）
-          ...(options.tools ? { tools: options.tools, stopWhen: stepCountIs(options.maxToolSteps ?? 8) } : {}),
-          ...(options.signal ? { abortSignal: options.signal } : {}),
+          // 按 models.dev 该模型真实输出上限给足预算（clamp 到模型能力、封顶 CEILING）——
+          // 否则不传 max_tokens 时被供应商小默认值截断；传死大值又会让小上限模型被 400 拒
+          maxOutputTokens: options.maxOutputTokens ?? resolveMaxOutputTokens(target.modelName),
+          // 阶段2：API 调用失败自动重试（4 重防死循环之一）
+          maxRetries: 3,
+          // 传了 tools 才开工具调用 + 多步循环（stopWhen 防死循环）+ doom loop 检测
+          ...(options.tools ? {
+            tools: options.tools,
+            stopWhen: stepCountIs(options.maxToolSteps ?? 8),
+            onStepFinish: (event) => {
+              const calls = (event.toolCalls ?? []) as { toolName: string; input: unknown }[];
+              for (const tc of calls) {
+                stepToolCalls.push({ toolName: tc.toolName, input: tc.input });
+              }
+              if (detectDoomLoop(stepToolCalls)) localAbort.abort();
+            },
+          } : {}),
+          abortSignal: localAbort.signal,
         });
 
         for await (const delta of result.textStream) {
           callbacks.onDelta(delta);
         }
 
+        // 阶段4 Handoff：把累积的 toolCalls 一次性交给 caller（不传=onFinalToolCalls 即 noop）
+        callbacks.onFinalToolCalls?.(
+          stepToolCalls.map((tc) => ({ toolName: tc.toolName, input: tc.input })),
+        );
+
         const usage = await result.usage;
         finishReason = (await result.finishReason) ?? "stop";
-        wasAborted = options.signal?.aborted ?? false;
+        wasAborted = localAbort.signal.aborted || (options.signal?.aborted ?? false);
         streamUsage = {
           inputTokens: usage?.inputTokens ?? 0,
           outputTokens: usage?.outputTokens ?? 0,
+          toolCallCount: stepToolCalls.length, // 阶段 H：本轮真调了几次工具
         };
+        options.signal?.removeEventListener("abort", onParentAbort);
       }
 
       markModelSucceeded(target.modelId);
@@ -252,6 +308,8 @@ export async function streamWithFallback(
         if (options.conversationId) params.conversationId = options.conversationId;
         // role 不传则按最后一条 user 消息推断难度桶（避免每个调用方各算一遍）
         params.role = options.role ?? inferRole(messages);
+        // 阶段 F1：actor 维度透传（不设兜底，undefined → NULL；review F1-1 聚合不过滤 NULL）
+        if (options.actorRole !== undefined) params.roleKind = options.actorRole;
         void recordUsageEvent(params);
       }
 

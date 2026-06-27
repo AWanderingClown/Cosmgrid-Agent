@@ -1,6 +1,6 @@
 // ChatPage - 重构为 "Cosmic Cyber" 视觉风格
 import { memo, useEffect, useRef, useState } from "react";
-import { Bot, Send, Square, User, Zap, Sparkles, Cpu, PanelRight, X, Activity, Swords, Plus, Trash2, MessageSquare, ChevronDown, Pencil, Check, Pin, FolderOpen, Lock, ShieldAlert, ShieldCheck, Paperclip } from "lucide-react";
+import { Bot, Send, Square, User, Zap, Sparkles, Cpu, PanelRight, X, Activity, Swords, Plus, Trash2, MessageSquare, ChevronDown, Pencil, Check, Pin, FolderOpen, Lock, ShieldAlert, ShieldCheck, Paperclip, Brain, Terminal, ArrowDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -8,23 +8,36 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { usePanelResize, ResizeHandle } from "@/components/ui/resize-handle";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
+import { parseThinking } from "@/lib/parse-thinking";
+import { deriveArtifacts, type WorkArtifact } from "@/lib/work-artifacts";
+import { WorkArtifacts } from "@/components/work-panel/WorkArtifacts";
+import { HandoffBanner } from "@/components/chat/HandoffBanner";
+import { ChainProgressBar } from "@/components/chat/ChainProgressBar";
+import { ensureModelLimitsLoaded } from "@/lib/llm/model-limits";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
-import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, type Conversation, type DbMessage } from "@/lib/db";
+import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, toolExecutions, getRoleBindingsForConversation, type Conversation, type DbMessage } from "@/lib/db";
 import { createDefaultToolRegistry, buildAiSdkTools, type ToolConfirmRequest } from "@/lib/llm/tools";
 import { buildWorkspacePreamble } from "@/lib/llm/workspace-context";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getApiKey } from "@/lib/keystore";
-import { streamWithFallback, toModelEndpoint, type StreamUsage } from "@/lib/llm/chat-fallback";
+import { streamWithFallback, toModelEndpoint, type ModelEndpoint, type StreamUsage } from "@/lib/llm/chat-fallback";
 import { pickBestModelForRole, rankFallbackModels, scoreModelForRole } from "@/lib/llm/model-capabilities";
 import { applyOutcomeForLatest } from "@/lib/llm/outcome-tracker";
 import { isCliProviderType } from "@/lib/llm/cli-protocol";
 import { classifyMessageComplexity } from "@/lib/llm/message-router";
 import { shouldSuggestDebate } from "@/lib/llm/debate-suggester";
 import { routeMessage } from "@/lib/llm/smart-router";
-import { isSmartRoutingEnabled } from "@/lib/app-settings";
+import { isSmartRoutingEnabled, usePermissionModeSetting } from "@/lib/app-settings";
 import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
 import { compressHistory, type ChatMsg } from "@/lib/llm/context-compressor";
-import { buildTimePreamble } from "@/lib/llm/context-preamble";
+import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble } from "@/lib/llm/context-preamble";
+import { evaluateHarness, isClean, buildCorrectionPrompt, detectIntentNoToolCall, buildIntentNudgePrompt, type HarnessVerdict } from "@/lib/llm/harness/feedback";
+import { runChain as runChainImpl } from "@/lib/llm/chain-runner";
+import { type RoleId } from "@/lib/llm/orchestrator";
+import { runHandoffBridge, buildHandoffToolsForAgent, deriveExpertAgentMap } from "@/lib/llm/orchestration/handoff-bridge";
+import { runExpertAgentStep } from "@/lib/llm/orchestration/handoff-runner";
+import { type ExpertAgent } from "@/lib/llm/orchestration/handoff";
+import type { ReadRecord } from "@/lib/llm/harness/verify-claims";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
 import { ingestFile, ingestPath, toUserCoreMessage, parseAttachments, type Attachment } from "@/lib/llm/attachments";
 import { listen } from "@tauri-apps/api/event";
@@ -38,6 +51,8 @@ import {
   pickOrchestratorModel,
   serializeOrchestration,
   parseOrchestration,
+  computeChain,
+  withChainPlan,
   type OrchestrationState,
   type OrchestrationTurn,
   type OrchestrationChange,
@@ -64,6 +79,25 @@ interface ChatMessage {
   receipt?: ReceiptContent;
   /** 拖拽/粘贴的附件（图片走多模态 / 文本文件贴内容） */
   attachments?: Attachment[];
+  /** Harness 阶段1：回答后的真实性校验结果——模型引用了文件但没真调 read、或吐了伪工具调用文本 */
+  harness?: HarnessWarning;
+  /** 阶段 E2b：哪个角色产出（chain 接力消息设此字段；leader / 普通 assistant 留空）。
+   *  - 渲染时由 messageRenderer 用 ROLE_LABELS[roleId] 生成前缀（▶ 角色），不再烤进 content
+   *  - optional 向后兼容：旧消息没此字段 → render 走旧路
+   *  - 进度条 ChainProgressBar 用此字段 + chainPlan + executedRoles 派生状态（单一来源） */
+  roleId?: RoleId;
+  /** 阶段 E2b：chain 接力时的跳序号（1-based，从 onRoleStart 拿 idx+1）— 渲染前缀「1/3」「2/3」用 */
+  chainStep?: { index: number; total: number };
+  /** 阶段 E2b：消息是否完成（onRoleDone 标 true；流式中 false）— 渲染 ✓ 用 */
+  chainDone?: boolean;
+}
+
+/** Harness 校验警告：模型回答里「未实际执行」的痕迹 */
+interface HarnessWarning {
+  /** 模型引用了但本次对话没有 read 执行记录的文件路径（内容可能是编的） */
+  unverifiedPaths: string[];
+  /** 检测到的伪工具调用文本的工具名（如 run_command/view_file——这些不是项目真工具） */
+  pseudoToolNames: string[];
 }
 
 /** 编排者折叠回执：一行摘要 + 可展开详情 */
@@ -119,12 +153,59 @@ function formatElapsed(ms: number): string {
   return `${Math.floor(totalSec / 60)}m ${totalSec % 60}s`;
 }
 
+/** 折叠块（思考 / 伪工具调用）：默认只显示一行可点的灰色小字，点开才看全文。
+ *  - think：模型推理过程（<thinking>/🤔 等）—— 💭 思考过程 ›
+ *  - tool：模型在正文里"演"的伪工具调用（<run_command>{…}</run_command> / 裸 JSON）—— 🔧 工具调用 ›
+ *  对齐 Claude / Codex / OpenCode 的「思考默认折叠」习惯，避免刷屏抢滚动。
+ *  注意：是「折叠」不是「隐藏」——harness 已在上方标黄提示这些是模型编的伪工具，
+ *  用户想点开还能看原文，别直接删掉。 */
+const CollapsibleBlock = memo(function CollapsibleBlock({
+  content,
+  closed,
+  streaming,
+  variant,
+}: {
+  content: string;
+  closed: boolean;
+  streaming: boolean;
+  variant: "think" | "tool";
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const body = content.trim();
+  if (!body && closed) return null;
+  // 仍在流式且未闭合 = 真"进行中"（转圈）；流已停但未闭合 = 被截断，静态显示，别永远转圈
+  const live = streaming && !closed;
+  const Icon = variant === "think" ? Brain : Terminal;
+  const labelLive = variant === "think" ? t("chat.thinking") : t("chat.toolCall");
+  const labelDone = variant === "think" ? t("chat.thinkingDone") : t("chat.toolCallDone");
+  return (
+    <div className="my-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="group flex items-center gap-1.5 text-left text-[11px] font-medium text-primary/55 hover:text-primary/80 transition-colors"
+      >
+        <Icon className={cn("w-3 h-3 shrink-0", live && "animate-pulse")} />
+        <span>{live ? labelLive : labelDone}</span>
+        <ChevronDown className={cn("w-3 h-3 shrink-0 opacity-50 transition-transform", open && "rotate-180")} />
+      </button>
+      {open && body && (
+        <div className="mt-1.5 ml-4 text-[11px] leading-relaxed text-muted-foreground/50 whitespace-pre-wrap break-words border-l border-primary/15 pl-3">
+          {body}
+        </div>
+      )}
+    </div>
+  );
+});
+
 const MessageItem = memo(function MessageItem({
   role,
   text,
   isStreaming,
   elapsedLabel,
   attachments,
+  harness,
 }: {
   role: "user" | "assistant";
   text: string;
@@ -133,9 +214,17 @@ const MessageItem = memo(function MessageItem({
   elapsedLabel?: string;
   /** 该消息的附件（图片缩略图 / 文本文件名 chip），仅展示 */
   attachments?: Attachment[];
+  /** Harness 校验警告：模型引用了文件但没真读 / 吐了伪工具调用文本 */
+  harness?: HarnessWarning;
 }) {
   const { t } = useTranslation();
   const isAssistant = role === "assistant";
+  // 助手消息：把 <think> 推理切成折叠块，正文照常显示；用户消息不解析
+  const segments = isAssistant ? parseThinking(text) : null;
+  // 当前可见的正文（剔除思考块后）——决定底部是显示"思考中"还是"回复中"
+  const visibleText = segments
+    ? segments.filter((s) => s.type === "text").map((s) => s.content).join("")
+    : text;
 
   return (
     <div className="group flex gap-4 px-6 py-4 animate-in fade-in slide-in-from-bottom-2 duration-700">
@@ -169,13 +258,42 @@ const MessageItem = memo(function MessageItem({
               {isAssistant ? t("chat.assistantLabel") : t("chat.userLabel")}
             </span>
           </div>
+          {isAssistant && harness && (harness.unverifiedPaths.length > 0 || harness.pseudoToolNames.length > 0) && (
+            <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+              <div className="font-semibold">⚠️ 内容真实性校验：模型可能编造了内容，请勿轻信</div>
+              {harness.unverifiedPaths.length > 0 && (
+                <div className="mt-1">
+                  引用了但本次对话未实际读取的文件：{harness.unverifiedPaths.slice(0, 5).join("、")}{harness.unverifiedPaths.length > 5 ? " 等" : ""}
+                </div>
+              )}
+              {harness.pseudoToolNames.length > 0 && (
+                <div className="mt-1">
+                  吐了伪工具调用文本（{harness.pseudoToolNames.join("、")}）——这些不是本应用真工具，未实际执行
+                </div>
+              )}
+            </div>
+          )}
           <div
             className={cn(
               "text-sm leading-relaxed whitespace-pre-wrap break-words",
               !isAssistant ? "text-foreground font-medium" : "text-foreground/90",
             )}
           >
-            {text}
+            {segments
+              ? segments.map((s, i) =>
+                  s.type === "text" ? (
+                    <span key={i}>{s.content}</span>
+                  ) : (
+                    <CollapsibleBlock
+                      key={i}
+                      variant={s.type === "think" ? "think" : "tool"}
+                      content={s.content}
+                      closed={s.closed}
+                      streaming={isStreaming}
+                    />
+                  ),
+                )
+              : text}
             {attachments && attachments.length > 0 && (
               <div className="flex flex-wrap gap-2 mt-2">
                 {attachments.map((a) =>
@@ -193,15 +311,16 @@ const MessageItem = memo(function MessageItem({
                 )}
               </div>
             )}
-            {isStreaming && isAssistant && text !== "" && (
+            {isStreaming && isAssistant && visibleText !== "" && (
               <span className="inline-block w-2 h-5 ml-1 bg-primary/40 animate-pulse rounded-sm align-middle" />
             )}
-            {/* 思考中/回复中 + 计时：让用户明确感知"模型在工作"，慢模型/卡住也一眼可辨 */}
+            {/* 思考中/回复中 + 计时：让用户明确感知"模型在工作"，慢模型/卡住也一眼可辨。
+                正文还没出来（仍在 <think> 里）算"思考中"，正文一出来就转"回复中" */}
             {isStreaming && isAssistant && (
               <div className="flex items-center gap-2 mt-1.5 text-xs font-medium text-primary/70">
                 <ThinkingLogo className="w-4 h-4 shrink-0" />
                 <span>
-                  {text === "" ? t("chat.thinking") : t("chat.replying")}
+                  {visibleText.trim() === "" ? t("chat.thinking") : t("chat.replying")}
                   {elapsedLabel ? ` · ${elapsedLabel}` : ""}
                 </span>
               </div>
@@ -411,9 +530,9 @@ function ConversationSwitcher({
   );
 }
 
-// 工具权限三档：只读 → 确认写 → 自动。默认 read，最安全。
-type PermissionMode = "read" | "confirm" | "auto";
-
+// 工具权限三档（read/confirm/auto）：持久化在 app-settings 的 localStorage，
+// 用户的习惯跨会话保留，重启也不被重置回只读。PermissionMode 类型从 app-settings 导出，
+// 见 @/lib/app-settings（hook 也从那里导入）
 /** 排队待发的一条：文字 + 可选附件 */
 type PendingSend = { text: string; attachments?: Attachment[] };
 
@@ -443,6 +562,8 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   const [streamError, setStreamError] = useState<string | null>(null);
   const [switchNotice, setSwitchNotice] = useState<string | null>(null);
   const [cacheNotice, setCacheNotice] = useState<string | null>(null);
+  // Harness 闭环：检测到模型编造、正在让它自查重答时的提示条
+  const [harnessNotice, setHarnessNotice] = useState<string | null>(null);
   const [lastUsage, setLastUsage] = useState<ChatUsage | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -451,12 +572,22 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   // 工作文件夹 + 工具权限档（产品真北：让主对话能在本地真干活，不只是聊天）。
   // permissionMode：read=只读(读/搜/git-read) | confirm=写操作逐个确认 | auto=写操作不弹窗。
   const [workspacePath, setWorkspacePath] = useState<string | null>(null);
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>("read");
+  /** 右侧工作面板的产出物工件——从 tool_executions 派生，回答完成后刷新 */
+  const [artifacts, setArtifacts] = useState<WorkArtifact[]>([]);
+  const [permissionMode, setPermissionMode] = usePermissionModeSetting();
   const [pendingConfirm, setPendingConfirm] = useState<ToolConfirmRequest | null>(null);
   const confirmResolverRef = useRef<((ok: boolean) => void) | null>(null);
   // 编排者节点状态（后台滚动更新）。用 ref 镜像最新值，供 handleSend 闭包同步读取（避免 stale state）。
   const [orchestration, setOrchestration] = useState<OrchestrationState | null>(null);
+  // 阶段4 Handoff：main chat 完成后模型调 handoff 时的路径（length>1 表示发生了 handoff）
+  const [handoffInfo, setHandoffInfo] = useState<{ path: string[]; truncated?: boolean } | null>(null);
   const orchestrationRef = useRef<OrchestrationState | null>(null);
+  // 阶段 E2b：chain 接力的运行时状态（驱动进度条 + 中止按钮 + 角色消息渲染）
+  // 单一来源：chainPlan 来自 orchestration.chainPlan（E1），executedRoles/skippedRoles/abortedRole 来自 E2a runChain 回调
+  const [chainExecutedRoles, setChainExecutedRoles] = useState<RoleId[]>([]);
+  const [chainSkippedRoles, setChainSkippedRoles] = useState<RoleId[]>([]);
+  const [chainAbortedRole, setChainAbortedRole] = useState<RoleId | null>(null);
+  const [chainRunning, setChainRunning] = useState(false);
   function applyOrchestration(next: OrchestrationState | null) {
     orchestrationRef.current = next;
     setOrchestration(next);
@@ -471,10 +602,51 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // 浮动输入框是 absolute 盖在消息上的——按它的真实高度给消息区底部预留空间，
+  // 否则输入框一变高（工作区行/附件/多行输入）就把最后几行消息盖住看不见。
+  const inputAreaRef = useRef<HTMLDivElement>(null);
+  const [inputAreaH, setInputAreaH] = useState(180);
 
-  // 自动滚动到底部
+  // 实时测量输入框区域高度（含工作区行 + 附件 + 多行文本 + 页脚），驱动消息区底部 padding
   useEffect(() => {
-    if (scrollRef.current) {
+    const el = inputAreaRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setInputAreaH(el.offsetHeight));
+    ro.observe(el);
+    setInputAreaH(el.offsetHeight);
+    return () => ro.disconnect();
+  }, []);
+
+  // 是否「贴底跟随」：用户在底部附近时为 true，自动滚到底；用户往上滚走就为 false，
+  // 不再抢鼠标。ref 存实时值给滚动逻辑用，state 仅驱动「回到底部」按钮显隐。
+  const stickToBottomRef = useRef(true);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+
+  const scrollToBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    stickToBottomRef.current = true;
+    setShowJumpToBottom(false);
+  };
+
+  // 监听用户滚动：算出离底部的距离，决定是否继续贴底跟随
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const atBottom = distance < 80;
+      stickToBottomRef.current = atBottom;
+      setShowJumpToBottom(!atBottom);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // 新内容到达时：只有用户仍贴在底部才自动滚，否则纹丝不动（不跟用户抢滚动条）
+  useEffect(() => {
+    if (scrollRef.current && stickToBottomRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
@@ -536,6 +708,11 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     void loadModelsAndCreds().catch(() => {});
   }, [active]);
 
+  // 进页面就预热 models.dev 输出上限表，让首条消息也能按模型真实上限精确给预算
+  useEffect(() => {
+    void ensureModelLimitsLoaded();
+  }, []);
+
   useEffect(() => {
     void (async () => {
       try {
@@ -578,15 +755,26 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     setPendingConfirm(null);
   }
 
-  // 选/换工作文件夹（系统原生目录选择器），绑到当前会话并落库。
+  // 绑定工作文件夹到当前会话并落库（选择器选中 / 拖入文件夹都走这里，单一来源）。
+  async function bindWorkspace(path: string) {
+    setWorkspacePath(path);
+    setConversationList((prev) => prev.map((c) => (c.id === conversationId ? { ...c, workspacePath: path } : c)));
+    if (conversationId) {
+      try {
+        await dbConversations.setWorkspacePath(conversationId, path);
+      } catch {
+        // 落库失败不阻断（内存态已更新）
+      }
+    }
+  }
+
+  // 选/换工作文件夹（系统原生目录选择器）。
   async function chooseWorkspace() {
     if (isStreaming) return;
     try {
       const picked = await openDialog({ directory: true, multiple: false, title: t("chat.workspace.pickTitle") });
       if (typeof picked !== "string") return; // 用户取消
-      setWorkspacePath(picked);
-      setConversationList((prev) => prev.map((c) => (c.id === conversationId ? { ...c, workspacePath: picked } : c)));
-      if (conversationId) await dbConversations.setWorkspacePath(conversationId, picked);
+      await bindWorkspace(picked);
     } catch {
       // 选择器异常/取消不阻断对话
     }
@@ -596,7 +784,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   async function clearWorkspace() {
     if (isStreaming) return;
     setWorkspacePath(null);
-    setPermissionMode("read");
+    // 权限档不重置——用户的习惯（confirm/auto）跨会话保留，重启也不丢
     setConversationList((prev) => prev.map((c) => (c.id === conversationId ? { ...c, workspacePath: null } : c)));
     if (conversationId) await dbConversations.setWorkspacePath(conversationId, null);
   }
@@ -633,6 +821,12 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     } catch {
       setMessages([]);
     }
+    // 加载该会话的历史工具执行 → 派生工件（切回旧会话能看到之前的产出物）
+    try {
+      setArtifacts(deriveArtifacts(await toolExecutions.listByConversation(id)));
+    } catch {
+      setArtifacts([]);
+    }
     try {
       applyOrchestration(parseOrchestration(await dbConversations.getOrchestration(id)));
     } catch {
@@ -655,6 +849,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       setConversationId(conv.id);
       setWorkspacePath(null);
       setMessages([]);
+      setArtifacts([]);
       applyOrchestration(null);
       return;
     }
@@ -668,6 +863,11 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         setMessages(dbMessagesToChat(hist, availableModels));
       } catch {
         setMessages([]);
+      }
+      try {
+        setArtifacts(deriveArtifacts(await toolExecutions.listByConversation(next.id)));
+      } catch {
+        setArtifacts([]);
       }
       try {
         applyOrchestration(parseOrchestration(await dbConversations.getOrchestration(next.id)));
@@ -694,7 +894,14 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     // 直接走 setSelectedModelId 让 UI 跟上，但**不经 handleModelChange**——那是用户手动切的路径，
     // 会记 switched_up 负反馈；系统自己换的不能污染评分。
     const activeNode = currentNode(orchestrationRef.current);
-    const nodeModelId = activeNode?.modelId ?? null;
+    // leader 节点 = 闲聊/单次答疑/读文件这类，尊重用户当前手选的模型，编排不自动覆盖
+    // （否则用户选了 minimax，编排会因 main_chat 静态分高把模型自动换成 agnes，瞎切）。
+    // 只有 architect/frontend/backend/tester/reviewer/security/runner 这种"该换专业模型"的角色才用编排绑的模型。
+    const nodeModelId = activeNode?.role === "leader" ? null : (activeNode?.modelId ?? null);
+    // 阶段 F1：actor 维度 → 透传给 streamWithFallback → UsageEvent.role_kind
+    // - leader 那跳（activeNode=null 或 role='leader'）→ 'leader'（review F1-5：必须显式 'leader'，不能 NULL）
+    // - 其他角色节点（理论上不应该从这条主对话路径跑，但兜底）→ activeNode.role
+    const actorRole = activeNode?.role ?? "leader";
     const effectiveId =
       nodeModelId && availableModels.some((m) => m.id === nodeModelId) ? nodeModelId : selectedModelId;
     const model = availableModels.find((m) => m.id === effectiveId);
@@ -769,11 +976,31 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         .catch(() => {});
     };
 
+    // Harness 闭环：查本次对话真实 read 记录，评估这条回答是否在编造（声称读了没读 / 吐伪工具）。
+    // 返回 verdict 供调用方决定标黄 + 是否回填让模型重答；失败返回 null（静默，绝不阻断主对话）。
+    const evalHarness = async (convId: string | null, content: string): Promise<HarnessVerdict | null> => {
+      if (!convId || !content.trim()) return null;
+      let readRecords: ReadRecord[] = [];
+      try {
+        const all = await toolExecutions.listByConversation(convId);
+        // 查一次库，原始行同时喂 harness（过滤 read）和工作面板工件派生——不重复查
+        readRecords = all
+          .filter((r) => r.toolName === "read")
+          .map((r) => ({ input: r.input, status: r.status }));
+        setArtifacts(deriveArtifacts(all));
+      } catch {
+        return null; // 查询失败不阻塞对话
+      }
+      return evaluateHarness(content, readRecords);
+    };
+
     const userMsg: ChatMessage = { id: userId, role: "user", content: text, ...(attachments?.length ? { attachments } : {}) };
     const assistantId = crypto.randomUUID();
     const assistantMsg: ChatMessage = { id: assistantId, role: "assistant", content: "", modelLabel: model.displayName ?? model.name };
 
     const newMessages = [...messages, userMsg];
+    // 用户主动发消息：强制贴底，这一轮回答自动跟随滚动
+    stickToBottomRef.current = true;
     setMessages([...newMessages, assistantMsg]);
     setIsStreaming(true);
     setStreamError(null);
@@ -844,19 +1071,45 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     const effectiveWorkspace = folderAtt?.path ?? workspacePath;
     let tools: ReturnType<typeof buildAiSdkTools> | undefined;
     let workspacePreamble: string | null = null;
+
+    // 阶段4 Handoff：派生 leaderAgent + handoff tools（注入 main chat tools，让模型能调 handoff_to_X）
+    // 简化版：selectedModel 当 leader 兜底，OrchestrationState 当前不含 roleBindings 字段
+    const handoffLeaderAgent: ExpertAgent | null = (() => {
+      if (!selectedModelId) return null;
+      // 把 ModelListItem 适配成 HandoffBridgeModelRef（displayName null fallback 到 name）
+      const adaptedModels = availableModels.map((m) => ({
+        id: m.id,
+        displayName: m.displayName ?? m.name,
+      }));
+      const map = deriveExpertAgentMap({}, selectedModelId, adaptedModels);
+      return map.get("leader") ?? null;
+    })();
     if (effectiveWorkspace && !primaryIsCli) {
+      const includeWrite = permissionMode !== "read";
+      // 工具构建（同步）——独立 try。绝不能被 preamble 失败连坐清成 undefined：
+      // 旧写法把两者塞一个 try，preamble 读自述一抛错就把已建好的 tools 一起清空，
+      // 模型这一轮就没工具可调，只能嘴上说"让我用 write"然后 stop。
       try {
-        const includeWrite = permissionMode !== "read";
         tools = buildAiSdkTools(createDefaultToolRegistry({ includeWrite }), {
           workspacePath: effectiveWorkspace,
           conversationId: conversationId ?? undefined,
           // auto 档：写操作不弹窗直接放行；confirm 档：每个写操作走 requestConfirm 等用户按确认。
           confirm: permissionMode === "auto" ? async () => true : requestConfirm,
         });
-        workspacePreamble = await buildWorkspacePreamble(effectiveWorkspace);
-      } catch {
-        // 构造工具/读自述失败 → 退化为纯聊天
+        // 阶段4 Handoff：合并 handoff 工具（leader 能调 handoff_to_X 触发多 AI 协作）
+        if (handoffLeaderAgent) {
+          tools = { ...tools, ...buildHandoffToolsForAgent(handoffLeaderAgent) };
+        }
+      } catch (err) {
+        // 只有工具构建真失败才清空（极罕见）——preamble 失败不再连坐这里
+        console.error("[tools] 构建工具失败:", err);
         tools = undefined;
+      }
+      // 读项目自述（异步）——独立 try，失败只丢 preamble，tools 照常带
+      try {
+        workspacePreamble = await buildWorkspacePreamble(effectiveWorkspace);
+      } catch (err) {
+        console.error("[tools] 读项目自述失败（不影响工具）:", err);
         workspacePreamble = null;
       }
     }
@@ -870,6 +1123,14 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     let outgoing: ChatMsg[] = [
       { role: "system", content: buildTimePreamble() },
       ...(workspacePreamble ? [{ role: "system" as const, content: workspacePreamble }] : []),
+      // 阶段 H：绑工作区时塞图片守卫 preamble——防止模型先 read 二进制图再编造幻觉
+      ...(effectiveWorkspace ? [{ role: "system" as const, content: buildImageGuardPreamble() }] : []),
+      // 没绑工作区 + 非 CLI 引擎 → 这次没给模型挂工具。塞「无工具约束」防止 M3 等模型
+      // 在无 tools 时幻觉式吐 <run_command>{...}</run_command> 等伪工具调用文本刷屏。
+      // 绑了工作区的正常工具路径有 tools，CLI 引擎自带工具，都不走这条。
+      ...(!effectiveWorkspace && !primaryIsCli
+        ? [{ role: "system" as const, content: buildNoToolsPreamble() }]
+        : []),
       ...newMessages.filter((m) => m.kind !== "receipt").map((m): ChatMsg =>
         m.role === "user" && m.attachments && m.attachments.length > 0
           ? toUserCoreMessage(m.content, m.attachments, { tooLargeNotice })
@@ -882,45 +1143,158 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       }).messages;
     }
 
+    // Harness 闭环：回答完后评估是否在编造；编了就回填一条纠正指令让模型自查重答（封顶 1 次，防造假死循环）。
+    // 只有真检测到违规才会多花一次调用；重答后仍不干净就标黄提示用户、不再重试。
+    const MAX_HARNESS_RETRY = 1;
     let fullContent = "";
+    let convo = outgoing;
+    let lastUsage: ChatUsage | undefined;
+    let lastModelId: string | null = model.id;
+    let lastResultModelId: string | undefined;
+    // 阶段 H：本轮真实工具调用次数。nudge 触发条件之一（0 + 动手意图 → 催一次）
+    let lastToolCallCount = 0;
+    // 阶段 H：本轮 finishReason。nudge 触发条件之一（必须是 "stop"，abort/tool-error 不催）
+    let lastFinishReason = "stop";
     try {
-      const result = await streamWithFallback(
-        chain,
-        outgoing,
-        {
-          onDelta: (delta) => {
-            fullContent += delta;
-            setMessages((prev) =>
-              prev.map((m) => (m.id === assistantId ? { ...m, content: fullContent } : m))
-            );
+      for (let attempt = 0; ; attempt++) {
+        fullContent = "";
+        // 重答：清空气泡 + 清旧标黄，让新答覆盖（只给用户看最终版）
+        if (attempt > 0) {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantId ? { ...m, content: "", harness: undefined } : m)),
+          );
+        }
+        const result = await streamWithFallback(
+          chain,
+          convo,
+          {
+            onDelta: (delta) => {
+              fullContent += delta;
+              setMessages((prev) =>
+                prev.map((m) => (m.id === assistantId ? { ...m, content: fullContent } : m))
+              );
+            },
+            onSwitched: (_from, to) => {
+              const label = to.displayLabel ?? to.modelName;
+              setSwitchNotice(t("chat.switchedTo", { name: label }));
+              setMessages((prev) =>
+                prev.map((m) => (m.id === assistantId ? { ...m, switched: true, switchedTo: label, modelLabel: label } : m)),
+              );
+            },
+            onUsage: (usage, usedModel, finishReason) => {
+              // 不在此落库——闭环可能重答，只落最终版（循环结束后统一 persist）
+              lastUsage = {
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+                toolCallCount: usage.toolCallCount,
+              };
+              lastModelId = usedModel.modelId ?? null;
+              lastToolCallCount = usage.toolCallCount;
+              lastFinishReason = finishReason;
+              setLastUsage(lastUsage ?? null);
+              setMessages((prev) =>
+                prev.map((m) => (m.id === assistantId ? { ...m, usage: lastUsage, modelLabel: usedModel.displayLabel ?? usedModel.modelName } : m)),
+              );
+            },
+            // 阶段4 Handoff：streamText 跑完后拿到所有 toolCalls，检查是否调了 handoff_to_X
+            // 失败静默（runHandoffBridge 内部 try/catch + error 填 result），绝不 throw 主对话
+            onFinalToolCalls: (toolCalls) => {
+              if (!handoffLeaderAgent || controller.signal.aborted) return;
+              const agentsMap = new Map<string, ExpertAgent>([[handoffLeaderAgent.id, handoffLeaderAgent]]);
+              void runHandoffBridge({
+                startRoleId: "leader",
+                messages: messages as { role: "user" | "assistant" | "system"; content: string }[],
+                agents: agentsMap,
+                mainChatToolCalls: toolCalls,
+                runStep: async (agent, msgs) => {
+                  // 完整版 runStep：重调 streamWithFallback 跑目标 agent
+                  // 失败抛错 → runHandoffBridge 内部 try/catch → result.error 填
+                  return await runExpertAgentStep(
+                    agent,
+                    msgs as { role: "user" | "assistant" | "system"; content: string }[],
+                    {
+                      availableModels,
+                      credentials,
+                      getApiKey,
+                      signal: controller.signal,
+                      onDelta: (delta) => {
+                        // T22-2C 完整版：每跳 agent 的流式输出追加到 fullContent
+                        // 这里先 noop（简化），等 T22-2C 改成新消息流
+                        fullContent += delta;
+                      },
+                      onSwitched: (label) => {
+                        setSwitchNotice(t("chat.switchedTo", { name: label }));
+                      },
+                    },
+                  );
+                },
+                signal: controller.signal,
+              }).then((result) => {
+                if (result && result.handoffPath.length > 1) {
+                  setHandoffInfo({ path: result.handoffPath, truncated: result.truncated });
+                }
+              }).catch((err) => {
+                console.error("[handoff] bridge failed:", err);
+              });
+            },
           },
-          onSwitched: (_from, to) => {
-            const label = to.displayLabel ?? to.modelName;
-            setSwitchNotice(t("chat.switchedTo", { name: label }));
-            setMessages((prev) =>
-              prev.map((m) => (m.id === assistantId ? { ...m, switched: true, switchedTo: label, modelLabel: label } : m)),
-            );
-          },
-          onUsage: (usage, usedModel) => {
-            const u = { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens };
-            setLastUsage(u);
-            setMessages((prev) =>
-              prev.map((m) => (m.id === assistantId ? { ...m, usage: u, modelLabel: usedModel.displayLabel ?? usedModel.modelName } : m)),
-            );
-            persistAssistant(fullContent, usedModel.modelId ?? null, u);
-          },
-        },
-        // role = 这条消息的难度桶，落 UsageEvent 供 v0.9 SmartRouter 按 taskType 滚动统计
-        // tools：绑了工作文件夹才传，开启多步工具循环（maxToolSteps 防死循环）
-        { signal: controller.signal, role: taskRole, ...(tools ? { tools, maxToolSteps: 12 } : {}) },
-      );
+          // role = 这条消息的难度桶，落 UsageEvent 供 v0.9 SmartRouter 按 taskType 滚动统计
+          // actorRole = 阶段 F1：哪个 actor 跑的（leader 主对话 → 'leader'，chain → role: RoleId，stage → 'stage'）
+          // tools：绑了工作文件夹才传，开启多步工具循环（maxToolSteps 防死循环）
+          { signal: controller.signal, role: taskRole, actorRole, ...(tools ? { tools, maxToolSteps: 12 } : {}) },
+        );
+        lastResultModelId = result.usedModelId;
+        if (controller.signal.aborted) break;
+
+        // 闭环评估（两阶段合并，**共用一个 attempt 守门，**别叠加**）：
+        //  P1: harness 违规（伪工具 / 声称读过文件但实际没读）→ 更严重，先判
+        //  P2: nudge 兜底（finishReason=stop + 绑了工具 + 0 个真 tool_call + 文本含动手意图）→ 弱信号
+        const verdict = await evalHarness(convId, fullContent);
+        const harnessDirty = !!(verdict && !isClean(verdict));
+        const nudgeNeeded =
+          !harnessDirty &&
+          !!tools &&
+          lastFinishReason === "stop" &&
+          lastToolCallCount === 0 &&
+          detectIntentNoToolCall(fullContent);
+
+        // 任一触发 + 还有重答预算 → 回填纠正指令 + continue（attempt++ 守门）
+        if ((harnessDirty || nudgeNeeded) && attempt < MAX_HARNESS_RETRY) {
+          const retryPrompt = harnessDirty
+            ? buildCorrectionPrompt(verdict!, { hasTools: !!tools })
+            : buildIntentNudgePrompt();
+          setHarnessNotice(harnessDirty ? t("chat.harnessRetry") : t("chat.intentNudgeRetry"));
+          convo = [
+            ...convo,
+            { role: "assistant" as const, content: fullContent },
+            { role: "user" as const, content: retryPrompt },
+          ];
+          continue;
+        }
+
+        // 已达重答上限（或本来就干净）→ 跳出。harness 仍违规 → 标黄提示用户「这可能编的」
+        if (harnessDirty) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, harness: { unverifiedPaths: verdict!.unverifiedPaths, pseudoToolNames: verdict!.pseudoToolNames } }
+                : m,
+            ),
+          );
+        }
+        break;
+      }
+      // 最终答案统一落库（闭环只落最终版，不重复落被纠正掉的首版）
+      persistAssistant(fullContent, lastModelId, lastUsage);
+      setHarnessNotice(null);
       // v0.9 阶段7：成功回答写入语义缓存（isCacheable 内部会过滤时间敏感/代码答案）
       if (smart && fullContent && !controller.signal.aborted) {
-        void writeCache(text, fullContent, result.usedModelId, taskRole).catch(() => {});
+        void writeCache(text, fullContent, lastResultModelId, taskRole).catch(() => {});
       }
     } catch (err) {
       // 不丢已经流式出来的半个回答（停止/中断都保留并落库）
       persistAssistant(fullContent, model.id);
+      setHarnessNotice(null);
       if ((err as Error).name === "AbortError") return;
       setStreamError(classifyLlmError(err, t).userMessage);
       // 不再删用户消息（已落库）；只移除「空的」助手占位，保留有内容的半个回答
@@ -931,8 +1305,25 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     }
 
     // 后台滚动编排：本轮答完后用便宜模型重判节点 + 按节点定模型。非阻塞、失败静默、不进 prompt。
+    // E2a：编排算完 chainPlan 后通过 onChainPlan 回调触发 watch 接力执行（最多 3 跳，每跳真调模型）。
     if (convId && fullContent && !controller.signal.aborted) {
-      void runBackgroundOrchestration(convId, [...newMessages, { ...assistantMsg, content: fullContent }]);
+      void runBackgroundOrchestration(convId, [...newMessages, { ...assistantMsg, content: fullContent }], {
+        onChainPlan: ({ chain, roleBindings: bindings }) => {
+          if (chain.length === 0 || controller.signal.aborted) return;
+          // E2a+E2b：chain 接力执行。每跳新插一条 assistant 消息（roleId/chainStep/chainDone 字段，
+          // 前缀▶/✓由渲染层从 roleId 派生，不烤进 content —— E2b 用户要求改）
+          // + chain 运行时状态（chainRunning/executedRoles/skippedRoles/abortedRole）驱动进度条
+          void runChainIfNeeded({
+            chain,
+            roleBindings: bindings,
+            controller,
+            tools,
+            conversationId: convId,
+            userTask: text,
+            messages: newMessages,
+          });
+        },
+      });
     }
   }
 
@@ -947,7 +1338,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     if (!node) return null;
     const nameOf = (id: string | null) =>
       (id ? availableModels.find((m) => m.id === id)?.displayName ?? availableModels.find((m) => m.id === id)?.name : null) ?? null;
-    const nodeLabel = t(`chat.orchestrator.nodeKinds.${node.kind}`);
+    const nodeLabel = t(`chat.orchestrator.roles.${node.role}`);
     const modelName = nameOf(node.modelId) ?? t("chat.orchestrator.receiptNoModel");
     let summary: string;
     if (!prev) {
@@ -961,7 +1352,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       .map((n) => {
         const mk = nameOf(n.modelId);
         const mark = n.id === next.currentNodeId ? "▸ " : "· ";
-        return `${mark}${t(`chat.orchestrator.nodeKinds.${n.kind}`)}：${n.title}${mk ? ` — ${mk}` : ""}`;
+        return `${mark}${t(`chat.orchestrator.roles.${n.role}`)}：${n.title}${mk ? ` — ${mk}` : ""}`;
       })
       .join("\n");
     const detail = `${t("chat.orchestrator.receiptReason", { reason })}\n\n${t("chat.orchestrator.detailNodes")}：\n${nodesList}`;
@@ -969,7 +1360,12 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   }
 
   // 后台编排：选最省的非 CLI 模型跑 planNodes → 定模型 → 落库 + 自动切 + 写回执。全程兜底，绝不影响主对话。
-  async function runBackgroundOrchestration(convId: string, msgs: ChatMessage[]) {
+  // E2a：编排算完 chainPlan 后通过 opts.onChainPlan 回调通知调用方（让调用方决定要不要跑 watch 接力）。
+  async function runBackgroundOrchestration(
+    convId: string,
+    msgs: ChatMessage[],
+    opts?: { onChainPlan?: (info: { chain: RoleId[]; roleBindings: Map<RoleId, string> }) => void },
+  ) {
     try {
       // CLI 模型走 spawn，不能用 generateObject；编排只能用 API 直连模型
       const apiModels = availableModels.filter((m) => !isCliProviderType(m.provider?.type ?? ""));
@@ -987,19 +1383,32 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
 
       const prev = orchestrationRef.current;
       const plan = await planNodes(lm, history, prev);
-      const next = resolveOrchestration(plan, availableModels, prev);
+      // 阶段 D：查用户在模板里配的 8 角色绑定（无 project 走"默认 8 角色"内置模板兜底）
+      const roleBindings = await getRoleBindingsForConversation(convId);
+      const next = resolveOrchestration(plan, availableModels, prev, roleBindings);
+      // 阶段 E1：算 watch 接力链（零额外 LLM，纯函数按 plan.nodes 顺序 + 封顶 MAX_CHAIN_LENGTH=3）
+      const chainPlan = computeChain(plan);
+      const nextWithChain = withChainPlan(next, chainPlan);
       const change = diffOrchestration(prev, next);
 
+      // E2a：通知调用方 chain 接力计划（让 ChatPage 决定是否触发 watch 接力执行）
+      opts?.onChainPlan?.({ chain: chainPlan, roleBindings });
+
       // 落库总用正确的 convId（即使用户已切走也要存对）
-      void dbConversations.saveOrchestration(convId, serializeOrchestration(next)).catch(() => {});
+      void dbConversations.saveOrchestration(convId, serializeOrchestration(nextWithChain)).catch(() => {});
       // 用户已切到别的会话 → 不要把本会话的状态/回执塞进当前 UI（切回来会从库加载）
       if (conversationIdRef.current !== convId) return;
 
-      applyOrchestration(next);
+      applyOrchestration(nextWithChain);
 
       if (change.nodeChanged || change.modelChanged) {
-        // 自动切：把当前节点的模型设为选中（UI 跟上），下一轮 handleSend 就用它
-        if (change.node?.modelId && availableModels.some((m) => m.id === change.node!.modelId)) {
+        // 自动切：把当前节点的模型设为选中（UI 跟上），下一轮 handleSend 就用它。
+        // leader 节点例外——闲聊/答疑尊重用户当前手选的模型，不自动覆盖（否则 minimax 被换成 agnes）
+        if (
+          change.node?.role !== "leader" &&
+          change.node?.modelId &&
+          availableModels.some((m) => m.id === change.node!.modelId)
+        ) {
           setSelectedModelId(change.node.modelId);
         }
         const receipt = buildReceipt(change, next, prev, plan.reason);
@@ -1015,6 +1424,146 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       }
     } catch {
       // 编排失败静默——绝不影响主对话
+    }
+  }
+
+  // E2a：watch 接力执行（每跳真调模型，含 tools 必传 + nudge 套进每跳）
+  // UI 完整化（进度条/中止按钮/角色头像）留 E2b；E2a 只让 chain 能跑起来 + 每跳消息带角色名
+  async function runChainIfNeeded(args: {
+    chain: RoleId[];
+    roleBindings: Map<RoleId, string>;
+    controller: AbortController;
+    tools: ReturnType<typeof buildAiSdkTools> | undefined;
+    conversationId: string;
+    userTask: string;
+    messages: ChatMessage[];
+  }) {
+    if (args.controller.signal.aborted || args.chain.length === 0) return;
+    try {
+      // 构造 ModelEndpoint[] —— 复用 chat-fallback 的 toModelEndpoint，apiKey 异步取
+      const apiModels = availableModels.filter((m) => !isCliProviderType(m.provider?.type ?? "") && m.provider);
+      const endpoints: ModelEndpoint[] = [];
+      for (const m of apiModels) {
+        const cred = credentials.find((c) => c.providerId === m.providerId);
+        if (!cred || !m.provider) continue;
+        const key = await getApiKey(cred.id);
+        if (!key) continue;
+        endpoints.push(toModelEndpoint(m, cred, key));
+      }
+      if (endpoints.length === 0) return;
+
+      // E2b：开跑前重置运行时状态（驱动进度条 + 中止按钮）
+      setChainExecutedRoles([]);
+      setChainSkippedRoles([]);
+      setChainAbortedRole(null);
+      setChainRunning(true);
+
+      // 每跳 messageId + content 索引（流式 delta 追加用）
+      const roleMsgIds: Partial<Record<RoleId, string>> = {};
+      const roleMsgContents: Partial<Record<RoleId, string>> = {};
+
+      // E2b：捕获 result 以处理 stoppedAt/skippedRoles（驱动进度条 aborted 状态 + 收尾消息）
+      const result = await runChainImpl({
+        chain: args.chain,
+        userTask: args.userTask,
+        controller: args.controller,
+        bindings: args.roleBindings,
+        models: endpoints,
+        // ★ tools 必传（命脉）：让 chain 角色能真调工具，重演 M3 bug 防线
+        tools: args.tools,
+        conversationId: args.conversationId,
+        callbacks: {
+          onChainStart: (total) => {
+            const id = crypto.randomUUID();
+            // E2b：▶ 前缀不再烤进 content，由渲染层从 roleId 派生（同一份信息不两处存）
+            setMessages((prev) => [
+              ...prev,
+              {
+                id, role: "assistant",
+                content: t("chat.orchestrator.chainStarted", { total }),
+                kind: "receipt",
+              },
+            ]);
+          },
+          onRoleStart: (role, idx, total) => {
+            const id = crypto.randomUUID();
+            roleMsgIds[role] = id;
+            roleMsgContents[role] = "";
+            // E2b：存 roleId + chainStep（渲染层用）— 不烤前缀进 content
+            setMessages((prev) => [
+              ...prev,
+              {
+                id, role: "assistant",
+                content: "",
+                roleId: role,
+                chainStep: { index: idx + 1, total },
+                chainDone: false,
+              },
+            ]);
+          },
+          onRoleDelta: (role, delta) => {
+            const msgId = roleMsgIds[role];
+            if (!msgId) return;
+            roleMsgContents[role] = (roleMsgContents[role] ?? "") + delta;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === msgId ? { ...m, content: roleMsgContents[role] ?? "" } : m,
+              ),
+            );
+          },
+          onRoleDone: (role, idx, total, content) => {
+            const msgId = roleMsgIds[role];
+            // E2b：同步 chainExecutedRoles（驱动进度条 done 状态）
+            setChainExecutedRoles((prev) => prev.includes(role) ? prev : [...prev, role]);
+            if (!msgId) return;
+            // E2b：标 chainDone=true（渲染层用 ✓）+ content 存原始产出（不带 ✓/角色前缀）
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === msgId
+                  ? { ...m, content, chainDone: true, chainStep: { index: idx + 1, total } }
+                  : m,
+              ),
+            );
+          },
+          // 注：runChain 内部 onChainDone 仅在完整跑完时触发（用户中止/抛错时不触发——E2a 行为），
+      // 所以"✓ 接力完成"消息由 await 后的 result 统一决定：
+      //   - stoppedAt === null → 插"完成"消息
+      //   - stoppedAt !== null → 插"中止"消息（用户中止或某跳出错）
+      onUsage: (_usage, _model, _fr) => {
+        // E2a/E2b 不做链内 usage 落库 UI，留 F 做 StatsPage
+      },
+        },
+      });
+
+      // E2b：收尾——根据 result.stoppedAt 决定最终消息 + 同步进度条状态
+      if (result.stoppedAt !== null) {
+        setChainAbortedRole(result.stoppedAt);
+        const id = crypto.randomUUID();
+        setMessages((prev) => [
+          ...prev,
+          {
+            id, role: "assistant",
+            content: t("chat.orchestrator.chainStopped", { role: result.stoppedAt! }),
+            kind: "receipt",
+          },
+        ]);
+      } else {
+        const id = crypto.randomUUID();
+        setMessages((prev) => [
+          ...prev,
+          {
+            id, role: "assistant",
+            content: t("chat.orchestrator.chainCompleted", { count: result.executedRoles.length }),
+            kind: "receipt",
+          },
+        ]);
+      }
+      if (result.skippedRoles.length > 0) {
+        setChainSkippedRoles(result.skippedRoles);
+      }
+    } catch (err) {
+      // 接力失败静默（不阻塞主对话）
+      console.error("[chain] 接力执行失败:", err);
     }
   }
 
@@ -1161,6 +1710,9 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         if (res.error === "unsupported") setStreamError(t("chat.attachments.unsupportedType"));
         else if (res.error === "image-too-large") setStreamError(t("chat.attachments.imageTooLarge", { mb: 20 }));
         else setStreamError(t("chat.attachments.unsupportedType"));
+      } else if (res.kind === "folder") {
+        // 拖入文件夹 = 直接绑定为工作区（单一蓝 chip 表示），不进草稿、不再跟顶栏/草稿重复
+        await bindWorkspace(res.path);
       } else {
         setDraftAttachments((prev) => [...prev, res]);
       }
@@ -1256,8 +1808,8 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         </div>
       )}
       {/* 顶部控制栏 - Premium Glass Effect */}
-      <header className="px-6 py-4 flex items-center justify-between border-b border-white/10 glass z-10">
-        <div className="flex items-center gap-3">
+      <header className="px-6 py-3 flex items-center justify-between gap-x-3 gap-y-2 flex-wrap border-b border-white/10 glass z-10">
+        <div className="flex items-center gap-3 flex-wrap min-w-0">
           <ConversationSwitcher
             conversations={conversationList}
             activeId={conversationId}
@@ -1300,61 +1852,9 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
             {t("chat.smartPick")}
           </Button>
 
-          <div className="h-5 w-px bg-white/10 shrink-0" />
-
-          {/* 工作文件夹 + 工具权限三档（产品真北：让主对话能在本地真干活） */}
-          {workspacePath ? (
-            <div className="flex items-center gap-2">
-              <div
-                className="flex items-center gap-1.5 pl-2.5 pr-1.5 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-600 max-w-[160px]"
-                title={workspacePath}
-              >
-                <FolderOpen className="w-3.5 h-3.5 shrink-0" />
-                <span className="text-xs font-bold truncate">{workspacePath.split("/").filter(Boolean).pop()}</span>
-                <button
-                  type="button"
-                  onClick={() => void clearWorkspace()}
-                  disabled={isStreaming}
-                  title={t("chat.workspace.clear")}
-                  className="shrink-0 p-0.5 rounded-md hover:bg-emerald-500/20 disabled:opacity-40"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-              <div className="flex items-center rounded-xl bg-muted/40 p-0.5">
-                {([["read", Lock], ["confirm", ShieldCheck], ["auto", Zap]] as const).map(([mode, Icon]) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setPermissionMode(mode)}
-                    title={t(`chat.permission.${mode}Hint`)}
-                    className={cn(
-                      "px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors",
-                      permissionMode === mode ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    <Icon className="w-3 h-3" />
-                    {t(`chat.permission.${mode}`)}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => void chooseWorkspace()}
-              disabled={isStreaming}
-              className="h-9 px-3 text-xs font-medium hover:bg-primary/10 hover:text-primary transition-all rounded-xl gap-2"
-            >
-              <FolderOpen className="w-3.5 h-3.5" />
-              {t("chat.workspace.choose")}
-            </Button>
-          )}
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3 shrink-0">
           <Button
             type="button"
             size="icon"
@@ -1384,6 +1884,12 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
             <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 text-emerald-500 rounded-full border border-emerald-500/20">
               <Sparkles className="w-3 h-3" />
               <span className="text-[10px] font-bold uppercase">{cacheNotice}</span>
+            </div>
+          )}
+          {harnessNotice && (
+            <div className="flex items-center gap-2 px-3 py-1 bg-rose-500/10 text-rose-500 rounded-full border border-rose-500/20 animate-pulse">
+              <ShieldAlert className="w-3 h-3" />
+              <span className="text-[10px] font-bold uppercase">{harnessNotice}</span>
             </div>
           )}
         </div>
@@ -1419,7 +1925,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
              <p className="text-sm font-bold uppercase tracking-[0.4em] text-muted-foreground/30">{t("chat.ready")}</p>
           </div>
         ) : (
-          <div className="pb-32">
+          <div style={{ paddingBottom: inputAreaH + 48 }}>
             {messages.map((m) => {
               if (m.kind === "receipt" && m.receipt) {
                 return <ReceiptItem key={m.id} receipt={m.receipt} />;
@@ -1434,6 +1940,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
                   isStreaming={streamingThis}
                   elapsedLabel={streamingThis ? formatElapsed(streamElapsedMs) : undefined}
                   attachments={m.attachments}
+                  harness={m.harness}
                 />
               );
             })}
@@ -1480,8 +1987,20 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         )}
       </div>
 
+      {/* 回到底部：用户往上翻看历史时出现，点一下回到最新（输出再多也不抢滚动） */}
+      {showJumpToBottom && (
+        <button
+          type="button"
+          onClick={scrollToBottom}
+          title={t("chat.jumpToBottom")}
+          className="absolute bottom-32 left-1/2 -translate-x-1/2 z-30 w-9 h-9 rounded-full glass border border-white/15 shadow-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-white/10 transition-colors animate-in fade-in slide-in-from-bottom-2 duration-300"
+        >
+          <ArrowDown className="w-4 h-4" />
+        </button>
+      )}
+
       {/* 输入框区域 - Floating Command Center */}
-      <div className="absolute bottom-8 left-8 right-8 z-20 pointer-events-none">
+      <div ref={inputAreaRef} className="absolute bottom-8 left-8 right-8 z-20 pointer-events-none">
         {onOpenDebate && showDebateHint && !isStreaming && (
           <div className="max-w-4xl mx-auto mb-2.5 pointer-events-auto">
             <div className="glass rounded-2xl border border-primary/30 shadow-lg px-4 py-2.5 flex items-center gap-3">
@@ -1504,6 +2023,56 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
           className="max-w-4xl mx-auto glass rounded-[2.5rem] border border-white/20 shadow-2xl p-2.5 flex gap-3 pointer-events-auto group transition-all duration-500 hover:border-primary/30"
         >
           <div className="flex-1 relative flex flex-col">
+            {/* 工作文件夹（蓝 chip）+ 工具权限三档：就在输入框里、文件夹后面，单一来源不重复 */}
+            {workspacePath ? (
+              <div className="flex items-center gap-2 flex-wrap px-6 pt-2">
+                <span
+                  className="inline-flex items-center gap-1 text-xs rounded-lg pl-2 pr-1 py-1 border bg-primary/10 border-primary/30 text-primary max-w-[220px]"
+                  title={workspacePath}
+                >
+                  <FolderOpen className="w-3 h-3 shrink-0" />
+                  <span className="font-medium truncate">{workspacePath.split("/").filter(Boolean).pop()}</span>
+                  <button
+                    type="button"
+                    onClick={() => void clearWorkspace()}
+                    disabled={isStreaming}
+                    title={t("chat.workspace.clear")}
+                    className="shrink-0 p-0.5 rounded hover:bg-primary/20 disabled:opacity-40"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+                <div className="flex items-center rounded-lg bg-muted/40 p-0.5">
+                  {([["read", Lock], ["confirm", ShieldCheck], ["auto", Zap]] as const).map(([mode, Icon]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setPermissionMode(mode)}
+                      title={t(`chat.permission.${mode}Hint`)}
+                      className={cn(
+                        "px-2 py-1 rounded-md text-[10px] font-bold flex items-center gap-1 transition-colors",
+                        permissionMode === mode ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      <Icon className="w-3 h-3" />
+                      {t(`chat.permission.${mode}`)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="px-6 pt-2">
+                <button
+                  type="button"
+                  onClick={() => void chooseWorkspace()}
+                  disabled={isStreaming}
+                  className="inline-flex items-center gap-1 text-xs rounded-lg px-2 py-1 border border-dashed border-white/15 text-muted-foreground hover:text-primary hover:border-primary/30 transition-colors disabled:opacity-40"
+                >
+                  <FolderOpen className="w-3 h-3" />
+                  {t("chat.workspace.choose")}
+                </button>
+              </div>
+            )}
             {draftAttachments.length > 0 && (
               <div className="flex flex-wrap gap-2 px-6 pt-2">
                 {draftAttachments.map((a) => (
@@ -1624,6 +2193,46 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
               )}
             </div>
             {/* 编排者节点地图：已规划节点 + 当前高亮 + 每节点绑定模型（看得见、可接管） */}
+            {/* 阶段4 Handoff：main chat 完成后模型调 handoff 时显示路径横幅 */}
+            {handoffInfo && (
+              <HandoffBanner path={handoffInfo.path} truncated={handoffInfo.truncated} />
+            )}
+            {/* 产出物（阶段B）：tool_executions 派生的文件/终端工件，面板主角，模型名不出现 */}
+            <WorkArtifacts artifacts={artifacts} />
+            {/* 阶段 E2b：watch 接力进度条（单一来源：chainPlan + executedRoles + skippedRoles + abortedRole 派生）*/}
+            {orchestration?.chainPlan && orchestration.chainPlan.length > 0 && (
+              <ChainProgressBar
+                chainPlan={orchestration.chainPlan}
+                executedRoles={chainExecutedRoles}
+                skippedRoles={chainSkippedRoles}
+                abortedRole={chainAbortedRole}
+                running={chainRunning}
+                onStop={() => abortRef.current?.abort()}
+              />
+            )}
+            {/* 阶段 E1：watch 接力链（只展示顺序，零执行；E2 才真执行） */}
+            {orchestration?.chainPlan && orchestration.chainPlan.length > 0 && (
+              <div className="glass rounded-2xl p-4 border border-white/5 space-y-2">
+                <div className="text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50">
+                  {t("chat.orchestrator.chainPlanTitle")}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                  {orchestration.chainPlan.map((role, i) => (
+                    <span key={role} className="flex items-center gap-1.5">
+                      <span className="px-2 py-0.5 rounded-md bg-primary/10 text-primary font-bold">
+                        {t(`chat.orchestrator.roles.${role}`)}
+                      </span>
+                      {i < orchestration.chainPlan!.length - 1 && (
+                        <span className="text-muted-foreground/40">→</span>
+                      )}
+                    </span>
+                  ))}
+                </div>
+                <div className="text-[9px] text-muted-foreground/40 italic">
+                  {t("chat.orchestrator.chainPlanHint")}
+                </div>
+              </div>
+            )}
             {orchestration && orchestration.nodes.length > 0 && (
               <div className="glass rounded-2xl p-4 border border-white/5 space-y-2.5">
                 <div className="text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50">
@@ -1654,7 +2263,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
                             )}
                           />
                           <span className={cn("text-xs font-bold", isCurrent ? "text-primary" : "text-foreground/80")}>
-                            {t(`chat.orchestrator.nodeKinds.${n.kind}`)}
+                            {t(`chat.orchestrator.roles.${n.role}`)}
                           </span>
                           {isCurrent && (
                             <span className="ml-auto text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full bg-primary/15 text-primary">

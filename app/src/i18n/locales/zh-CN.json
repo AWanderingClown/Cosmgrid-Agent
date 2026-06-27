@@ -59,6 +59,8 @@
     "switchedTo": "切换至 {{name}}",
     "cacheHit": "命中缓存 · {{days}} 天前回答过",
     "contextTrimmed": "[较早的 {{count}} 条消息已省略以节省 token]",
+    "harnessRetry": "检测到可能编造 · 正在让模型自查重答",
+      "intentNudgeRetry": "上条说要做但没真调工具 · 自动催一次…",
     "smartPick": "智能推荐",
     "workspace": {
       "choose": "工作文件夹",
@@ -127,28 +129,69 @@
       "inTokens": "输入",
       "outTokens": "输出",
       "currentActivity": "当前活动",
-      "idle": "空闲，等你发话"
+      "idle": "空闲，等你发话",
+      "artifacts": "产出物",
+      "artifactsEmpty": "还没产出文件或命令",
+      "files": "文件",
+      "terminals": "终端",
+      "truncated": "共 {{total}} 行，已显示前 {{shown}} 行",
+      "htmls": "HTML 预览",
+      "htmlSandboxTitle": "HTML 预览（已禁用脚本）",
+      "htmlJsDisabledHint": "预览中 JavaScript 已被禁用（安全），如需完整效果请下载到本地浏览器打开",
+      "htmlTooLarge": "HTML 工件过大（{{size}} 字节）— 降级显示源码而非沙箱预览",
+      "diffNoChange": "无变化",
+      "diffTooLarge": "共 {{total}} 行，仅显示前 {{shown}} 行"
+    },
+    "handoff": {
+      "inProgress": "正在转交给 {{role}}…",
+      "transferred": "已转交给 {{role}}：{{reason}}",
+      "path": "接力路径：{{path}}",
+      "truncated": "已达到 handoff {{max}} 步上限",
+      "error": "Handoff 失败：{{message}}",
+      "reason": "原因"
     },
     "thinking": "思考中",
+    "thinkingDone": "思考过程",
+    "toolCall": "工具调用中",
+    "toolCallDone": "工具调用片段",
+    "jumpToBottom": "回到底部",
     "replying": "回复中",
     "queued": "排队中",
     "inputDraftHint": "模型回复中… 可以继续发，会排队依次处理",
     "orchestrator": {
       "panelTitle": "工作节点",
       "currentBadge": "当前",
-      "nodeKinds": {
-        "planning": "规划",
-        "coding": "写代码",
-        "testing": "测试",
-        "review": "审查",
-        "chat": "对话"
+      "roles": {
+        "leader": "Leader",
+        "architect": "架构评审",
+        "frontend": "前端工程师",
+        "backend": "后端工程师",
+        "runner": "Runner",
+        "tester": "测试工程师",
+        "reviewer": "审查工程师",
+        "security": "安全工程师"
       },
       "receiptPlanned": "已规划 {{count}} 个工作节点 · 当前「{{node}}」用 {{model}}",
       "receiptEntered": "进入「{{node}}」节点 · 自动用 {{model}}",
       "receiptSwitched": "「{{node}}」节点自动切到 {{model}}",
       "receiptReason": "判断依据：{{reason}}",
       "receiptNoModel": "（暂无可用模型，先去接入页配置）",
-      "detailNodes": "节点规划"
+      "detailNodes": "节点规划",
+      "chainPlanTitle": "接力顺序（E1 预览）",
+      "chainPlanHint": "按顺序接力。自动执行等 E2 —— 当前仅展示顺序。",
+      "chainProgressTitle": "接力进度",
+      "chainProgressIdle": "暂无接力",
+      "chainProgressLabel": "{{done}} / {{total}}",
+      "chainRoleStart": "起点",
+      "chainRolePending": "待命",
+      "chainRoleExecuting": "执行中…",
+      "chainRoleDone": "已完成",
+      "chainRoleSkipped": "已跳过",
+      "chainRoleAborted": "已中止",
+      "chainStopButton": "中止接力",
+      "chainStarted": "▶ 接力开始：{{total}} 跳",
+      "chainStopped": "⛔ 接力已中止（停在 {{role}}）",
+      "chainCompleted": "✓ 接力完成（{{count}} 跳）"
     }
   },
   "providers": {
@@ -308,6 +351,10 @@
     "small_script": {
       "name": "小型脚本模板",
       "desc": "main_chat / direct_generation / testing（适合一次性脚本生成）"
+    },
+    "default_eight_roles": {
+      "name": "默认 8 角色",
+      "desc": "给 8 个团队角色（leader / architect / frontend / backend / runner / tester / reviewer / security）每个单独绑一个模型。主对话无 project 时用这套。"
     }
   },
   "handoffMarkdown": {
@@ -331,6 +378,8 @@
     "fallbackModel": "故障自动切换模型",
     "fallbackModelPlaceholder": "无备用方案",
     "fallbackDisabled": "不启用备用方案",
+    "eightRolesBinding": "8 角色 · 每个角色绑一个模型（推荐）",
+    "legacyWorkRoles": "老 Work-Role 列表（向后兼容）",
     "selectTemplateHint": "请从左侧选择一个方案模版"
   },
   "projects": {
@@ -471,6 +520,13 @@
     "byModelTitle": "按模型成本",
     "calls": "{{n}} 次调用",
     "noData": "暂无用量数据，去对话页聊几句就有了。",
+    "byModelDrilldownTitle": "按角色拆分（已展开该模型）",
+    "byModelDrilldownHint": "点击模型行查看哪些角色用过",
+    "actorRoleUnknown": "（未分类）",
+    "stage": "项目工作区",
+    "actorRoleEmptyHint": "该模型暂无角色用量",
+    "actorRoleInputTokensCol": "输入",
+    "actorRoleOutputTokensCol": "输出",
     "perfTitle": "模型真实表现（智能路由依据）",
     "perfEmpty": "样本积累中——每个模型每类任务满 30 次后，智能路由才会据此评分选模型。",
     "toolsTitle": "AI 工具操作记录",

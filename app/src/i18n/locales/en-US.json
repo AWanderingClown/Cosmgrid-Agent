@@ -59,6 +59,8 @@
     "switchedTo": "Switched to {{name}}",
     "cacheHit": "Cache hit · answered {{days}}d ago",
     "contextTrimmed": "[{{count}} earlier messages omitted to save tokens]",
+    "harnessRetry": "Possible fabrication · asking the model to self-check and redo",
+      "intentNudgeRetry": "Said you'd act but didn't call any tool · asking again…",
     "smartPick": "Smart Pick",
     "workspace": {
       "choose": "Workspace",
@@ -127,28 +129,69 @@
       "inTokens": "In",
       "outTokens": "Out",
       "currentActivity": "Current Activity",
-      "idle": "Idle — your turn"
+      "idle": "Idle — your turn",
+      "artifacts": "Artifacts",
+      "artifactsEmpty": "No files or commands produced yet",
+      "files": "Files",
+      "terminals": "Terminal",
+      "truncated": "{{total}} lines total, showing first {{shown}}",
+      "htmls": "HTML previews",
+      "htmlSandboxTitle": "HTML preview (scripts disabled)",
+      "htmlJsDisabledHint": "JavaScript is disabled in this preview for safety. Download the file to view in a browser for full effect.",
+      "htmlTooLarge": "HTML artifact is too large ({{size}} bytes) — showing raw source instead of sandboxed preview",
+      "diffNoChange": "No changes",
+      "diffTooLarge": "{{total}} lines, showing first {{shown}}"
+    },
+    "handoff": {
+      "inProgress": "Handing off to {{role}}…",
+      "transferred": "Transferred to {{role}}: {{reason}}",
+      "path": "Handoff path: {{path}}",
+      "truncated": "Handoff reached the {{max}} step limit",
+      "error": "Handoff failed: {{message}}",
+      "reason": "Reason"
     },
     "thinking": "Thinking",
+    "thinkingDone": "Reasoning",
+    "toolCall": "Calling tool",
+    "toolCallDone": "Tool call",
+    "jumpToBottom": "Jump to bottom",
     "replying": "Replying",
     "queued": "Queued",
     "inputDraftHint": "Model is replying… keep typing, messages are queued and handled in order",
     "orchestrator": {
       "panelTitle": "Work Nodes",
       "currentBadge": "Current",
-      "nodeKinds": {
-        "planning": "Planning",
-        "coding": "Coding",
-        "testing": "Testing",
-        "review": "Review",
-        "chat": "Chat"
+      "roles": {
+        "leader": "Leader",
+        "architect": "Architect",
+        "frontend": "Frontend",
+        "backend": "Backend",
+        "runner": "Runner",
+        "tester": "Tester",
+        "reviewer": "Reviewer",
+        "security": "Security"
       },
       "receiptPlanned": "Planned {{count}} work nodes · current \"{{node}}\" uses {{model}}",
       "receiptEntered": "Entered \"{{node}}\" node · auto-using {{model}}",
       "receiptSwitched": "\"{{node}}\" node auto-switched to {{model}}",
       "receiptReason": "Why: {{reason}}",
       "receiptNoModel": "(No usable model — configure one on the providers page)",
-      "detailNodes": "Node plan"
+      "detailNodes": "Node plan",
+      "chainPlanTitle": "Chain Plan (E1 preview)",
+      "chainPlanHint": "Sequential order. Auto-execution is coming in E2 — currently preview-only.",
+      "chainProgressTitle": "Chain Progress",
+      "chainProgressIdle": "No chain running.",
+      "chainProgressLabel": "{{done}} / {{total}}",
+      "chainRoleStart": "Start",
+      "chainRolePending": "Pending",
+      "chainRoleExecuting": "Executing…",
+      "chainRoleDone": "Done",
+      "chainRoleSkipped": "Skipped",
+      "chainRoleAborted": "Aborted",
+      "chainStopButton": "Abort chain",
+      "chainStarted": "▶ Chain started: {{total}} step(s)",
+      "chainStopped": "⛔ Chain aborted (stopped at {{role}})",
+      "chainCompleted": "✓ Chain completed ({{count}} step(s))"
     }
   },
   "providers": {
@@ -308,6 +351,10 @@
     "small_script": {
       "name": "Small Script",
       "desc": "main_chat / direct_generation / testing (for one-off scripts)"
+    },
+    "default_eight_roles": {
+      "name": "Default 8 Roles",
+      "desc": "Bind each of the 8 team roles (leader / architect / frontend / backend / runner / tester / reviewer / security) to a model. Used by the main chat when no project is selected."
     }
   },
   "handoffMarkdown": {
@@ -331,7 +378,9 @@
     "fallbackModel": "Fallback Model",
     "fallbackModelPlaceholder": "No backup",
     "fallbackDisabled": "Don't use a backup",
-    "selectTemplateHint": "Select a template on the left"
+    "selectTemplateHint": "Select a template on the left",
+    "eightRolesBinding": "8 Roles · Bind a Model Per Role (Recommended)",
+    "legacyWorkRoles": "Legacy Work-Roles (Backward-Compatible)"
   },
   "projects": {
     "sectionLabel": "Active Project Center",
@@ -471,6 +520,13 @@
     "byModelTitle": "Cost by model",
     "calls": "{{n}} calls",
     "noData": "No usage yet — chat a bit and it'll show up here.",
+    "byModelDrilldownTitle": "By actor role (clicked model)",
+    "byModelDrilldownHint": "Click a model row to see which roles used it",
+    "actorRoleUnknown": "(Uncategorized)",
+    "stage": "Project workspace",
+    "actorRoleEmptyHint": "No role usage for this model",
+    "actorRoleInputTokensCol": "In",
+    "actorRoleOutputTokensCol": "Out",
     "perfTitle": "Real model performance (routing basis)",
     "perfEmpty": "Building samples — once each model has 30+ calls per task type, smart routing scores models from this.",
     "toolsTitle": "AI tool activity",
