@@ -24,6 +24,7 @@ import {
 import { BUILT_IN_TEMPLATES } from "@/lib/templates";
 import { parseWorkRoles } from "@/lib/api";
 import { autoAssignModels } from "@/lib/llm/model-capabilities";
+import { ROLE_IDS } from "@/lib/llm/orchestrator";
 import { cn } from "@/lib/utils";
 
 function roleLabel(role: string, t: (k: string, opts?: Record<string, unknown>) => string): string {
@@ -60,12 +61,16 @@ export function TemplatesPage() {
 
   const selected = templates.find((tpl) => tpl.id === selectedId) ?? null;
   const builtInDef = selected ? BUILT_IN_TEMPLATES.find((b) => b.name === selected.name) : null;
-  const roleNames = builtInDef ? builtInDef.workRoles : roles.map((r) => r.workRole);
+  // 老 workRole 列表只显示非 8 角色的行（一列一义，避免"默认 8 角色"模板在老区把同样的 8 行重复显示）
+  const eightRoleSet = new Set<string>(ROLE_IDS);
+  const allRoleNames = builtInDef ? builtInDef.workRoles : roles.map((r) => r.workRole);
+  const roleNames = allRoleNames.filter((r) => !eightRoleSet.has(r));
 
   function roleNamesFor(templateId: string, existing: ProjectTemplateRole[]): string[] {
     const tpl = templates.find((t) => t.id === templateId);
     const def = tpl ? BUILT_IN_TEMPLATES.find((b) => b.name === tpl.name) : null;
-    return def ? def.workRoles : existing.map((r) => r.workRole);
+    const names = def ? def.workRoles : existing.map((r) => r.workRole);
+    return names.filter((r) => !eightRoleSet.has(r));
   }
 
   async function loadRolesWithAutoAssign(templateId: string) {
@@ -226,6 +231,61 @@ export function TemplatesPage() {
                   </div>
                 )}
 
+                {/* 阶段 D：8 角色绑定区（**单一来源**：从 ROLE_IDS 读，不许硬编码；老 workRole 列表已过滤 8 角色避免重复） */}
+                <div className="space-y-4">
+                  <div className="text-[10px] font-black text-muted-foreground/40 uppercase tracking-[0.2em] px-1">
+                    {t("templates.eightRolesBinding")}
+                  </div>
+                  {ROLE_IDS.map((role) => {
+                    const a = roles.find((r) => r.workRole === role);
+                    return (
+                      <div
+                        key={role}
+                        className="flex flex-col lg:flex-row lg:items-center gap-6 bg-white/5 dark:bg-zinc-900/30 border border-white/5 hover:border-primary/20 rounded-2xl p-6 transition-all duration-300"
+                      >
+                        <div className="w-40 shrink-0">
+                          <div className="text-sm font-black tracking-tight text-primary">
+                            {t(`chat.orchestrator.roles.${role}`)}
+                          </div>
+                          <p className="text-[10px] text-muted-foreground/60 mt-1 uppercase font-bold tracking-wider">
+                            {t(`templates.eightRole.${role}_desc`, { defaultValue: "" })}
+                          </p>
+                        </div>
+                        <ChevronRight className="hidden lg:block w-4 h-4 text-muted-foreground/20" />
+                        <div className="flex-1">
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black text-muted-foreground/40 uppercase px-1">
+                              {t("templates.primaryModel")}
+                            </label>
+                            <Select
+                              value={a?.modelId ?? ""}
+                              onValueChange={(v) => void assignModel(role, v)}
+                              disabled={saving}
+                            >
+                              <SelectTrigger className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-xs font-bold dark:text-white">
+                                <SelectValue placeholder={t("templates.primaryModelPlaceholder")} />
+                              </SelectTrigger>
+                              <SelectContent className="glass border-white/10 rounded-xl">
+                                {models.map((m) => (
+                                  <SelectItem key={m.id} value={m.id} className="rounded-lg">
+                                    {m.displayName ?? m.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* 老 workRole 列表（已过滤 8 角色行避免重复） */}
+                {roleNames.length > 0 && (
+                <div className="space-y-4">
+                  <div className="text-[10px] font-black text-muted-foreground/40 uppercase tracking-[0.2em] px-1">
+                    {t("templates.legacyWorkRoles")}
+                  </div>
                 <div className="space-y-4">
                   {roleNames.map((role) => {
                     const a = roleAssignment(role);
@@ -281,6 +341,8 @@ export function TemplatesPage() {
                     );
                   })}
                 </div>
+                </div>
+                )}
               </Card>
             ) : (
               <div className="h-[500px] flex items-center justify-center glass rounded-[3rem] border-dashed">

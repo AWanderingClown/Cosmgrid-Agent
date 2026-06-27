@@ -285,7 +285,7 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
           },
         },
         // role 不传：chat-fallback 内部按最后一条 user 消息推断难度桶
-        { signal: controller.signal, projectId: stage.projectId, ...(tools ? { tools } : {}) },
+        { signal: controller.signal, projectId: stage.projectId, actorRole: "stage", ...(tools ? { tools } : {}) },
       );
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
