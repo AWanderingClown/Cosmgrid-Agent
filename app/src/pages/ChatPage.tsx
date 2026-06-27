@@ -12,6 +12,7 @@ import { parseThinking } from "@/lib/parse-thinking";
 import { deriveArtifacts, type WorkArtifact } from "@/lib/work-artifacts";
 import { WorkArtifacts } from "@/components/work-panel/WorkArtifacts";
 import { HandoffBanner } from "@/components/chat/HandoffBanner";
+import { HandoffStepCard } from "@/components/chat/HandoffStepCard";
 import { ChainProgressBar } from "@/components/chat/ChainProgressBar";
 import { ensureModelLimitsLoaded } from "@/lib/llm/model-limits";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
@@ -581,6 +582,8 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   const [orchestration, setOrchestration] = useState<OrchestrationState | null>(null);
   // 阶段4 Handoff：main chat 完成后模型调 handoff 时的路径（length>1 表示发生了 handoff）
   const [handoffInfo, setHandoffInfo] = useState<{ path: string[]; truncated?: boolean } | null>(null);
+  // T22-2C：每跳 agent 的流式输出独立成消息（id 唯一 + content + done 标记）
+  const [handoffSteps, setHandoffSteps] = useState<{ id: string; agentId: string; content: string; done: boolean }[]>([]);
   const orchestrationRef = useRef<OrchestrationState | null>(null);
   // 阶段 E2b：chain 接力的运行时状态（驱动进度条 + 中止按钮 + 角色消息渲染）
   // 单一来源：chainPlan 来自 orchestration.chainPlan（E1），executedRoles/skippedRoles/abortedRole 来自 E2a runChain 回调
@@ -1218,9 +1221,21 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
                       getApiKey,
                       signal: controller.signal,
                       onDelta: (delta) => {
-                        // T22-2C 完整版：每跳 agent 的流式输出追加到 fullContent
-                        // 这里先 noop（简化），等 T22-2C 改成新消息流
+                        // 兼容：仍然累积到 main chat 的 fullContent（HandoffBanner 上下文）
                         fullContent += delta;
+                      },
+                      // T22-2C：每跳 agent 流式独立消息
+                      onStepStart: (agentId) => {
+                        const stepId = `handoff-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                        setHandoffSteps((prev) => [...prev, { id: stepId, agentId, content: "", done: false }]);
+                      },
+                      onStepDelta: (agentId, delta) => {
+                        setHandoffSteps((prev) =>
+                          prev.map((s) => (s.agentId === agentId && !s.done ? { ...s, content: s.content + delta } : s)),
+                        );
+                      },
+                      onStepDone: (agentId) => {
+                        setHandoffSteps((prev) => prev.map((s) => (s.agentId === agentId ? { ...s, done: true } : s)));
                       },
                       onSwitched: (label) => {
                         setSwitchNotice(t("chat.switchedTo", { name: label }));
@@ -1944,6 +1959,14 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
                 />
               );
             })}
+            {/* T22-2C：handoff 每跳 agent 流式输出独立消息（跟在 main chat 消息后） */}
+            {handoffSteps.map((s) => (
+              <div key={s.id} className="flex gap-4 px-6 py-2 max-w-4xl mx-auto w-full">
+                <div className="flex-1 min-w-0">
+                  <HandoffStepCard agentId={s.agentId} content={s.content} done={s.done} />
+                </div>
+              </div>
+            ))}
             {/* 排队中的消息：模型回复时用户继续发的句子，淡显 + "排队中"标签，让用户看到没丢、在等着处理 */}
             {isStreaming && pendingQueue.map((q, i) => (
               <div key={`pending-${i}`} className="flex gap-4 px-6 py-4 opacity-50">

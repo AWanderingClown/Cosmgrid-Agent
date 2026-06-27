@@ -148,7 +148,9 @@
       "path": "接力路径：{{path}}",
       "truncated": "已达到 handoff {{max}} 步上限",
       "error": "Handoff 失败：{{message}}",
-      "reason": "原因"
+      "reason": "原因",
+      "stepStreaming": "流式中…",
+      "stepDone": "已完成"
     },
     "thinking": "思考中",
     "thinkingDone": "思考过程",

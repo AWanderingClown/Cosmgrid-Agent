@@ -27,6 +27,13 @@ export interface HandoffRunnerContext {
   onSwitched?: (modelLabel: string) => void;
   /** 该 agent 的 system prompt 注入（可覆盖 ExpertAgent.systemPrompt） */
   systemPromptOverride?: string;
+  // === 阶段4 T22-2C：每跳 agent 流式独立消息 ===
+  /** 该 agent 开始跑（ChatPage 用于插入新消息 + 显示"正在流式"） */
+  onStepStart?: (agentId: string) => void;
+  /** 该 agent 流式增量（带 agentId，让 ChatPage 知道是哪一跳的 delta） */
+  onStepDelta?: (agentId: string, delta: string) => void;
+  /** 该 agent 跑完（ChatPage 用于标记消息 done） */
+  onStepDone?: (agentId: string, content: string, toolCalls: { toolName: string; input?: unknown }[]) => void;
 }
 
 export interface HandoffStepResult {
@@ -67,12 +74,15 @@ export async function runExpertAgentStep(
   let fullContent = "";
   const toolCalls: { toolName: string; input?: unknown }[] = [];
   // 5. 调 streamWithFallback
+  ctx.onStepStart?.(agent.id);
   await streamWithFallback(
     [endpoint],
     messages.map((m) => ({ role: m.role, content: m.content })),
     {
       onDelta: (delta) => {
         fullContent += delta;
+        // T22-2C：转发带 agentId 的 delta，ChatPage 用它给"当前 agent 消息"追加
+        ctx.onStepDelta?.(agent.id, delta);
         ctx.onDelta?.(delta);
       },
       onSwitched: (_from, to) => {
@@ -88,5 +98,6 @@ export async function runExpertAgentStep(
       actorRole: agent.id,
     },
   );
+  ctx.onStepDone?.(agent.id, fullContent, toolCalls);
   return { content: fullContent, toolCalls };
 }

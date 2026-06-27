@@ -148,7 +148,9 @@
       "path": "Handoff path: {{path}}",
       "truncated": "Handoff reached the {{max}} step limit",
       "error": "Handoff failed: {{message}}",
-      "reason": "Reason"
+      "reason": "Reason",
+      "stepStreaming": "streaming…",
+      "stepDone": "done"
     },
     "thinking": "Thinking",
     "thinkingDone": "Reasoning",
