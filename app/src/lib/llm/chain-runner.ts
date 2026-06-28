@@ -24,7 +24,13 @@
 import { streamWithFallback, type ModelEndpoint, type StreamUsage, type SwitchReason } from "./chat-fallback";
 import { pickBestModelWithPerformance } from "./model-performance-scoring";
 import { ROLE_IDS, ROLE_LABELS, ROLE_TO_WORK_ROLE, type RoleId } from "./orchestrator";
-import { detectIntentNoToolCall, buildIntentNudgePrompt } from "./harness/feedback";
+import {
+  detectIntentNoToolCall,
+  buildIntentNudgePrompt,
+  buildCorrectionPrompt,
+  isClean,
+  type HarnessVerdict,
+} from "./harness/feedback";
 import type { ChatMsg } from "./context-compressor";
 
 /** ChainContext — 接力上下文，纯函数派生。E2a 内部用，E2b 也可能用 */
@@ -195,6 +201,16 @@ export interface ChainCallbacks {
   onSwitched?: (from: ModelEndpoint, to: ModelEndpoint, reason: SwitchReason) => void;
 }
 
+export interface ChainHarnessCheckArgs {
+  role: RoleId;
+  content: string;
+  attempt: number;
+  hasTools: boolean;
+  startedAt: string;
+  finishReason: string;
+  toolCallCount: number;
+}
+
 export interface ChainArgs {
   /** E1 computeChain 输出——已过滤 leader 的接力链（最多 MAX_CHAIN_LENGTH 个） */
   chain: RoleId[];
@@ -214,6 +230,8 @@ export interface ChainArgs {
   projectId?: string | null;
   /** E2a DI：测试时注入 fake streamWithFallback，避开 vi.fn() 异步 mock 拿 callbacks 的坑 */
   _deps?: { streamWithFallback?: typeof streamWithFallback };
+  /** 阶段 S2：每跳回答完成后的 Harness 校验（按该跳开始时间做证据窗口过滤）。 */
+  harnessCheck?: (args: ChainHarnessCheckArgs) => Promise<HarnessVerdict | null>;
   /** 回调 */
   callbacks?: ChainCallbacks;
 }
@@ -225,6 +243,8 @@ export interface ChainResult {
   executedRoles: { role: RoleId; content: string }[];
   /** 跳过的角色（无模型可用） */
   skippedRoles: RoleId[];
+  /** 最终仍未通过 Harness 的角色（重答上限后仍违规） */
+  roleHarness: Partial<Record<RoleId, HarnessVerdict>>;
 }
 
 /**
@@ -246,20 +266,22 @@ export interface ChainResult {
 export async function runChain(args: ChainArgs): Promise<ChainResult> {
   const executedRoles: { role: RoleId; content: string }[] = [];
   const skippedRoles: RoleId[] = [];
+  const roleHarness: Partial<Record<RoleId, HarnessVerdict>> = {};
 
   // 防御：空 chain → 立即返（E1 已强制 chainPlan.length > 0 才触发，但保险）
   if (args.chain.length === 0) {
-    return { stoppedAt: null, executedRoles, skippedRoles };
+    return { stoppedAt: null, executedRoles, skippedRoles, roleHarness };
   }
 
   args.callbacks?.onChainStart?.(args.chain.length);
 
   for (let i = 0; i < args.chain.length; i++) {
     if (args.controller.signal.aborted) {
-      return { stoppedAt: args.chain[i]!, executedRoles, skippedRoles };
+      return { stoppedAt: args.chain[i]!, executedRoles, skippedRoles, roleHarness };
     }
 
     const role = args.chain[i]!;
+    const roleStartedAt = new Date().toISOString();
     args.callbacks?.onRoleStart?.(role, i, args.chain.length);
 
     // 1. 选模型
@@ -283,17 +305,21 @@ export async function runChain(args: ChainArgs): Promise<ChainResult> {
     let lastFinishReason = "stop";
     let lastContent = ""; // 保留 attempt=0 的 content 用于 nudge 重答时拼上下文
     let nudgeAttempted = false;
+    let finalHarnessVerdict: HarnessVerdict | null = null;
+    let correctionPrompt: string | null = null;
 
     for (let attempt = 0; attempt <= MAX_HARNESS_RETRY; attempt++) {
       if (args.controller.signal.aborted) break;
       content = "";
       if (attempt === 0) lastContent = "";
 
-      const streamMessages: ChatMsg[] = (attempt === 0) ? baseMessages : [
-        ...baseMessages,
-        { role: "assistant", content: lastContent },
-        { role: "user", content: buildIntentNudgePrompt() },
-      ];
+      const streamMessages: ChatMsg[] = attempt === 0
+        ? baseMessages
+        : [
+            ...baseMessages,
+            { role: "assistant", content: lastContent },
+            { role: "user", content: correctionPrompt ?? buildIntentNudgePrompt() },
+          ];
 
       // ★ tools 必传（命脉）：让 chain 角色能真调工具，否则重演 M3 "想干活没工具" bug
       const swf = args._deps?.streamWithFallback ?? streamWithFallback;
@@ -329,7 +355,7 @@ export async function runChain(args: ChainArgs): Promise<ChainResult> {
       } catch (err) {
         // 某跳模型调用失败 → 停止整条链（不重试别的角色）
         args.callbacks?.onRoleDone?.(role, i, args.chain.length, `[角色 ${role} 执行失败：${err instanceof Error ? err.message : String(err)}]`);
-        return { stoppedAt: role, executedRoles, skippedRoles };
+        return { stoppedAt: role, executedRoles, skippedRoles, roleHarness };
       }
 
       if (args.controller.signal.aborted) break;
@@ -348,8 +374,27 @@ export async function runChain(args: ChainArgs): Promise<ChainResult> {
         lastFinishReason === "stop" &&
         toolCallCount === 0 &&
         detectIntentNoToolCall(content);
+      finalHarnessVerdict = args.harnessCheck
+        ? await args.harnessCheck({
+            role,
+            content,
+            attempt,
+            hasTools: !!args.tools,
+            startedAt: roleStartedAt,
+            finishReason: lastFinishReason,
+            toolCallCount,
+          })
+        : null;
+      const needsCorrection = !!(finalHarnessVerdict && !isClean(finalHarnessVerdict));
+      if (needsCorrection && attempt < MAX_HARNESS_RETRY) {
+        correctionPrompt = buildCorrectionPrompt(finalHarnessVerdict!, { hasTools: !!args.tools });
+        lastContent = content;
+        continue;
+      }
       if (needsNudge && attempt < MAX_HARNESS_RETRY && !nudgeAttempted) {
         nudgeAttempted = true;
+        correctionPrompt = buildIntentNudgePrompt();
+        lastContent = content;
         continue;
       }
       break;
@@ -357,15 +402,18 @@ export async function runChain(args: ChainArgs): Promise<ChainResult> {
 
     if (args.controller.signal.aborted) {
       args.callbacks?.onRoleDone?.(role, i, args.chain.length, content);
-      return { stoppedAt: role, executedRoles, skippedRoles };
+      return { stoppedAt: role, executedRoles, skippedRoles, roleHarness };
     }
 
+    if (finalHarnessVerdict && !isClean(finalHarnessVerdict)) {
+      roleHarness[role] = finalHarnessVerdict;
+    }
     executedRoles.push({ role, content });
     args.callbacks?.onRoleDone?.(role, i, args.chain.length, content);
   }
 
   args.callbacks?.onChainDone?.(executedRoles);
-  return { stoppedAt: null, executedRoles, skippedRoles };
+  return { stoppedAt: null, executedRoles, skippedRoles, roleHarness };
 }
 
 // ============ 重新导出 ROLE_IDS 供 ChatPage 用（避免 ChatPage 多 import） ============

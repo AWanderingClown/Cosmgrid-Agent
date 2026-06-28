@@ -82,7 +82,8 @@
     "tools": {
       "confirmTitle": "AI 请求一个操作，请确认",
       "approve": "确认执行",
-      "reject": "拒绝"
+      "reject": "取消",
+      "confirmHint": "详细内容将在工作面板中展示。"
     },
     "smartPickResult": {
       "title": "智能推荐",
@@ -183,8 +184,8 @@
       "receiptReason": "判断依据：{{reason}}",
       "receiptNoModel": "（暂无可用模型，先去接入页配置）",
       "detailNodes": "节点规划",
-      "chainPlanTitle": "接力顺序（E1 预览）",
-      "chainPlanHint": "按顺序接力。自动执行等 E2 —— 当前仅展示顺序。",
+      "chainPlanTitle": "接力顺序",
+      "chainPlanHint": "系统会按这个顺序自动接力；你也可以随时中止接力。",
       "chainProgressTitle": "接力进度",
       "chainProgressIdle": "暂无接力",
       "chainProgressLabel": "{{done}} / {{total}}",
@@ -804,6 +805,12 @@
       "tagsPlaceholder": "例如：auth, 减负, v0.3",
       "tagsHint": "标签用于跨项目检索时跟项目描述 / 其他记忆匹配",
       "save": "保存"
+    },
+    "relatedMemories": {
+      "title": "跨项目参考",
+      "hint": "仅展示高重要度，且每个项目最多 1 条",
+      "fromProject": "来自 {{name}}",
+      "unknownProject": "未命名项目"
     }
   }
 }

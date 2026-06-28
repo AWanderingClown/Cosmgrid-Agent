@@ -14,7 +14,7 @@ import { WorkArtifacts } from "@/components/work-panel/WorkArtifacts";
 import { ChainProgressBar } from "@/components/chat/ChainProgressBar";
 import { ensureModelLimitsLoaded } from "@/lib/llm/model-limits";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
-import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, toolExecutions, getRoleBindingsForConversation, type Conversation, type DbMessage } from "@/lib/db";
+import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, toolExecutions, getRoleBindingsForConversation, projects as dbProjects, projectMemories as dbProjectMemories, type Conversation, type DbMessage, type ToolExecutionRow } from "@/lib/db";
 import { type ToolConfirmRequest } from "@/lib/llm/tools";
 import { prepareWorkspaceToolRuntime, type WorkspaceToolRuntime } from "@/lib/llm/workspace-tool-runtime";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -29,7 +29,7 @@ import { routeMessage } from "@/lib/llm/smart-router";
 import { isSmartRoutingEnabled, usePermissionModeSetting } from "@/lib/app-settings";
 import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
 import { compressHistory, type ChatMsg } from "@/lib/llm/context-compressor";
-import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble } from "@/lib/llm/context-preamble";
+import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble, buildProjectMemoryPreamble } from "@/lib/llm/context-preamble";
 import { evaluateHarness, isClean, buildCorrectionPrompt, detectIntentNoToolCall, buildIntentNudgePrompt, type HarnessVerdict } from "@/lib/llm/harness/feedback";
 import { runChain as runChainImpl } from "@/lib/llm/chain-runner";
 import { type RoleId } from "@/lib/llm/orchestrator";
@@ -105,6 +105,13 @@ interface ReceiptContent {
 }
 
 type ChatUsage = StreamUsage;
+
+function filterReadRecordsSince(rows: ToolExecutionRow[], sinceIso: string | null): ReadRecord[] {
+  const sinceTs = sinceIso ? Date.parse(sinceIso) : Number.NEGATIVE_INFINITY;
+  return rows
+    .filter((r) => r.toolName === "read" && Date.parse(r.createdAt) >= sinceTs)
+    .map((r) => ({ input: r.input, status: r.status }));
+}
 
 /** 安全解析 role="note" 消息存的回执 JSON（坏数据返回 null） */
 function parseReceipt(content: string): ReceiptContent | null {
@@ -611,6 +618,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   const workPanel = usePanelResize({ initial: 320, min: 240, max: 560, edge: "left" });
 
   const abortRef = useRef<AbortController | null>(null);
+  const chainAbortRef = useRef<AbortController | null>(null);
   const pendingRoutingDecisionRef = useRef<{
     prompt: string;
     baselineModelId: string;
@@ -638,6 +646,23 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   // 不再抢鼠标。ref 存实时值给滚动逻辑用，state 仅驱动「回到底部」按钮显隐。
   const stickToBottomRef = useRef(true);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+
+  // Harness 闭环：按时间窗口取本轮真实 read 记录，避免整段会话的旧工具审计污染当前判断。
+  async function evalHarnessForConversation(
+    convId: string | null,
+    content: string,
+    sinceIso: string | null,
+  ): Promise<HarnessVerdict | null> {
+    if (!convId || !content.trim()) return null;
+    try {
+      const all = await toolExecutions.listByConversation(convId);
+      setArtifacts(deriveArtifacts(all));
+      const readRecords = filterReadRecordsSince(all, sinceIso);
+      return evaluateHarness(content, readRecords);
+    } catch {
+      return null;
+    }
+  }
 
   const scrollToBottom = () => {
     const el = scrollRef.current;
@@ -773,6 +798,21 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     confirmResolverRef.current = null;
     setPendingConfirm(null);
   }
+
+  useEffect(() => {
+    if (!pendingConfirm) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        resolveConfirm(false);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        resolveConfirm(true);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [pendingConfirm]);
 
   // 绑定工作文件夹到当前会话并落库（选择器选中 / 拖入文件夹都走这里，单一来源）。
   async function bindWorkspace(path: string) {
@@ -1006,24 +1046,6 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         .catch(() => {});
     };
 
-    // Harness 闭环：查本次对话真实 read 记录，评估这条回答是否在编造（声称读了没读 / 吐伪工具）。
-    // 返回 verdict 供调用方决定标黄 + 是否回填让模型重答；失败返回 null（静默，绝不阻断主对话）。
-    const evalHarness = async (convId: string | null, content: string): Promise<HarnessVerdict | null> => {
-      if (!convId || !content.trim()) return null;
-      let readRecords: ReadRecord[] = [];
-      try {
-        const all = await toolExecutions.listByConversation(convId);
-        // 查一次库，原始行同时喂 harness（过滤 read）和工作面板工件派生——不重复查
-        readRecords = all
-          .filter((r) => r.toolName === "read")
-          .map((r) => ({ input: r.input, status: r.status }));
-        setArtifacts(deriveArtifacts(all));
-      } catch {
-        return null; // 查询失败不阻塞对话
-      }
-      return evaluateHarness(content, readRecords);
-    };
-
     const userMsg: ChatMessage = { id: userId, role: "user", content: text, ...(attachments?.length ? { attachments } : {}) };
     const assistantId = crypto.randomUUID();
     const assistantMsg: ChatMessage = { id: assistantId, role: "assistant", content: "", modelLabel: model.displayName ?? model.name };
@@ -1038,6 +1060,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     setCacheNotice(null);
 
     const taskRole = classifyMessageComplexity(text);
+    const turnStartedAt = new Date().toISOString();
 
     // v0.9 阶段7：智能路由开启时先查语义缓存——命中则秒回、0 成本、跳过 LLM
     if (smart) {
@@ -1101,6 +1124,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     const effectiveWorkspace = folderAtt?.path ?? workspacePath;
     let tools: WorkspaceToolRuntime["tools"];
     let workspacePreamble: string | null = null;
+    let projectMemoryPreamble: string | null = null;
 
     if (effectiveWorkspace && !primaryIsCli) {
       const includeWrite = permissionMode !== "read";
@@ -1116,6 +1140,20 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       workspacePreamble = runtime.workspacePreamble;
     }
 
+    const currentProjectId =
+      (convId ? conversationList.find((c) => c.id === convId)?.projectId : null) ?? null;
+    if (currentProjectId) {
+      try {
+        const [project, memories] = await Promise.all([
+          dbProjects.getById(currentProjectId),
+          dbProjectMemories.listByProject(currentProjectId),
+        ]);
+        projectMemoryPreamble = buildProjectMemoryPreamble(project?.name, memories);
+      } catch {
+        // 项目记忆读取失败不阻断主流程，只是少一层上下文
+      }
+    }
+
     // 给模型塞一条「当前时间」system 小抄（用户界面不显示）——否则模型答不出"今天几号"，只能瞎猜。
     // 只发一条、放最前面，最省 token；compressHistory 会保留 system 消息不裁掉。
     // 绑了工作文件夹再追一条「项目自述」system（CLAUDE.md/AGENTS.md/README.md），让 AI 一进项目就懂上下文。
@@ -1124,6 +1162,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     const tooLargeNotice = (name: string) => t("chat.attachments.fileTooLarge", { name });
     let outgoing: ChatMsg[] = [
       { role: "system", content: buildTimePreamble() },
+      ...(projectMemoryPreamble ? [{ role: "system" as const, content: projectMemoryPreamble }] : []),
       ...(workspacePreamble ? [{ role: "system" as const, content: workspacePreamble }] : []),
       // 阶段 H：绑工作区时塞图片守卫 preamble——防止模型先 read 二进制图再编造幻觉
       ...(effectiveWorkspace ? [{ role: "system" as const, content: buildImageGuardPreamble() }] : []),
@@ -1229,7 +1268,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         // 闭环评估（两阶段合并，**共用一个 attempt 守门，**别叠加**）：
         //  P1: harness 违规（伪工具 / 声称读过文件但实际没读）→ 更严重，先判
         //  P2: nudge 兜底（finishReason=stop + 绑了工具 + 0 个真 tool_call + 文本含动手意图）→ 弱信号
-        const verdict = await evalHarness(convId, fullContent);
+        const verdict = await evalHarnessForConversation(convId, fullContent, turnStartedAt);
         const harnessDirty = !!(verdict && !isClean(verdict));
         const nudgeNeeded =
           !harnessDirty &&
@@ -1442,6 +1481,8 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       const roleMsgIds: Partial<Record<RoleId, string>> = {};
       const roleMsgContents: Partial<Record<RoleId, string>> = {};
 
+      // E2b：链式接力独立占用一个 abort 引用；主回答结束后 abortRef 会清空，不能再拿它控制 chain。
+      chainAbortRef.current = args.controller;
       // E2b：捕获 result 以处理 stoppedAt/skippedRoles（驱动进度条 aborted 状态 + 收尾消息）
       const result = await runChainImpl({
         chain: args.chain,
@@ -1452,6 +1493,9 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         // ★ tools 必传（命脉）：让 chain 角色能真调工具，重演 M3 bug 防线
         tools: args.tools,
         conversationId: args.conversationId,
+        harnessCheck: async ({ content, startedAt }) => {
+          return evalHarnessForConversation(args.conversationId, content, startedAt);
+        },
         callbacks: {
           onChainStart: (total) => {
             const id = crypto.randomUUID();
@@ -1523,8 +1567,24 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       },
         },
       });
-
       // E2b：收尾——根据 result.stoppedAt 决定最终消息 + 同步进度条状态
+      if (Object.keys(result.roleHarness).length > 0) {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (!m.roleId) return m;
+            const warning = result.roleHarness[m.roleId];
+            return warning
+              ? {
+                  ...m,
+                  harness: {
+                    unverifiedPaths: warning.unverifiedPaths,
+                    pseudoToolNames: warning.pseudoToolNames,
+                  },
+                }
+              : m;
+          }),
+        );
+      }
       if (result.stoppedAt !== null) {
         setChainAbortedRole(result.stoppedAt);
         const id = crypto.randomUUID();
@@ -1560,12 +1620,14 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       console.error("[chain] 接力执行失败:", err);
     } finally {
       setChainRunning(false);
+      if (chainAbortRef.current === args.controller) chainAbortRef.current = null;
     }
   }
 
   // 停止 = 中止当前回复 + 清空排队（用户主动喊停，不该让后面排的继续跑）
   function handleStop() {
     abortRef.current?.abort();
+    chainAbortRef.current?.abort();
     setPendingQueue([]);
   }
 
@@ -1776,32 +1838,18 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   return (
     <div className="flex h-full w-full">
       <div className="relative flex flex-col h-full flex-1 min-w-0 rounded-3xl overflow-hidden glass">
-      {/* 写操作确认弹窗：confirm 档下，AI 写文件/跑命令前弹出，给用户看 diff 后再放行 */}
+      {/* 写操作确认弹窗：只做审批，不展示工作内容；详情放右侧工作面板。 */}
       {pendingConfirm && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-6">
-          <div className="glass border border-white/15 rounded-2xl max-w-2xl w-full max-h-[80%] flex flex-col shadow-2xl">
+          <div className="glass border border-white/15 rounded-2xl w-full max-w-sm flex flex-col shadow-2xl">
             <div className="flex items-center gap-2 px-5 py-4 border-b border-white/10">
               <ShieldAlert className="w-4 h-4 text-amber-500" />
               <span className="font-bold text-sm">{t("chat.tools.confirmTitle")}</span>
               <span className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500 uppercase">{pendingConfirm.toolName}</span>
             </div>
-            <div className="px-5 py-3 text-xs font-bold text-muted-foreground">{pendingConfirm.summary}</div>
-            {pendingConfirm.diff && (
-              <pre className="flex-1 overflow-auto mx-5 mb-3 p-3 rounded-xl bg-black/30 text-[11px] leading-relaxed font-mono custom-scrollbar">
-                {pendingConfirm.diff.split("\n").map((line, i) => (
-                  <div
-                    key={i}
-                    className={
-                      line.startsWith("+") ? "text-emerald-400"
-                        : line.startsWith("-") ? "text-red-400"
-                        : "text-muted-foreground/70"
-                    }
-                  >
-                    {line || " "}
-                  </div>
-                ))}
-              </pre>
-            )}
+            <div className="px-5 py-4 text-xs text-muted-foreground">
+              {t("chat.tools.confirmHint")}
+            </div>
             <div className="flex justify-end gap-3 px-5 py-4 border-t border-white/10">
               <Button variant="outline" size="sm" className="rounded-xl" onClick={() => resolveConfirm(false)}>
                 {t("chat.tools.reject")}
@@ -2212,7 +2260,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
                 skippedRoles={chainSkippedRoles}
                 abortedRole={chainAbortedRole}
                 running={chainRunning}
-                onStop={() => abortRef.current?.abort()}
+                onStop={() => chainAbortRef.current?.abort()}
               />
             )}
             {/* watch 接力链：展示本轮会追加执行的角色顺序 */}

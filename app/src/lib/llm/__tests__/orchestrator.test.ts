@@ -581,7 +581,7 @@ describe("ROLE_IDS 常量", () => {
   });
 });
 
-describe("watch 图 + computeChain（阶段 E1：零 LLM，纯逻辑+展示）", () => {
+describe("watch 图 + computeChain（零 LLM，纯逻辑，已用于真实接力）", () => {
   it("ROLE_WATCH_GRAPH 覆盖 8 个角色，leader 是空数组（起点）", () => {
     expect(Object.keys(ROLE_WATCH_GRAPH).sort()).toEqual([...ROLE_IDS].sort());
     expect(ROLE_WATCH_GRAPH.leader).toEqual([]); // 起点

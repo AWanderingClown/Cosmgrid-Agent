@@ -105,9 +105,9 @@ export interface OrchestrationState {
   nodes: OrchestrationNode[];
   currentNodeId: string | null;
   updatedAt: string;
-  /** 阶段 E1：watch 图步进后的接力链（不含 leader）。派生自 plan.nodes，按其顺序取前 MAX_CHAIN_LENGTH 个非 leader 角色。
+  /** watch 图步进后的接力链（不含 leader）。派生自 plan.nodes，按其顺序取前 MAX_CHAIN_LENGTH 个非 leader 角色。
    *  - optional：v2 数据可能无此字段（向后兼容，parseOrchestration 不强制要求）
-   *  - 真·多角色执行是 E2 才上，E1 只算顺序 + 展示给用户看
+   *  - 现已用于真实多角色接力执行；ChatPage / chain-runner 会直接消费这条链
    *  - 计算纯函数：computeChain(plan)
    *  - 不可变更新：withChainPlan(state, chain) */
   chainPlan?: RoleId[];
@@ -138,10 +138,10 @@ export const ROLE_WATCH_GRAPH: Readonly<Record<RoleId, readonly RoleId[]>> = {
 export const MAX_CHAIN_LENGTH = 3;
 
 /**
- * 阶段 E1 纯函数：按 watch 依赖把 plan.nodes 里的角色排成接力链。
+ * 纯函数：按 watch 依赖把 plan.nodes 里的角色排成接力链。
  *
  * 设计要点：
- *  - **零 LLM 调用**：plan 来自 C 阶段的 planNodes（已跑一次），这里只做确定性排序。
+ *  - **零 LLM 调用**：plan 来自 planNodes（已跑一次），这里只做确定性排序。
  *  - plan.nodes 提供同级角色的稳定顺序；watch 图负责纠正明显违反依赖的先后关系。
  *  - leader 过滤掉（leader 是对话主，不算被接力的角色）。
  *  - 封顶 MAX_CHAIN_LENGTH：硬上限防失控（token 爆炸、用户重点核①③）。
@@ -179,8 +179,8 @@ export function computeChain(plan: OrchestrationPlan): RoleId[] {
 }
 
 /**
- * 阶段 E1 helper：不可变更新 OrchestrationState 的 chainPlan 字段。
- * E1 不在 resolveOrchestration 内部加 chainPlan（保持纯函数责任清晰）；ChatPage 调用方先 resolveOrchestration → computeChain → withChainPlan。
+ * helper：不可变更新 OrchestrationState 的 chainPlan 字段。
+ * resolveOrchestration 只管节点和模型分配；ChatPage 调用方先 resolveOrchestration → computeChain → withChainPlan。
  */
 export function withChainPlan(state: OrchestrationState, chainPlan: RoleId[]): OrchestrationState {
   return { ...state, chainPlan };

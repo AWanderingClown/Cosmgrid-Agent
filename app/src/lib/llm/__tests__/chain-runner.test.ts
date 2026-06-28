@@ -191,6 +191,7 @@ describe("runChain（集成）", () => {
     expect(result.stoppedAt).toBeNull();
     expect(result.executedRoles).toEqual([]);
     expect(result.skippedRoles).toEqual([]);
+    expect(result.roleHarness).toEqual({});
     expect(streamWithFallbackMock).not.toHaveBeenCalled();
   });
 
@@ -337,6 +338,78 @@ describe("runChain（集成）", () => {
     expect(callCount).toBe(2);
     expect(result.executedRoles).toHaveLength(1);
     expect(result.executedRoles[0]!.role).toBe("frontend");
+  });
+
+  it("★ 阶段 S2：harnessCheck 命中未验证文件 → 每跳重答一次（不是只做 intent nudge）", async () => {
+    let callCount = 0;
+    const fakeSwf = async (
+      _models: unknown, _messages: unknown,
+      callbacks: { onUsage?: (u: StreamUsage, m: ModelEndpoint, fr: string) => void; onDelta?: (delta: string) => void; },
+      _options: unknown,
+    ) => {
+      callCount++;
+      callbacks.onUsage?.({ inputTokens: 10, outputTokens: 20, toolCallCount: 1 }, fixedEndpoints[1]!, "stop");
+      callbacks.onDelta?.(callCount === 1 ? "我读取了 app/src/lib/db.ts，里面有 19 张表" : "我实际读取后确认 db.ts 里已有对应结构");
+      return { usedModelId: "m-coder", switched: false };
+    };
+
+    const harnessCheck = vi.fn()
+      .mockResolvedValueOnce({ unverifiedPaths: ["app/src/lib/db.ts"], pseudoToolNames: [] })
+      .mockResolvedValueOnce({ unverifiedPaths: [], pseudoToolNames: [] });
+
+    const result = await runChain({
+      chain: ["frontend"],
+      userTask: "检查 db.ts",
+      controller: fixedController(),
+      bindings: fixedBindings,
+      models: fixedEndpoints,
+      tools: { read: {} } as never,
+      conversationId: "conv-1",
+      _deps: { streamWithFallback: fakeSwf as never },
+      harnessCheck,
+    });
+
+    expect(callCount).toBe(2);
+    expect(harnessCheck).toHaveBeenCalledTimes(2);
+    expect(result.roleHarness).toEqual({});
+    expect(result.executedRoles[0]!.content).toContain("实际读取后确认");
+  });
+
+  it("★ 阶段 S2：harnessCheck 连续两次都脏 → 最终停止重答并把 warning 带回结果", async () => {
+    let callCount = 0;
+    const fakeSwf = async (
+      _models: unknown, _messages: unknown,
+      callbacks: { onUsage?: (u: StreamUsage, m: ModelEndpoint, fr: string) => void; onDelta?: (delta: string) => void; },
+      _options: unknown,
+    ) => {
+      callCount++;
+      callbacks.onUsage?.({ inputTokens: 10, outputTokens: 20, toolCallCount: 1 }, fixedEndpoints[1]!, "stop");
+      callbacks.onDelta?.("我读取了 fake.ts");
+      return { usedModelId: "m-coder", switched: false };
+    };
+
+    const harnessCheck = vi.fn().mockResolvedValue({
+      unverifiedPaths: ["fake.ts"],
+      pseudoToolNames: ["run_command"],
+    });
+
+    const result = await runChain({
+      chain: ["frontend"],
+      userTask: "检查 fake.ts",
+      controller: fixedController(),
+      bindings: fixedBindings,
+      models: fixedEndpoints,
+      tools: { read: {} } as never,
+      conversationId: "conv-1",
+      _deps: { streamWithFallback: fakeSwf as never },
+      harnessCheck,
+    });
+
+    expect(callCount).toBe(2); // 首答 + 1 次纠正重答，封顶
+    expect(result.roleHarness.frontend).toEqual({
+      unverifiedPaths: ["fake.ts"],
+      pseudoToolNames: ["run_command"],
+    });
   });
 
   it("★ 必查：nudge 至多 1 次（attempt < MAX_HARNESS_RETRY 守门）", async () => {

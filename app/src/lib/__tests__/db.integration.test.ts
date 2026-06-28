@@ -774,11 +774,34 @@ describe("projectMemories", () => {
 
     const all = await db.projectMemories.searchAcrossProjects("Tauri");
     expect(all.length).toBeGreaterThanOrEqual(2);
+    expect(all.some((m) => m.projectName === "search-a")).toBe(true);
 
     const excl = await db.projectMemories.searchAcrossProjects("Tauri", { excludeProjectId: projA.id });
     expect(excl.every((m) => m.projectId !== projA.id)).toBe(true);
 
     expect(await db.projectMemories.searchAcrossProjects("")).toEqual([]);
+  });
+
+  it("searchAcrossProjects 默认每项目最多 1 条，且支持 minImportance", async () => {
+    const projA = await db.projects.create({ name: "rank-a" });
+    const projB = await db.projects.create({ name: "rank-b" });
+    await db.projectMemories.create({ projectId: projA.id, kind: "decision", title: "高优先 Tauri", content: "A1", importance: 95 });
+    await db.projectMemories.create({ projectId: projA.id, kind: "lesson", title: "次优先 Tauri", content: "A2", importance: 80 });
+    await db.projectMemories.create({ projectId: projB.id, kind: "context", title: "低优先 Tauri", content: "B1", importance: 40 });
+    await db.projectMemories.create({ projectId: projB.id, kind: "context", title: "高优先 Tauri", content: "B2", importance: 88 });
+
+    const filtered = await db.projectMemories.searchAcrossProjects("Tauri", {
+      minImportance: 60,
+      perProjectLimit: 1,
+      limit: 5,
+    });
+
+    expect(filtered).toHaveLength(2);
+    expect(filtered.filter((m) => m.projectId === projA.id)).toHaveLength(1);
+    expect(filtered.filter((m) => m.projectId === projB.id)).toHaveLength(1);
+    expect(filtered.every((m) => m.importance >= 60)).toBe(true);
+    expect(filtered.some((m) => m.title === "次优先 Tauri")).toBe(false);
+    expect(filtered.some((m) => m.title === "低优先 Tauri")).toBe(false);
   });
 });
 

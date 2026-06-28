@@ -5,6 +5,8 @@
 // 模型读这条就能答对日期、算"明天/这周五/距月底几天"等所有时间相关问题。
 // 跟 Claude Code 程序给 Claude 喂 "Today's date is ..." 是同一个做法。
 
+import type { ProjectMemory } from "@/lib/db";
+
 const WEEKDAYS = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
 
 function pad(n: number): string {
@@ -64,5 +66,33 @@ export function buildImageGuardPreamble(): string {
     "改图（缩放/裁剪/旋转/转格式）→ 直接 bash 跑 sips（macOS 原生，例如 `sips -Z 800 foo.png`）或 ImageMagick（`convert foo.png -resize 800x bar.png`）。",
     "看图片元信息 → bash `sips -g all foo.png`（macOS）或 `identify foo.png`（ImageMagick）。",
     "理解图像内容（图像描述/OCR 等）→ 用支持 vision 的模型传图，**别先 read 图片路径**。",
+  ].join("\n");
+}
+
+function shorten(text: string, max = 120): string {
+  const trimmed = text.trim().replace(/\s+/g, " ");
+  if (trimmed.length <= max) return trimmed;
+  return `${trimmed.slice(0, max - 1)}…`;
+}
+
+/**
+ * 构造「当前项目记忆」system 小抄。只喂当前项目，避免把别的项目背景混进来。
+ * 用途：让模型在真实对话里继承项目决策/约束，而不是把记忆只当成"侧边栏档案"。
+ */
+export function buildProjectMemoryPreamble(
+  projectName: string | null | undefined,
+  memories: Pick<ProjectMemory, "kind" | "title" | "content" | "tags" | "importance">[],
+): string | null {
+  if (memories.length === 0) return null;
+  const header = projectName?.trim()
+    ? `当前项目记忆（项目：${projectName.trim()}）`
+    : "当前项目记忆";
+  const lines = memories.slice(0, 6).map((m, idx) => {
+    const tags = m.tags?.trim() ? `；标签：${shorten(m.tags, 40)}` : "";
+    return `${idx + 1}. [${m.kind}｜重要度 ${m.importance}] ${shorten(m.title, 36)}：${shorten(m.content, 140)}${tags}`;
+  });
+  return [
+    `${header}：以下内容只代表当前项目，回答时优先遵守；不要把其他项目的经验混进来，除非用户明确要求跨项目借鉴。`,
+    ...lines,
   ].join("\n");
 }

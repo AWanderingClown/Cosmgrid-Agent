@@ -3159,6 +3159,7 @@ export function memoryKindLabel(kind: string, t: (k: string) => string): string 
 export interface ProjectMemory {
   id: string;
   projectId: string;
+  projectName?: string | null;
   kind: string;
   title: string;
   content: string;
@@ -3171,6 +3172,7 @@ export interface ProjectMemory {
 interface ProjectMemoryRow {
   id: string;
   project_id: string;
+  project_name?: string | null;
   kind: string;
   title: string;
   content: string;
@@ -3184,6 +3186,7 @@ function rowToProjectMemory(r: ProjectMemoryRow): ProjectMemory {
   return {
     id: r.id,
     projectId: r.project_id,
+    projectName: r.project_name ?? null,
     kind: r.kind,
     title: r.title,
     content: r.content,
@@ -3201,6 +3204,13 @@ export interface CreateProjectMemoryInput {
   content: string;
   importance?: number;
   tags?: string | null;
+}
+
+export interface SearchProjectMemoriesOptions {
+  limit?: number;
+  excludeProjectId?: string;
+  minImportance?: number;
+  perProjectLimit?: number;
 }
 
 export const projectMemories = {
@@ -3293,18 +3303,20 @@ export const projectMemories = {
    */
   async searchAcrossProjects(
     query: string,
-    options: { limit?: number; excludeProjectId?: string } = {},
+    options: SearchProjectMemoriesOptions = {},
   ): Promise<ProjectMemory[]> {
     const limit = options.limit ?? 10;
+    const perProjectLimit = Math.max(1, options.perProjectLimit ?? 1);
+    const minImportance = Math.max(0, options.minImportance ?? 0);
     const db = await getDb();
     const q = query.trim();
     if (!q) return [];
     // 拆词 + 任何一词命中都行（OR），按 importance + 命中数排
-    const tokens = q
+    const tokens = Array.from(new Set(q
       .split(/[\s,，、]+/)
       .map((t) => t.trim())
       .filter((t) => t.length >= 1)
-      .slice(0, 8);
+      .slice(0, 8)));
     if (tokens.length === 0) return [];
 
     const likeConditions: string[] = [];
@@ -3318,17 +3330,33 @@ export const projectMemories = {
       ? `AND project_id != $${likeParams.length + 1}`
       : "";
     if (options.excludeProjectId) likeParams.push(options.excludeProjectId);
+    const importanceClause = minImportance > 0
+      ? `AND importance >= $${likeParams.length + 1}`
+      : "";
+    if (minImportance > 0) likeParams.push(minImportance);
 
     const sql = `
-      SELECT *, (${likeConditions.map((c) => `CASE WHEN ${c} THEN 1 ELSE 0 END`).join(" + ")}) AS hits
-      FROM project_memories
+      SELECT pm.*, p.name AS project_name,
+        (${likeConditions.map((c) => `CASE WHEN ${c} THEN 1 ELSE 0 END`).join(" + ")}) AS hits
+      FROM project_memories pm
+      LEFT JOIN projects p ON p.id = pm.project_id
       WHERE (${likeConditions.join(" OR ")})
       ${excludeClause}
+      ${importanceClause}
       ORDER BY (importance / 100.0 + hits * 0.1) DESC, created_at DESC
       LIMIT $${likeParams.length + 1}
     `;
-    likeParams.push(limit);
+    likeParams.push(Math.max(limit * perProjectLimit, limit));
     const rows = await db.select<ProjectMemoryRow[]>(sql, likeParams);
-    return rows.map(rowToProjectMemory);
+    const picked = new Map<string, number>();
+    const filtered: ProjectMemory[] = [];
+    for (const row of rows) {
+      const count = picked.get(row.project_id) ?? 0;
+      if (count >= perProjectLimit) continue;
+      filtered.push(rowToProjectMemory(row));
+      picked.set(row.project_id, count + 1);
+      if (filtered.length >= limit) break;
+    }
+    return filtered;
   },
 };

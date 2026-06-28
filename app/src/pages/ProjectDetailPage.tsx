@@ -52,6 +52,7 @@ import { streamWithFallback, toModelEndpoint } from "@/lib/llm/chat-fallback";
 import { type ToolConfirmRequest } from "@/lib/llm/tools";
 import { prepareWorkspaceToolRuntime, type WorkspaceToolRuntime } from "@/lib/llm/workspace-tool-runtime";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
+import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble, buildProjectMemoryPreamble } from "@/lib/llm/context-preamble";
 import {
   projectMemories as dbMemories,
   memoryKindLabel,
@@ -221,8 +222,12 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
 
     // 项目设了工作区路径，就给 AI 挂上工作区工具；写工具仍走确认弹窗。
     let tools: WorkspaceToolRuntime["tools"];
+    let workspacePreamble: string | null = null;
+    let projectMemoryPreamble: string | null = null;
     try {
       const proj = await dbProjects.getById(stage.projectId);
+      const memories = await dbMemories.listByProject(stage.projectId);
+      projectMemoryPreamble = buildProjectMemoryPreamble(proj?.name, memories);
       if (proj?.workspacePath) {
         const blockedCommands = await dbWorkspaceConfigs.getBlockedCommands(stage.projectId);
         const runtime = await prepareWorkspaceToolRuntime({
@@ -232,8 +237,10 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
           conversationId,
           confirm: requestConfirm,
           blockedCommands,
+          includePreamble: true,
         });
         tools = runtime.tools;
+        workspacePreamble = runtime.workspacePreamble;
       }
     } catch {
       // 取工作区失败不影响对话，只是没有工具
@@ -243,7 +250,14 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
     try {
       await streamWithFallback(
         chain,
-        [...history, userMsg].map((m) => ({ role: m.role as any, content: m.content })),
+        [
+          { role: "system" as const, content: buildTimePreamble() },
+          ...(projectMemoryPreamble ? [{ role: "system" as const, content: projectMemoryPreamble }] : []),
+          ...(workspacePreamble ? [{ role: "system" as const, content: workspacePreamble }] : []),
+          ...(tools ? [{ role: "system" as const, content: buildImageGuardPreamble() }] : []),
+          ...(!tools ? [{ role: "system" as const, content: buildNoToolsPreamble() }] : []),
+          ...[...history, userMsg].map((m) => ({ role: m.role as any, content: m.content })),
+        ],
         {
           onDelta: (delta) => {
             full += delta;
@@ -393,7 +407,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
   const [genCp, setGenCp] = useState<Checkpoint | null>(null);
   const [viewHandoff, setViewHandoff] = useState<HandoffPacket | null>(null);
   const [addMemoryOpen, setAddMemoryOpen] = useState(false);
-  const [, setRelatedMemories] = useState<ProjectMemory[]>([]);
+  const [relatedMemories, setRelatedMemories] = useState<ProjectMemory[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   // v0.7 阶段4b：项目级命令黑名单（换行/逗号分隔）
   const [blockedInput, setBlockedInput] = useState("");
@@ -416,7 +430,16 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
       setBlockedInput(blocked.join("\n"));
       if (p.templateId) setTemplateRoles(await dbTemplateRoles.listByTemplate(p.templateId));
       const query = [p.name, p.description].filter(Boolean).join(" ");
-      if (query) setRelatedMemories(await dbMemories.searchAcrossProjects(query, { excludeProjectId: projectId, limit: 3 }).catch(() => []));
+      if (query) {
+        setRelatedMemories(await dbMemories.searchAcrossProjects(query, {
+          excludeProjectId: projectId,
+          limit: 3,
+          minImportance: 60,
+          perProjectLimit: 1,
+        }).catch(() => []));
+      } else {
+        setRelatedMemories([]);
+      }
       setLoadError(null);
     } catch (err) { setLoadError(err instanceof Error ? err.message : t("projectDetail.loadError")); }
   }
@@ -679,6 +702,32 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                     </Card>
                   ))}
                </div>
+               {relatedMemories.length > 0 && (
+                 <div className="space-y-3 pt-2">
+                   <div className="flex items-center justify-between px-1">
+                     <h3 className="text-[10px] font-black uppercase tracking-[0.25em] text-muted-foreground/45 flex items-center gap-2">
+                       <Workflow className="w-3.5 h-3.5" /> {t("projectDetail.relatedMemories.title")}
+                     </h3>
+                     <span className="text-[9px] text-muted-foreground/45">{t("projectDetail.relatedMemories.hint")}</span>
+                   </div>
+                   {relatedMemories.map((m) => (
+                     <Card key={`related-${m.id}`} className="border border-white/8 bg-white/[0.03] rounded-[1.25rem] p-4 space-y-2">
+                       <div className="flex items-center justify-between gap-3">
+                         <div className={cn("px-2 py-0.5 rounded text-[8px] font-black uppercase",
+                           m.kind === "decision" ? "bg-indigo-500/10 text-indigo-400" : "bg-accent/10 text-accent"
+                         )}>
+                           {memoryKindLabel(m.kind, t)}
+                         </div>
+                         <div className="text-[9px] font-bold text-amber-300/80">
+                           {t("projectDetail.relatedMemories.fromProject", { name: m.projectName || t("projectDetail.relatedMemories.unknownProject") })}
+                         </div>
+                       </div>
+                       <h4 className="text-sm font-bold">{m.title}</h4>
+                       <p className="text-[11px] text-muted-foreground/70 line-clamp-3 leading-relaxed">{m.content}</p>
+                     </Card>
+                   ))}
+                 </div>
+               )}
             </div>
           </div>
         </div>

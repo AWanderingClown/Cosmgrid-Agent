@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildTimePreamble, buildNoToolsPreamble } from "../context-preamble";
+import { buildTimePreamble, buildNoToolsPreamble, buildProjectMemoryPreamble } from "../context-preamble";
 
 describe("buildTimePreamble", () => {
   it("用固定时间格式化出年月日 + 星期 + 时分", () => {
@@ -69,5 +69,43 @@ describe("buildNoToolsPreamble", () => {
   it("无参纯函数，每次返回同一段固定文本", () => {
     expect(buildNoToolsPreamble()).toBe(buildNoToolsPreamble());
     expect(typeof buildNoToolsPreamble()).toBe("string");
+  });
+});
+
+describe("buildProjectMemoryPreamble", () => {
+  it("无记忆时返回 null，避免白占 token", () => {
+    expect(buildProjectMemoryPreamble("Cosmgrid", [])).toBeNull();
+  });
+
+  it("只描述当前项目记忆，并明确禁止默认串到别的项目", () => {
+    const out = buildProjectMemoryPreamble("Cosmgrid", [
+      {
+        kind: "decision",
+        title: "API Key 不进 SQLite",
+        content: "保存在单独文件里，避免数据库明文混入",
+        tags: "security,storage",
+        importance: 92,
+      },
+    ]);
+    expect(out).toContain("当前项目记忆");
+    expect(out).toContain("项目：Cosmgrid");
+    expect(out).toContain("不要把其他项目的经验混进来");
+    expect(out).toContain("API Key 不进 SQLite");
+    expect(out).toContain("重要度 92");
+  });
+
+  it("超长标题/内容会截断，避免把 system prompt 撑爆", () => {
+    const out = buildProjectMemoryPreamble("P", [
+      {
+        kind: "context",
+        title: "A".repeat(80),
+        content: "B".repeat(220),
+        tags: "tag1,tag2,tag3,tag4,tag5,tag6,tag7",
+        importance: 70,
+      },
+    ]);
+    expect(out).not.toContain("A".repeat(80));
+    expect(out).not.toContain("B".repeat(220));
+    expect(out).toContain("…");
   });
 });

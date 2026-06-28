@@ -82,7 +82,8 @@
     "tools": {
       "confirmTitle": "AI is requesting an action — please confirm",
       "approve": "Approve",
-      "reject": "Reject"
+      "reject": "Cancel",
+      "confirmHint": "Details will be shown in the work panel."
     },
     "smartPickResult": {
       "title": "Smart Pick",
@@ -183,8 +184,8 @@
       "receiptReason": "Why: {{reason}}",
       "receiptNoModel": "(No usable model — configure one on the providers page)",
       "detailNodes": "Node plan",
-      "chainPlanTitle": "Chain Plan (E1 preview)",
-      "chainPlanHint": "Sequential order. Auto-execution is coming in E2 — currently preview-only.",
+      "chainPlanTitle": "Chain Plan",
+      "chainPlanHint": "The system will execute roles in this order automatically, and you can abort the chain at any time.",
       "chainProgressTitle": "Chain Progress",
       "chainProgressIdle": "No chain running.",
       "chainProgressLabel": "{{done}} / {{total}}",
@@ -804,6 +805,12 @@
       "tagsPlaceholder": "e.g. auth, ux, v0.3",
       "tagsHint": "Tags help cross-project search match this memory with descriptions / other memories",
       "save": "Save"
+    },
+    "relatedMemories": {
+      "title": "Cross-Project References",
+      "hint": "Only high-importance entries, max 1 per project",
+      "fromProject": "From {{name}}",
+      "unknownProject": "Unnamed Project"
     }
   }
 }
