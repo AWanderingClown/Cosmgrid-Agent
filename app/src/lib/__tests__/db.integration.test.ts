@@ -116,6 +116,14 @@ describe("conversations + 主对话", () => {
     expect(await db.messages.listByConversation(c2.id)).toHaveLength(0);
   });
 
+  it("setDefaultModelId 会持久化会话默认模型", async () => {
+    const conv = await db.conversations.create({ title: "默认模型会话", projectId: null, defaultModelId: "m1" });
+    expect(conv.defaultModelId).toBe("m1");
+    await db.conversations.setDefaultModelId(conv.id, "m2");
+    const updated = await db.conversations.getById(conv.id);
+    expect(updated?.defaultModelId).toBe("m2");
+  });
+
   it("阶段 E3：chain 角色消息元数据能落库并恢复", async () => {
     const conv = await db.conversations.create({ title: "chain message", projectId: null });
     const msg = await db.messages.create({

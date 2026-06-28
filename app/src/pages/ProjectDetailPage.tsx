@@ -300,16 +300,17 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
     <div className="relative flex flex-col h-[500px] glass border-x-0 border-b-0">
       {/* v0.7 阶段4b：写操作确认弹窗 */}
       {pendingConfirm && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-6">
-          <div className="glass border border-white/15 rounded-2xl max-w-2xl w-full max-h-[80%] flex flex-col shadow-2xl">
-            <div className="flex items-center gap-2 px-5 py-4 border-b border-white/10">
+        <div className="absolute top-4 right-4 z-50 w-[28rem] max-w-[calc(100%-2rem)]">
+          <div className="glass border border-white/15 rounded-[1.75rem] overflow-hidden shadow-2xl shadow-black/35">
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-white/10 bg-black/20">
               <ShieldAlert className="w-4 h-4 text-amber-500" />
               <span className="font-bold text-sm">{t("projectDetail.tools.confirmTitle")}</span>
               <span className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500 uppercase">{pendingConfirm.toolName}</span>
             </div>
-            <div className="px-5 py-3 text-xs font-bold text-muted-foreground">{pendingConfirm.summary}</div>
-            {pendingConfirm.diff && (
-              <pre className="flex-1 overflow-auto mx-5 mb-3 p-3 rounded-xl bg-black/30 text-[11px] leading-relaxed font-mono custom-scrollbar">
+            <div className="px-4 py-3 space-y-3">
+              <div className="text-xs font-bold text-muted-foreground leading-relaxed">{pendingConfirm.summary}</div>
+              {pendingConfirm.diff && (
+              <pre className="max-h-48 overflow-auto rounded-xl bg-black/30 p-3 text-[11px] leading-relaxed font-mono custom-scrollbar">
                 {pendingConfirm.diff.split("\n").map((line, i) => (
                   <div
                     key={i}
@@ -323,8 +324,9 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
                   </div>
                 ))}
               </pre>
-            )}
-            <div className="flex justify-end gap-3 px-5 py-4 border-t border-white/10">
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-4 py-3 border-t border-white/10 bg-black/10">
               <Button variant="outline" size="sm" className="rounded-xl" onClick={() => resolveConfirm(false)}>
                 {t("projectDetail.tools.reject")}
               </Button>

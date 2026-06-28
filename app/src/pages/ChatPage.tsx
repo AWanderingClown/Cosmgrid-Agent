@@ -742,6 +742,17 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     return ml;
   }
 
+  function pickConversationModelId(
+    conv: Conversation | null | undefined,
+    models: ModelListItem[],
+    fallbackId: string,
+  ): string {
+    const preferredId = conv?.defaultModelId ?? null;
+    if (preferredId && models.some((m) => m.id === preferredId)) return preferredId;
+    if (fallbackId && models.some((m) => m.id === fallbackId)) return fallbackId;
+    return models[0]?.id ?? "";
+  }
+
   // 切回聊天页时刷新模型列表（首次激活由下面的挂载 effect 负责，这里跳过避免重复拉取）。
   const activatedOnceRef = useRef(false);
   useEffect(() => {
@@ -773,6 +784,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         const activeConv = list[0]!;
         setConversationId(activeConv.id);
         setWorkspacePath(activeConv.workspacePath);
+        setSelectedModelId(pickConversationModelId(activeConv, ml, activeConv.defaultModelId ?? ""));
         const hist = await dbMessages.listByConversation(activeConv.id);
         setMessages(dbMessagesToChat(hist, ml));
         try {
@@ -856,6 +868,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       setConversationList((prev) => [conv, ...prev]);
       setConversationId(conv.id);
       setWorkspacePath(null);
+      setSelectedModelId(pickConversationModelId(conv, availableModels, selectedModelId));
       setMessages([]);
       applyOrchestration(null);
       setPendingQueue([]);
@@ -869,8 +882,10 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
 
   async function switchConversation(id: string) {
     if (id === conversationId || isStreaming) return;
+    const nextConv = conversationList.find((c) => c.id === id) ?? null;
     setConversationId(id);
-    setWorkspacePath(conversationList.find((c) => c.id === id)?.workspacePath ?? null);
+    setWorkspacePath(nextConv?.workspacePath ?? null);
+    setSelectedModelId((prev) => pickConversationModelId(nextConv, availableModels, prev));
     setPendingQueue([]);
     setStreamError(null);
     setSwitchNotice(null);
@@ -908,6 +923,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       setConversationList([conv]);
       setConversationId(conv.id);
       setWorkspacePath(null);
+      setSelectedModelId(pickConversationModelId(conv, availableModels, selectedModelId));
       setMessages([]);
       setArtifacts([]);
       applyOrchestration(null);
@@ -918,6 +934,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       const next = remaining[0]!;
       setConversationId(next.id);
       setWorkspacePath(next.workspacePath);
+      setSelectedModelId((prev) => pickConversationModelId(next, availableModels, prev));
       try {
         const hist = await dbMessages.listByConversation(next.id);
         setMessages(dbMessagesToChat(hist, availableModels));
@@ -1655,6 +1672,8 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   function handleModelChange(newId: string) {
     const oldId = selectedModelId;
     setSelectedModelId(newId);
+    setConversationList((prev) => prev.map((c) => (c.id === conversationId ? { ...c, defaultModelId: newId } : c)));
+    if (conversationId) void dbConversations.setDefaultModelId(conversationId, newId).catch(() => {});
 
     // 用户手动接管：把这个模型钉到当前节点，编排后续不再自动覆盖它。
     const state = orchestrationRef.current;
@@ -1845,17 +1864,35 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       <div className="relative flex flex-col h-full flex-1 min-w-0 rounded-3xl overflow-hidden glass">
       {/* 写操作确认弹窗：只做审批，不展示工作内容；详情放右侧工作面板。 */}
       {pendingConfirm && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-6">
-          <div className="glass border border-white/15 rounded-2xl w-full max-w-sm flex flex-col shadow-2xl">
-            <div className="flex items-center gap-2 px-5 py-4 border-b border-white/10">
+        <div className="absolute top-5 right-5 z-50 w-[24rem] max-w-[calc(100%-2.5rem)]">
+          <div className="glass border border-white/15 rounded-[1.75rem] overflow-hidden shadow-2xl shadow-black/35">
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-white/10 bg-black/20">
               <ShieldAlert className="w-4 h-4 text-amber-500" />
               <span className="font-bold text-sm">{t("chat.tools.confirmTitle")}</span>
               <span className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500 uppercase">{pendingConfirm.toolName}</span>
             </div>
-            <div className="px-5 py-4 text-xs text-muted-foreground">
-              {t("chat.tools.confirmHint")}
+            <div className="px-4 py-3 space-y-3">
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                {pendingConfirm.summary || t("chat.tools.confirmHint")}
+              </p>
+              {pendingConfirm.diff && (
+                <pre className="max-h-44 overflow-auto rounded-xl bg-black/30 p-3 text-[11px] leading-relaxed font-mono custom-scrollbar">
+                  {pendingConfirm.diff.split("\n").map((line, i) => (
+                    <div
+                      key={i}
+                      className={
+                        line.startsWith("+") ? "text-emerald-400"
+                          : line.startsWith("-") ? "text-red-400"
+                          : "text-muted-foreground/70"
+                      }
+                    >
+                      {line || " "}
+                    </div>
+                  ))}
+                </pre>
+              )}
             </div>
-            <div className="flex justify-end gap-3 px-5 py-4 border-t border-white/10">
+            <div className="flex justify-end gap-2 px-4 py-3 border-t border-white/10 bg-black/10">
               <Button variant="outline" size="sm" className="rounded-xl" onClick={() => resolveConfirm(false)}>
                 {t("chat.tools.reject")}
               </Button>
@@ -2175,6 +2212,8 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
                 e.target.style.height = Math.min(e.target.scrollHeight, 192) + "px";
               }}
               onKeyDown={(e) => {
+                const native = e.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number };
+                if (native.isComposing || native.keyCode === 229) return;
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   (e.currentTarget.form as HTMLFormElement | null)?.requestSubmit();

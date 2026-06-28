@@ -1586,6 +1586,15 @@ export const conversations = {
     await db.execute("UPDATE conversations SET title = $1, updated_at = $2 WHERE id = $3", [title, now(), id]);
   },
 
+  // 用户手动切换顶部模型时，回写会话默认模型，保证重启后仍沿用用户最后一次选择。
+  async setDefaultModelId(id: string, defaultModelId: string | null): Promise<void> {
+    const db = await getDb();
+    await db.execute(
+      "UPDATE conversations SET default_model_id = $1, updated_at = $2 WHERE id = $3",
+      [defaultModelId, now(), id],
+    );
+  },
+
   // bump updated_at（有新消息时调，保证侧栏按最近活跃排序）。
   async touch(id: string): Promise<void> {
     const db = await getDb();
