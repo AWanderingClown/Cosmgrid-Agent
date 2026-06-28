@@ -70,6 +70,24 @@ describe("classifyLlmError", () => {
     expect(result.category).toBe("network");
   });
 
+  it("CLI 子进程异常退出 → server_error 且可 fallback", () => {
+    const result = classifyLlmError(new Error("CLI exited with code 1"));
+    expect(result.category).toBe("server_error");
+    expect(result.shouldFallback).toBe(true);
+  });
+
+  it("文本限流错误 → rate_limit 且可 fallback", () => {
+    const result = classifyLlmError(new Error("provider quota exceeded"));
+    expect(result.category).toBe("rate_limit");
+    expect(result.shouldFallback).toBe(true);
+  });
+
+  it("文本鉴权错误 → auth_invalid 且可 fallback", () => {
+    const result = classifyLlmError(new Error("authentication failed"));
+    expect(result.category).toBe("auth_invalid");
+    expect(result.shouldFallback).toBe(true);
+  });
+
   it("未知错误 → unknown", () => {
     const result = classifyLlmError(new Error("some weird error"));
     expect(result.category).toBe("unknown");

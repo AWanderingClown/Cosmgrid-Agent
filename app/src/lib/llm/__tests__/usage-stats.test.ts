@@ -7,8 +7,9 @@ const NOW = new Date("2026-06-22T12:00:00.000Z");
 
 function ev(over: Partial<UsageEventRow> = {}): UsageEventRow {
   return {
-    id: "evt-default", modelId: "m-1", projectId: null, conversationId: null, role: "standard", roleKind: null, inputTokens: 100, outputTokens: 50,
-    cost: 0.01, success: true, createdAt: NOW.toISOString(), ...over,
+    id: "evt-default", providerId: "provider-1", apiCredentialId: "cred-1", modelId: "m-1", projectId: null, conversationId: null, role: "standard", roleKind: null, inputTokens: 100, outputTokens: 50,
+    cacheCreationTokens: 0, cacheHitTokens: 0,
+    cost: 0.01, pricingKnown: true, priceVersion: null, priceSource: null, success: true, createdAt: NOW.toISOString(), ...over,
   };
 }
 
@@ -68,6 +69,17 @@ describe("aggregateUsage", () => {
   it("modelId 为 null 归到 (unknown)", () => {
     const s = aggregateUsage([ev({ modelId: null })], NOW);
     expect(s.byModel[0]!.modelId).toBe("(unknown)");
+  });
+
+  it("未知价格调用不会被吞掉，按模型显示 unknownPricingCalls", () => {
+    const s = aggregateUsage([
+      ev({ modelId: "unknown-price-model", cost: 0, pricingKnown: false }),
+      ev({ modelId: "unknown-price-model", cost: 0.01, pricingKnown: true }),
+    ], NOW);
+    expect(s.byModel[0]!.modelId).toBe("unknown-price-model");
+    expect(s.byModel[0]!.calls).toBe(2);
+    expect(s.byModel[0]!.unknownPricingCalls).toBe(1);
+    expect(s.byModel[0]!.cost).toBeCloseTo(0.01);
   });
 
   it("非法日期跳过不崩", () => {
@@ -137,6 +149,17 @@ describe("aggregateUsageByActorRoleFromRows（阶段 F2 纯函数版）", () => 
     expect(result[0]!.totalCost).toBeCloseTo(0.15);
     expect(result[0]!.totalCalls).toBe(3);
     expect(result[0]!.rows).toHaveLength(1); // 合并到 1 行
+  });
+
+  it("同 roleKind + 同 modelId 多行时同步累加未知价格调用数", () => {
+    const result = aggregateUsageByActorRoleFromRows([
+      ev({ roleKind: "frontend", modelId: "mA", cost: 0, pricingKnown: false }),
+      ev({ roleKind: "frontend", modelId: "mA", cost: 0.05, pricingKnown: true }),
+      ev({ roleKind: "frontend", modelId: "mA", cost: 0, pricingKnown: false }),
+    ]);
+    expect(result[0]!.rows).toHaveLength(1);
+    expect(result[0]!.rows[0]!.unknownPricingCalls).toBe(2);
+    expect(result[0]!.rows[0]!.cost).toBeCloseTo(0.05);
   });
 
   it("★ 同 roleKind + 不同 modelId → 按 cost DESC 排（StatsPage 渲染顺序）", () => {

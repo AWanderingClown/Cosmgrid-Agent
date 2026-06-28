@@ -281,6 +281,158 @@ describe("usageEvents", () => {
     const list = await db.usageEvents.list();
     expect(list.find((x) => x.id === id)?.conversationId).toBe(conv.id);
   });
+
+  it("用量监控：pricingKnown=false 能落库，避免未知价格被当成免费", async () => {
+    const id = await db.usageEvents.create({
+      modelId: "unknown-price-model",
+      cost: 0,
+      pricingKnown: false,
+    });
+    const list = await db.usageEvents.list();
+    expect(list.find((x) => x.id === id)?.pricingKnown).toBe(false);
+  });
+
+  it("用量监控：list 返回 provider / credential / cache token，供套餐自动汇总", async () => {
+    const id = await db.usageEvents.create({
+      providerId: "provider-auto",
+      apiCredentialId: "cred-auto",
+      modelId: "mAuto",
+      inputTokens: 10,
+      outputTokens: 20,
+      cacheCreationTokens: 3,
+      cacheHitTokens: 7,
+      cost: 0.02,
+    });
+    const row = (await db.usageEvents.list()).find((x) => x.id === id)!;
+    expect(row.providerId).toBe("provider-auto");
+    expect(row.apiCredentialId).toBe("cred-auto");
+    expect(row.cacheCreationTokens).toBe(3);
+    expect(row.cacheHitTokens).toBe(7);
+  });
+
+  it("价格目录：priceVersion / priceSource 会随 usage_event 落库", async () => {
+    const id = await db.usageEvents.create({
+      modelId: "m-priced",
+      cost: 0.02,
+      pricingKnown: true,
+      priceVersion: "remote:2026-06-28",
+      priceSource: "remote",
+    });
+    const row = (await db.usageEvents.list()).find((x) => x.id === id)!;
+    expect(row.priceVersion).toBe("remote:2026-06-28");
+    expect(row.priceSource).toBe("remote");
+  });
+});
+
+describe("modelPriceCatalog + priceSyncStatus", () => {
+  beforeEach(() => {
+    sqlite.exec("DELETE FROM model_price_catalog");
+    sqlite.exec("DELETE FROM price_sync_status");
+  });
+
+  it("手动价格可写入并按模型名查到", async () => {
+    await db.modelPriceCatalog.create({
+      modelName: "custom-model",
+      providerType: "openai-compatible",
+      inputPer1m: 0.5,
+      outputPer1m: 2,
+      source: "manual",
+      version: "manual:test",
+    });
+
+    const row = await db.modelPriceCatalog.lookupActive("custom-model", "openai-compatible");
+    expect(row).toMatchObject({
+      modelName: "custom-model",
+      providerType: "openai-compatible",
+      inputPer1m: 0.5,
+      outputPer1m: 2,
+      source: "manual",
+    });
+  });
+
+  it("同步状态会保留最近成功时间和失败原因", async () => {
+    await db.priceSyncStatus.upsert({
+      source: "models.dev",
+      sourceUrl: "https://models.dev/api.json",
+      lastAttemptAt: "2026-06-28T00:00:00.000Z",
+      lastSuccessAt: "2026-06-28T00:00:01.000Z",
+      lastError: "network timeout",
+      catalogVersion: "models.dev:2026-06-28",
+    });
+
+    expect(await db.priceSyncStatus.get()).toMatchObject({
+      source: "models.dev",
+      lastSuccessAt: "2026-06-28T00:00:01.000Z",
+      lastError: "network timeout",
+      catalogVersion: "models.dev:2026-06-28",
+    });
+  });
+});
+
+describe("savingsEvents", () => {
+  beforeEach(() => {
+    sqlite.exec("DELETE FROM savings_events");
+  });
+
+  it("省钱明细会落库并可按类型读取", async () => {
+    await db.savingsEvents.create({
+      usageEventId: "usage-1",
+      conversationId: "conv-1",
+      projectId: "proj-1",
+      kind: "cache",
+      baselineModelId: "claude-sonnet",
+      actualModelId: "claude-sonnet",
+      baselineCost: 0.05,
+      actualCost: 0.02,
+      savedCost: 0.03,
+      formulaVersion: "cache-v1",
+      explainJson: JSON.stringify({ cacheHitTokens: 1000 }),
+    });
+
+    expect(await db.savingsEvents.list()).toMatchObject([
+      {
+        usageEventId: "usage-1",
+        kind: "cache",
+        savedCost: 0.03,
+        formulaVersion: "cache-v1",
+      },
+    ]);
+  });
+});
+
+describe("cliSessions", () => {
+  beforeEach(() => {
+    sqlite.exec("DELETE FROM cli_sessions");
+  });
+
+  it("官方 CLI session/thread id 会落库并可更新状态", async () => {
+    await db.cliSessions.upsert({
+      providerType: "claude-cli",
+      conversationId: "conv-1",
+      projectId: "proj-1",
+      officialSessionId: "sess-1",
+      modelName: "claude-sonnet",
+      program: "claude",
+      status: "active",
+    });
+    await db.cliSessions.upsert({
+      providerType: "claude-cli",
+      conversationId: "conv-1",
+      projectId: "proj-1",
+      officialSessionId: "sess-1",
+      modelName: "claude-sonnet",
+      program: "claude",
+      status: "completed",
+    });
+
+    expect(await db.cliSessions.list()).toMatchObject([
+      {
+        providerType: "claude-cli",
+        officialSessionId: "sess-1",
+        status: "completed",
+      },
+    ]);
+  });
 });
 
 describe("阶段 F1：aggregateUsageByActorRole（端到端集成）", () => {
@@ -375,6 +527,15 @@ describe("阶段 F1：aggregateUsageByActorRole（端到端集成）", () => {
     const result = await aggregateUsageByActorRole({});
     expect(result[0]!.totalCost).toBe(0);
     expect(result[0]!.totalCalls).toBe(1);
+  });
+
+  it("未知价格调用数随 roleKind × model 聚合保留", async () => {
+    await db.usageEvents.create({ modelId: "mUnknown", roleKind: "leader", cost: 0, pricingKnown: false });
+    await db.usageEvents.create({ modelId: "mUnknown", roleKind: "leader", cost: 0.05, pricingKnown: true });
+    const { aggregateUsageByActorRole } = await import("../llm/usage-stats");
+    const result = await aggregateUsageByActorRole({});
+    expect(result[0]!.rows[0]!.unknownPricingCalls).toBe(1);
+    expect(result[0]!.rows[0]!.cost).toBeCloseTo(0.05);
   });
 
   it("★ 同 roleKind + 同 modelId 多行 → SUM 累加正确（5+5+5=15）", async () => {
@@ -735,6 +896,21 @@ describe("seedBuiltInTemplates", () => {
     await db.seedBuiltInTemplates();
     const after2 = (await db.projectTemplates.list()).length;
     expect(after2).toBe(after1);
+  });
+
+  it("旧内置模板只从普通列表隐藏，不按 id 删除资产", async () => {
+    const retired = await db.projectTemplates.create({
+      name: "全栈 Web 项目模板",
+      description: "retired",
+      isBuiltIn: true,
+    });
+
+    expect((await db.projectTemplates.list()).some((tpl) => tpl.id === retired.id)).toBe(false);
+    expect(await db.projectTemplates.getById(retired.id)).toMatchObject({
+      id: retired.id,
+      name: "全栈 Web 项目模板",
+      isBuiltIn: true,
+    });
   });
 });
 

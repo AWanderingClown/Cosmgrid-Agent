@@ -2,7 +2,7 @@
 // 布局：根容器用 h-full/w-full，依赖 index.css 建立的 html→body→#root height:100% 链。
 // 不用 dvh/dvw——WKWebView(Tauri 内核)下动态视口单位 resize 后不重算，会导致窗口变大露白。
 import { useState, useEffect } from "react";
-import { AlertTriangle, KeyRound, MessageSquare, LayoutTemplate, Coins, FolderKanban, X, Settings, BarChart3, Swords } from "lucide-react";
+import { AlertTriangle, KeyRound, MessageSquare, LayoutTemplate, Coins, X, Settings, Swords } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { usePanelResize, ResizeHandle } from "@/components/ui/resize-handle";
@@ -11,40 +11,49 @@ import {
   seedBuiltInTemplates,
   tokenPlans as dbTokenPlans,
   apiCredentials as dbCredentials,
+  usageEvents,
   type TokenPlan,
 } from "@/lib/db";
 import { planUsageLevel, type UsageLevel } from "@/lib/llm/plan-thresholds";
+import { computeTokenPlanUsageMap } from "@/lib/llm/token-plan-usage";
+import { syncModelPrices } from "@/lib/llm/price-catalog";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 import { ChatPage } from "@/pages/ChatPage";
 import { ProvidersPage } from "@/pages/ProvidersPage";
 import { TemplatesPage } from "@/pages/TemplatesPage";
-import { TokenPlansPage } from "@/pages/TokenPlansPage";
 import { ProjectsPage } from "@/pages/ProjectsPage";
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { OnboardingModal } from "@/pages/OnboardingModal";
 import { SettingsPage } from "@/pages/SettingsPage";
-import { StatsPage } from "@/pages/StatsPage";
+import { UsageMonitorPage } from "@/pages/UsageMonitorPage";
 import { DebatePage } from "@/pages/DebatePage";
 
-type PageKey = "chat" | "providers" | "templates" | "tokenPlans" | "projects" | "debate" | "stats" | "settings";
+type PageKey = "chat" | "providers" | "templates" | "tokenPlans" | "projects" | "debate" | "settings";
 
 interface NavItem {
   key: PageKey;
   icon: React.ReactNode;
 }
 
+async function loadPlansWithRecordedUsage(): Promise<TokenPlan[]> {
+  const [plans, rows] = await Promise.all([dbTokenPlans.list(), usageEvents.list()]);
+  const usageMap = computeTokenPlanUsageMap(plans, rows);
+  return plans.map((plan) => {
+    const usage = usageMap.get(plan.id);
+    return usage?.autoTrackable ? { ...plan, usedQuota: usage.usedQuota } : plan;
+  });
+}
+
 function App() {
   const { t } = useTranslation();
   const NAV_ITEMS: NavItem[] = [
     { key: "chat", icon: <MessageSquare className="w-4 h-4" /> },
-    { key: "projects", icon: <FolderKanban className="w-4 h-4" /> },
     { key: "providers", icon: <KeyRound className="w-4 h-4" /> },
     { key: "templates", icon: <LayoutTemplate className="w-4 h-4" /> },
     { key: "tokenPlans", icon: <Coins className="w-4 h-4" /> },
     { key: "debate", icon: <Swords className="w-4 h-4" /> },
-    { key: "stats", icon: <BarChart3 className="w-4 h-4" /> },
   ];
   const [page, setPage] = useState<PageKey>("chat");
   const [openProjectId, setOpenProjectId] = useState<string | null>(null);
@@ -78,16 +87,17 @@ function App() {
 
   useEffect(() => {
     if (!dbReady) return;
-    void dbTokenPlans.list().then(setPlans);
+    void loadPlansWithRecordedUsage().then(setPlans);
+    void syncModelPrices();
     const id = setInterval(() => {
-      void dbTokenPlans.list().then(setPlans);
+      void loadPlansWithRecordedUsage().then(setPlans);
     }, 60_000);
     return () => clearInterval(id);
   }, [dbReady]);
 
   useEffect(() => {
     if (page === "tokenPlans") {
-      void dbTokenPlans.list().then((p) => {
+      void loadPlansWithRecordedUsage().then((p) => {
         setPlans(p);
         setDismissedIds(new Set());
       });
@@ -222,16 +232,13 @@ function App() {
             <TemplatesPage />
           </div>
           <div className="h-full w-full rounded-3xl overflow-hidden" style={{ display: page === "tokenPlans" ? "block" : "none" }}>
-            <TokenPlansPage />
+            <UsageMonitorPage />
           </div>
           <div className="h-full w-full rounded-3xl overflow-hidden" style={{ display: page === "debate" ? "block" : "none" }}>
             <DebatePage initialTopic={debateSeed} />
           </div>
-          <div className="h-full w-full rounded-3xl overflow-hidden" style={{ display: page === "stats" ? "block" : "none" }}>
-            <StatsPage />
-          </div>
           <div className="h-full w-full rounded-3xl overflow-hidden" style={{ display: page === "settings" ? "block" : "none" }}>
-            <SettingsPage />
+            <SettingsPage onOpenProjectAssets={() => { setOpenProjectId(null); setPage("projects"); }} />
           </div>
           <div className="h-full w-full rounded-3xl overflow-hidden" style={{ display: page === "projects" ? "block" : "none" }}>
             {openProjectId ? (

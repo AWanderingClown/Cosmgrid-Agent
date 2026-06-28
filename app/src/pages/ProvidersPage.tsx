@@ -53,6 +53,8 @@ export function ProvidersPage() {
           name: mo.name,
           displayName: mo.displayName,
           contextWindow: mo.contextWindow,
+          inputPrice: mo.inputPrice,
+          outputPrice: mo.outputPrice,
           enabled: mo.enabled,
           workRoles: mo.workRoles,
           capabilityScore: mo.capabilityScore,

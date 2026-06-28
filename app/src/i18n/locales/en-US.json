@@ -30,12 +30,11 @@
     "brandSubtitle": "Intelligent Core Manager",
     "sidebar": {
       "chat": "Chat",
-      "projects": "Projects",
       "providers": "Providers",
       "templates": "Templates",
       "tokenPlans": "Usage",
       "debate": "Debate",
-      "stats": "Savings",
+      "stats": "Usage Details",
       "settings": "Settings"
     },
     "alerts": {
@@ -57,6 +56,11 @@
     "noApiKey": "API Key missing",
     "constructError": "Failed to construct model",
     "switchedTo": "Switched to {{name}}",
+    "recovery": {
+      "native_resume": "Recovered with the CLI's native resume session",
+      "context_replay": "Recovered by continuing from the interruption point without repeating earlier content",
+      "fallback_handoff": "Recovered by handing completed context to the next model"
+    },
     "cacheHit": "Cache hit · answered {{days}}d ago",
     "contextTrimmed": "[{{count}} earlier messages omitted to save tokens]",
     "harnessRetry": "Possible fabrication · asking the model to self-check and redo",
@@ -294,6 +298,8 @@
     "displayName": "Display Name",
     "displayNamePlaceholder": "e.g. Opus 4.8",
     "contextWindow": "Context Window",
+    "inputPrice": "Input price (USD / 1M)",
+    "outputPrice": "Output price (USD / 1M)",
     "workRoles": "Work Roles",
     "workRolesHint": "Pick at least one",
     "submitting": "Adding...",
@@ -338,29 +344,13 @@
     "other": "Other"
   },
   "builtinTemplates": {
-    "fullstack_web": {
-      "name": "Full-Stack Web Project",
-      "desc": "main_chat / planning / review / frontend / backend / testing / final_review"
-    },
-    "data_science": {
-      "name": "Data Science Project",
-      "desc": "main_chat / planning / review / data_exploration / modeling / testing / final_review"
-    },
-    "mobile_app": {
-      "name": "Mobile App",
-      "desc": "main_chat / planning / review / ios / android / testing / final_review"
-    },
-    "small_script": {
-      "name": "Small Script",
-      "desc": "main_chat / direct_generation / testing (for one-off scripts)"
-    },
     "default_eight_roles": {
       "name": "Default 8 Roles",
-      "desc": "Bind each of the 8 team roles (leader / architect / frontend / backend / runner / tester / reviewer / security) to a model. Used by the main chat when no project is selected."
+      "desc": "Bind each of the 8 team roles (Leader / Architect / Frontend / Backend / Execution Runner / Tester / Reviewer / Security) to a model. Used by the main chat when no project is selected."
     }
   },
   "handoffMarkdown": {
-    "title": "Handoff → {{role}}",
+    "title": "Transfer Packet → {{role}}",
     "sourceCheckpoint": "_Source checkpoint: {{title}}_",
     "generatedAt": "_Generated: {{time}}_",
     "empty": "(empty)"
@@ -368,12 +358,21 @@
   "templates": {
     "sectionLabel": "Pipeline Architect",
     "title": "Project Role Templates",
-    "desc": "Define AI expert combinations for different collaboration scenarios. The system auto-recommends the best-suited AI for each role based on model ratings.",
+    "desc": "Default 8 Roles is the main collaboration plan. Bind the best model to each role, then copy it into your own custom templates later.",
     "available": "Available Templates",
     "builtIn": "Built-in",
     "rolesCount": "{{count}} collaboration nodes",
+    "addTemplate": "Add Template",
+    "copyTemplate": "Copy Template",
+    "deleteTemplate": "Delete Template",
+    "createTemplate": "Create Template",
+    "templateName": "Template Name",
+    "templateNamePlaceholder": "e.g. My Daily Dev Template",
+    "newTemplateDefaultName": "My 8-Role Template",
+    "customTemplateDesc": "Custom 8-role template. Bind models based on your own workflow.",
+    "copyName": "{{name}} Copy",
+    "deleteConfirm": "Delete this custom template? The built-in default template will not be deleted.",
     "smartAssign": "Smart Auto-Assign",
-    "saveAs": "Save as Template",
     "noModels": "No AI models connected. Please go to \"Providers\" first.",
     "primaryModel": "Primary Model",
     "primaryModelPlaceholder": "Select primary model",
@@ -381,13 +380,22 @@
     "fallbackModelPlaceholder": "No backup",
     "fallbackDisabled": "Don't use a backup",
     "selectTemplateHint": "Select a template on the left",
-    "eightRolesBinding": "8 Roles · Bind a Model Per Role (Recommended)",
-    "legacyWorkRoles": "Legacy Work-Roles (Backward-Compatible)"
+    "eightRolesBinding": "Default 8 Roles · Bind One Model Per Role",
+    "eightRole": {
+      "leader_desc": "Break down tasks, steer flow, answer daily questions",
+      "architect_desc": "Design plans and architecture tradeoffs",
+      "frontend_desc": "UI, components, and interactions",
+      "backend_desc": "APIs, database, and service logic",
+      "runner_desc": "Run builds, tests, and command checks",
+      "tester_desc": "Test cases and regression checks",
+      "reviewer_desc": "Code quality and maintainability review",
+      "security_desc": "Secrets, injection, permissions, and security risks"
+    }
   },
   "projects": {
-    "sectionLabel": "Active Project Center",
-    "title": "Project Workspace",
-    "desc": "Manage multi-agent collaboration projects. Build on industrial-grade workflow templates to let your AI team automate complex development, review, and deployment tasks.",
+    "sectionLabel": "Advanced Asset Management",
+    "title": "Project Assets",
+    "desc": "This keeps legacy projects, checkpoints, transfer packets, project memory, and project-level tool safety settings. For daily work, bind a working folder from the chat page first.",
     "createButton": "New Project",
     "editButton": "Edit project",
     "editDialog": {
@@ -456,6 +464,9 @@
     "custom": "Custom",
     "reset": "Reset: {{rule}}",
     "used": "Updated usage",
+    "autoRecorded": "Auto-tracked",
+    "recordedEvents": "From {{n}} local calls",
+    "priceIncomplete": "{{n}} calls have missing prices, so USD cost may be low",
     "editDialog": {
       "title": "Edit Usage Plan"
     },
@@ -490,6 +501,16 @@
     },
     "deleteConfirm": "Remove this usage plan?"
   },
+  "usageMonitor": {
+    "detailsTab": "Actual Usage",
+    "plansTab": "Quota Setup",
+    "priceCatalog": "Price Catalog",
+    "priceUpdatedAt": "Last synced: {{time}}",
+    "priceNeverSynced": "Remote prices have not been synced yet. Using built-in prices or your manual overrides for now.",
+    "priceSyncNow": "Refresh Prices",
+    "priceSyncing": "Refreshing…",
+    "priceSyncFailed": "Last refresh failed: {{reason}}"
+  },
   "debate": {
     "sectionLabel": "Multi-Model Collaboration",
     "title": "Model Debate",
@@ -511,26 +532,56 @@
   },
   "stats": {
     "sectionLabel": "Usage Analytics",
-    "title": "Savings & Usage",
-    "desc": "See what you spend each day, which model costs most, and how much smart routing saves you.",
+    "title": "Usage Details",
+    "desc": "See daily spend, which models cost most, which roles consume the most, and what tools the AI actually ran.",
     "loading": "Loading stats…",
     "today": "Today",
     "last7d": "Last 7d",
     "last30d": "Last 30d",
     "cacheHits": "Cache hits",
+    "savingsTitle": "Verified Savings",
+    "savingsTotal": "Total Saved",
+    "savingsEmpty": "No explainable savings yet. Cache hits, smart model picks, and context compression will show up here with details.",
+    "savingsExplain": "Would have been about {{baseline}}, actually about {{actual}}",
+    "savingsCacheDetail": "Cache hit {{tokens}} tokens, full input {{input}} / 1M, cache read {{cache}} / 1M",
+    "savingsRoutingDetail": "Using {{baseline}} would have cost more; this run actually used {{actual}}",
+    "savingsCompressionDetail": "Before compression about {{before}} tokens, after compression about {{after}} tokens",
+    "savingsKinds": {
+      "cache": "Cache Savings",
+      "routing": "Routing Savings",
+      "compression": "Compression Savings"
+    },
     "trendTitle": "Cost trend (7 days)",
     "byModelTitle": "Cost by model",
     "calls": "{{n}} calls",
     "noData": "No usage yet — chat a bit and it'll show up here.",
     "byModelDrilldownTitle": "By actor role (clicked model)",
     "byModelDrilldownHint": "Click a model row to see which roles used it",
+    "pricingMissingCalls": "{{n}} missing price",
     "actorRoleUnknown": "(Uncategorized)",
-    "stage": "Project workspace",
+    "stage": "Project assets",
     "actorRoleEmptyHint": "No role usage for this model",
     "actorRoleInputTokensCol": "In",
     "actorRoleOutputTokensCol": "Out",
     "perfTitle": "Real model performance (routing basis)",
-    "perfEmpty": "Building samples — once each model has 30+ calls per task type, smart routing scores models from this.",
+    "perfEmpty": "Building samples — after a model has at least 1 call, smart routing starts using real performance with smoothing to avoid small-sample overconfidence.",
+    "perfUnknownModel": "Unknown model",
+    "perfProviderLine": "{{provider}} · {{model}}",
+    "perfMissingModelLine": "Model config was deleted or not found",
+    "perfTaskType": "Task type",
+    "perfSuccessRate": "Call stability",
+    "perfAvgCost": "Avg. cost",
+    "perfAvgLatency": "Avg. latency",
+    "perfPerCall": "{{value}} / call",
+    "perfMilliseconds": "{{value}} ms",
+    "perfSeconds": "{{value}} sec",
+    "perfSampleHint": "Based on {{n}} real model calls. Call stability means the model call finished normally when the user did not stop it, or Cosmgrid recovered it automatically. It is not cache hit rate or tool success rate.",
+    "perfTaskTypes": {
+      "simple": "Simple question",
+      "standard": "Standard task",
+      "hard": "Complex task",
+      "main_chat": "Main chat"
+    },
     "toolsTitle": "AI tool activity",
     "toolsEmpty": "The AI hasn't touched files or commands yet. Once a project has a workspace path, its reads/edits/commands show up here.",
     "toolStatus": {
@@ -558,7 +609,13 @@
     "smartRouting": {
       "title": "Smart Routing",
       "toggleTitle": "Smart Routing (v2)",
-      "toggleDesc": "When on, the app picks cheaper, more reliable models based on each model's real track record (success rate / cost / latency), and serves repeated questions from a semantic cache to save tokens. Falls back to rule-based routing when samples are insufficient. Turn off to use basic rule-based routing only."
+      "toggleDesc": "When on, the app picks cheaper, more reliable models based on each model's real track record (call stability / cost / latency), and serves repeated questions from a semantic cache to save tokens. Falls back to rule-based routing when samples are insufficient. Turn off to use basic rule-based routing only."
+    },
+    "projectAssets": {
+      "title": "Project Assets (Advanced)",
+      "entryTitle": "View legacy projects, checkpoints, and transfer packets",
+      "entryDesc": "Project assets are no longer a primary entry. Use this only for legacy projects, checkpoints, transfer packets, project memory, and project-level tool safety settings.",
+      "open": "Open Project Assets"
     },
     "security": {
       "title": "Security & Local Data",
@@ -588,7 +645,7 @@
     "nextTarget": {
       "providers": "Providers",
       "templates": "Templates",
-      "projects": "Projects"
+      "chat": "Chat"
     },
     "steps": {
       "addApiKey": {
@@ -600,12 +657,12 @@
         "desc": "At least 2 models are needed to showcase multi-AI collaboration — e.g. Opus for chat, Gemini for coding, Haiku for testing."
       },
       "browseTemplates": {
-        "title": "Browse the 4 Built-in Templates",
-        "desc": "Full-Stack Web / Data Science / Mobile App / Small Scripts — each template auto-assigns the best model to every role."
+        "title": "Review the Default 8 Roles",
+        "desc": "Default 8 Roles is the main collaboration plan: Leader, Architect, Frontend, Backend, Execution Runner, Tester, Reviewer, and Security. You can later copy it into custom templates."
       },
-      "createFirstProject": {
-        "title": "Create Your First Project",
-        "desc": "Pick a template, set the project name and workspace path (you can change it later), and you're done."
+      "bindWorkspace": {
+        "title": "Return to chat and bind a working folder",
+        "desc": "Most work happens in the chat page. Click \"Workspace\" beside the input, choose your project folder, and the AI can read files, edit code, and run checks."
       }
     }
   },
@@ -641,6 +698,11 @@
       "awaiting": "Awaiting Instruction",
       "endpointFailed": "Endpoint Failed",
       "failsafeSwitched": "Failsafe: Switched to {{name}}",
+      "recovery": {
+        "native_resume": "Recovered with the CLI's native resume session",
+        "context_replay": "Recovered by continuing from the interruption point without repeating earlier content",
+        "fallback_handoff": "Recovered by handing completed context to the next model"
+      },
       "apiKeyMissing": "API Key Missing",
       "initFailed": "Initialization Failed",
       "syncing": "Synchronizing Environment...",

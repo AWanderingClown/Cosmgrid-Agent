@@ -33,7 +33,7 @@ import type { WorkRole } from "../api";
  *  - architect: 方案 / 架构评审（精活，强模型）
  *  - frontend:  前端工程师
  *  - backend:   后端工程师
- *  - runner:    代码执行 Runner（粗活，便宜；跑 build/lint/起服务）
+ *  - runner:    运行执行员（粗活，便宜；跑 build/lint/起服务）
  *  - tester:    测试工程师
  *  - reviewer:  审查工程师（强模型；只在用户明确说审查/复核/检查时才激活）
  *  - security:  安全工程师（强模型；只在用户明确要安全检查时激活）
@@ -284,7 +284,7 @@ export const ROLE_LABELS: Record<RoleId, string> = {
   architect: "方案 / 架构评审",
   frontend: "前端工程师",
   backend: "后端工程师",
-  runner: "代码执行者（build / lint / 起服务）",
+  runner: "运行执行员（build / lint / 起服务）",
   tester: "测试工程师",
   reviewer: "审查工程师（代码质量 / 可维护性）",
   security: "安全工程师（密钥 / 注入 / 支付安全）",

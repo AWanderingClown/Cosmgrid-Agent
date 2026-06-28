@@ -1,7 +1,8 @@
 // SettingsPage - 设置页 (v0.7.5: 移除缺失的 RadioGroup 依赖，采用自定义稳定实现)
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap } from "lucide-react";
+import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap, FolderKanban } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -11,7 +12,11 @@ import { useSmartRoutingSetting } from "@/lib/app-settings";
 import { SUPPORTED_LANGUAGES, LANGUAGE_LABELS, type SupportedLanguage } from "@/i18n";
 import { cn } from "@/lib/utils";
 
-export function SettingsPage() {
+export interface SettingsPageProps {
+  onOpenProjectAssets?: () => void;
+}
+
+export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
   const [smartRouting, setSmartRouting] = useSmartRoutingSetting();
@@ -163,6 +168,28 @@ export function SettingsPage() {
                 </div>
                 <Badge className="bg-primary/20 text-primary dark:text-primary border-none px-3 py-1 font-bold whitespace-nowrap">{t("settings.security.encrypted")}</Badge>
               </div>
+            </div>
+          </Card>
+
+          {/* 项目资产（高级入口） */}
+          <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-6 shadow-xl">
+            <div className="flex items-center gap-3 pb-4 border-b border-white/10">
+              <FolderKanban className="w-5 h-5 text-primary" />
+              <h2 className="text-xl font-bold dark:text-white">{t("settings.projectAssets.title")}</h2>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 bg-white/5 rounded-2xl border border-white/5">
+              <div className="space-y-1">
+                <div className="text-sm font-bold">{t("settings.projectAssets.entryTitle")}</div>
+                <p className="text-xs text-muted-foreground max-w-xl leading-relaxed">{t("settings.projectAssets.entryDesc")}</p>
+              </div>
+              <Button
+                type="button"
+                onClick={onOpenProjectAssets}
+                disabled={!onOpenProjectAssets}
+                className="rounded-xl shrink-0"
+              >
+                {t("settings.projectAssets.open")}
+              </Button>
             </div>
           </Card>
 

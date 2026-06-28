@@ -177,6 +177,50 @@ export function classifyLlmError(
 
   // 没状态码时按错误文本分类
   const lower = rawMessage.toLowerCase();
+  if (
+    lower.includes("rate limit") ||
+    lower.includes("rate_limit") ||
+    lower.includes("quota exceeded") ||
+    lower.includes("usage limit") ||
+    lower.includes("too many requests")
+  ) {
+    return {
+      category: "rate_limit",
+      httpStatus: 429,
+      userMessage: msg("套餐额度已耗尽或被限流，请稍后重试或检查套餐状态", "errorClassifier.rate_limit"),
+      technicalMessage: sanitized,
+      shouldFallback: true,
+    };
+  }
+  if (
+    lower.includes("unauthorized") ||
+    lower.includes("invalid api key") ||
+    lower.includes("invalid token") ||
+    lower.includes("authentication failed") ||
+    lower.includes("auth failed")
+  ) {
+    return {
+      category: "auth_invalid",
+      httpStatus: 401,
+      userMessage: msg("API Key 无效或已过期，请在 API 接入页检查", "errorClassifier.auth_invalid"),
+      technicalMessage: sanitized,
+      shouldFallback: true,
+    };
+  }
+  if (
+    lower.includes("cli exited with code") ||
+    lower.includes("process exited with code") ||
+    lower.includes("child process exited") ||
+    lower.includes("subprocess exited")
+  ) {
+    return {
+      category: "server_error",
+      httpStatus: 502,
+      userMessage: msg("AI 执行进程异常退出，正在尝试自动恢复", "errorClassifier.server_error"),
+      technicalMessage: sanitized,
+      shouldFallback: true,
+    };
+  }
   if (lower.includes("timeout") || lower.includes("aborted") || lower.includes("timed out")) {
     return {
       category: "timeout",

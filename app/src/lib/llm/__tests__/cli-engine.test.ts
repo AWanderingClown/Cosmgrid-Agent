@@ -99,6 +99,22 @@ describe("streamViaCli 正常流式", () => {
     await p;
     expect(onRateLimit).toHaveBeenCalledWith({ resetsAt: 1234567890, limitType: "five_hour" });
   });
+
+  it("stdout 含官方 session 事件 → onSession 被调且结果带 officialSessionId", async () => {
+    const onSession = vi.fn();
+    const p = streamViaCli(endpoint, messages, { onDelta: vi.fn(), onSession });
+    const ch = captureSpawnChannel();
+
+    ch.send({
+      type: "stdout",
+      line: '{"type":"system","subtype":"init","session_id":"sess-1"}',
+    });
+    ch.send({ type: "terminated", code: 0 });
+
+    const res = await p;
+    expect(onSession).toHaveBeenCalledWith("sess-1");
+    expect(res.officialSessionId).toBe("sess-1");
+  });
 });
 
 describe("streamViaCli 错误路径", () => {
@@ -131,6 +147,20 @@ describe("streamViaCli 错误路径", () => {
     await expect(streamViaCli(endpoint, messages, { onDelta: vi.fn() })).rejects.toThrow(
       "binary not found",
     );
+  });
+
+  it("CLI 报错时 reject 仍带 officialSessionId，供原生续跑", async () => {
+    const p = streamViaCli(endpoint, messages, { onDelta: vi.fn() });
+    const ch = captureSpawnChannel();
+
+    ch.send({
+      type: "stdout",
+      line: '{"type":"system","subtype":"init","session_id":"sess-1"}',
+    });
+    ch.send({ type: "error", message: "network down" });
+    ch.send({ type: "terminated", code: 1 });
+
+    await expect(p).rejects.toMatchObject({ officialSessionId: "sess-1" });
   });
 });
 
@@ -241,4 +271,23 @@ describe("CLI 程序路径选择", () => {
     ch.send({ type: "terminated", code: 0 });
     await p;
   });
-});
+
+  it("resumeSessionId 存在时走官方 resume 参数", async () => {
+    const p = streamViaCli(
+      endpoint,
+      messages,
+      { onDelta: vi.fn() },
+      { resumeSessionId: "sess-1", resumePrompt: "continue" },
+    );
+    await Promise.resolve();
+
+    const spawnCall = invokeMock.mock.calls.find((c) => c[0] === "spawn_cli_stream");
+    const params = spawnCall?.[1] as { args?: string[] } | undefined;
+    expect(params?.args).toContain("--resume");
+    expect(params?.args).toContain("sess-1");
+
+    const ch = captureSpawnChannel();
+    ch.send({ type: "terminated", code: 0 });
+    await p;
+  });
+}); 

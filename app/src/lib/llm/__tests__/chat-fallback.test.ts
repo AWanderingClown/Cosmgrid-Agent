@@ -77,6 +77,17 @@ function makeFailingStream(error: unknown) {
   };
 }
 
+function makePartialFailingStream(deltas: string[], error: unknown) {
+  return {
+    textStream: (async function* () {
+      for (const d of deltas) yield d;
+      throw error;
+    })(),
+    usage: Promise.resolve(undefined),
+    finishReason: Promise.resolve(undefined),
+  };
+}
+
 describe("streamWithFallback - 主模型正常", () => {
   it("主模型成功时不切 fallback", async () => {
     mocks.streamText.mockReturnValueOnce(makeSuccessStream(["Hi", " there"]));
@@ -217,6 +228,131 @@ describe("streamWithFallback - 网络/超时错误", () => {
   });
 });
 
+describe("streamWithFallback - 非用户中断自动恢复", () => {
+  it("finishReason=length 时自动让同一模型从中断处续写，不把截断当完成", async () => {
+    mocks.streamText
+      .mockReturnValueOnce(makeSuccessStream(["第一段"], { inputTokens: 10, outputTokens: 20 }, "length"))
+      .mockReturnValueOnce(makeSuccessStream(["第二段"], { inputTokens: 5, outputTokens: 10 }, "stop"));
+
+    const deltas: string[] = [];
+    const usages: Array<{ reason: string; input: number; output: number }> = [];
+    const cbs: StreamCallbacks = {
+      onDelta: (d) => deltas.push(d),
+      onUsage: (u, _m, reason) => usages.push({ reason, input: u.inputTokens, output: u.outputTokens }),
+    };
+
+    const result = await streamWithFallback([primary], [{ role: "user", content: "写完整方案" }], cbs);
+
+    expect(result).toEqual({ usedModelId: "m-primary", switched: false });
+    expect(deltas.join("")).toBe("第一段第二段");
+    expect(mocks.streamText).toHaveBeenCalledTimes(2);
+    expect(usages).toEqual([{ reason: "stop", input: 15, output: 30 }]);
+    expect(recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      finishReason: "stop",
+      usage: expect.objectContaining({ inputTokens: 15, outputTokens: 30 }),
+    }));
+    const secondCall = mocks.streamText.mock.calls[1]![0] as { messages: Array<{ role: string; content: string }> };
+    expect(secondCall.messages.at(-1)?.content).toContain("从刚才中断处继续");
+  });
+
+  it("流式输出一半后网络断开时，切 fallback 并带上已输出片段继续", async () => {
+    mocks.streamText
+      .mockReturnValueOnce(makePartialFailingStream(["已经完成一半。"], new Error("fetch failed")))
+      .mockReturnValueOnce(makeSuccessStream(["继续完成剩余。"], { inputTokens: 8, outputTokens: 12 }, "stop"));
+
+    const deltas: string[] = [];
+    const switched: Array<{ from: string; to: string }> = [];
+    const cbs: StreamCallbacks = {
+      onDelta: (d) => deltas.push(d),
+      onSwitched: (from, to) => switched.push({ from: from.modelId, to: to.modelId }),
+    };
+
+    const result = await streamWithFallback(
+      [primary, fallback],
+      [{ role: "user", content: "继续做完整任务" }],
+      cbs,
+    );
+
+    expect(result).toEqual({ usedModelId: "m-fallback", switched: true });
+    expect(deltas.join("")).toBe("已经完成一半。继续完成剩余。");
+    expect(switched).toEqual([{ from: "m-primary", to: "m-fallback" }]);
+    const secondCall = mocks.streamText.mock.calls[1]![0] as { messages: Array<{ role: string; content: string }> };
+    expect(secondCall.messages.some((m) => m.role === "assistant" && m.content === "已经完成一半。")).toBe(true);
+    expect(secondCall.messages.at(-1)?.content).toContain("不要重复已经完成的内容");
+    expect(recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      modelId: "m-primary",
+      finishReason: "network",
+    }));
+    expect(recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      modelId: "m-fallback",
+      finishReason: "stop",
+    }));
+  });
+
+  it("同一模型连续截断超过续写预算后切 fallback，不能把 length 当正常完成", async () => {
+    mocks.streamText
+      .mockReturnValueOnce(makeSuccessStream(["A"], { inputTokens: 1, outputTokens: 1 }, "length"))
+      .mockReturnValueOnce(makeSuccessStream(["B"], { inputTokens: 1, outputTokens: 1 }, "length"))
+      .mockReturnValueOnce(makeSuccessStream(["C"], { inputTokens: 1, outputTokens: 1 }, "length"))
+      .mockReturnValueOnce(makeSuccessStream(["D"], { inputTokens: 1, outputTokens: 1 }, "stop"));
+
+    const deltas: string[] = [];
+    const result = await streamWithFallback(
+      [primary, fallback],
+      [{ role: "user", content: "写到完整结束" }],
+      { onDelta: (d) => deltas.push(d) },
+    );
+
+    expect(result).toEqual({ usedModelId: "m-fallback", switched: true });
+    expect(deltas.join("")).toBe("ABCD");
+    expect(recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      modelId: "m-fallback",
+      finishReason: "stop",
+    }));
+  });
+
+  it("finishReason=end_turn 视为正常完成，兼容 Claude/Codex CLI stop_reason", async () => {
+    mocks.streamText.mockReturnValueOnce(makeSuccessStream(["ok"], { inputTokens: 2, outputTokens: 3 }, "end_turn"));
+
+    const result = await streamWithFallback(
+      [primary, fallback],
+      [{ role: "user", content: "x" }],
+      { onDelta: () => {} },
+    );
+
+    expect(result).toEqual({ usedModelId: "m-primary", switched: false });
+    expect(mocks.streamText).toHaveBeenCalledTimes(1);
+    expect(recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      finishReason: "end_turn",
+    }));
+  });
+
+  it("finishReason=content_filter 这类非正常结束不能当成功，会切 fallback 继续", async () => {
+    mocks.streamText
+      .mockReturnValueOnce(makeSuccessStream(["半截"], { inputTokens: 1, outputTokens: 1 }, "content_filter"))
+      .mockReturnValueOnce(makeSuccessStream(["恢复"], { inputTokens: 1, outputTokens: 1 }, "stop"));
+
+    const deltas: string[] = [];
+    const result = await streamWithFallback(
+      [primary, fallback],
+      [{ role: "user", content: "x" }],
+      { onDelta: (d) => deltas.push(d) },
+    );
+
+    expect(result).toEqual({ usedModelId: "m-fallback", switched: true });
+    expect(deltas.join("")).toBe("半截恢复");
+    expect(recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      modelId: "m-primary",
+      finishReason: "content_filter",
+    }));
+    expect(recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      modelId: "m-fallback",
+      finishReason: "stop",
+    }));
+  });
+});
+
 describe("streamWithFallback - 无 fallback", () => {
   it("主模型失败直接抛错（没有 fallback）", async () => {
     mocks.streamText.mockReturnValueOnce(
@@ -338,8 +474,14 @@ describe("streamWithFallback - 内置 recordUsageEvent（修 ChatPage 写错 mod
       [{ role: "user", content: "x" }],
       cbs,
     );
-    expect(recordUsageEvent).toHaveBeenCalledTimes(1);
-    expect(recordUsageEvent).toHaveBeenCalledWith(
+    expect(recordUsageEvent).toHaveBeenCalledTimes(2);
+    expect(recordUsageEvent).toHaveBeenNthCalledWith(1,
+      expect.objectContaining({
+        modelId: "m-primary",
+        finishReason: "auth_invalid",
+      }),
+    );
+    expect(recordUsageEvent).toHaveBeenNthCalledWith(2,
       expect.objectContaining({
         modelId: "m-fallback", // ✅ 不再误报为 m-primary
         modelName: "fallback-model", // ✅ 不再误报为 primary-model

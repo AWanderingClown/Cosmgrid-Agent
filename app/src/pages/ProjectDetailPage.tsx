@@ -252,6 +252,9 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
           onSwitched: (_from, to) => {
             setSwitchNotice(t("projectDetail.chat.failsafeSwitched", { name: to.displayLabel || to.modelName }));
           },
+          onRecovered: (mode) => {
+            setSwitchNotice(t(`projectDetail.chat.recovery.${mode}`));
+          },
           onUsage: async (usage, usedEndpoint) => {
             const finalAssistant = await dbMessages.create({
               conversationId, role: "assistant", content: full, modelId: usedEndpoint.modelId, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cost: 0

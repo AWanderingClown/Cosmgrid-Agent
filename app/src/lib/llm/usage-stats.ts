@@ -16,6 +16,8 @@ export interface ModelCost {
   modelId: string;
   cost: number;
   calls: number;
+  /** 价格表未命中的调用数；cost 不含这些调用的真实费用 */
+  unknownPricingCalls: number;
   inputTokens: number;
   outputTokens: number;
 }
@@ -69,10 +71,11 @@ export function aggregateUsage(rows: UsageEventRow[], now: Date = new Date()): U
 
     const mid = r.modelId ?? "(unknown)";
     const mc = byModelMap.get(mid) ?? {
-      modelId: mid, cost: 0, calls: 0, inputTokens: 0, outputTokens: 0,
+      modelId: mid, cost: 0, calls: 0, unknownPricingCalls: 0, inputTokens: 0, outputTokens: 0,
     };
     mc.cost += r.cost;
     mc.calls += 1;
+    if (r.pricingKnown === false) mc.unknownPricingCalls += 1;
     mc.inputTokens += r.inputTokens || 0;
     mc.outputTokens += r.outputTokens || 0;
     byModelMap.set(mid, mc);
@@ -112,6 +115,8 @@ export interface ActorRoleModelUsage {
   inputTokens: number;
   outputTokens: number;
   cost: number;
+  /** 价格表未命中的调用数；cost 不含这些调用的真实费用 */
+  unknownPricingCalls: number;
 }
 
 export interface ActorRoleUsage {
@@ -154,12 +159,14 @@ export async function aggregateUsageByActorRole(args: {
     input_tokens: number;
     output_tokens: number;
     cost: number;
+    unknown_pricing_calls: number;
   }>>(
     `SELECT role_kind, model_id,
             COUNT(*) AS calls,
             SUM(input_tokens) AS input_tokens,
             SUM(output_tokens) AS output_tokens,
-            SUM(cost) AS cost
+            SUM(cost) AS cost,
+            SUM(CASE WHEN pricing_known = 0 THEN 1 ELSE 0 END) AS unknown_pricing_calls
      FROM usage_events
      ${whereClause}
      GROUP BY role_kind, model_id
@@ -176,6 +183,7 @@ export async function aggregateUsageByActorRole(args: {
       input_tokens: r.input_tokens,
       output_tokens: r.output_tokens,
       cost: r.cost,
+      unknown_pricing_calls: r.unknown_pricing_calls,
     })),
   );
 }
@@ -196,6 +204,7 @@ export function aggregateUsageByActorRoleFromRows(rows: UsageEventRow[]): ActorR
       input_tokens: r.inputTokens,
       output_tokens: r.outputTokens,
       cost: r.cost,
+      unknown_pricing_calls: r.pricingKnown === false ? 1 : 0,
     })),
   );
 }
@@ -213,6 +222,7 @@ function doAggregateRoleGroups(
     input_tokens: number;
     output_tokens: number;
     cost: number;
+    unknown_pricing_calls?: number;
   }>,
 ): ActorRoleUsage[] {
   // 阶段 I 修：先按 (roleKind, modelId) 合并到 row map，再按 roleKind 分组
@@ -234,6 +244,7 @@ function doAggregateRoleGroups(
       existing.inputTokens += r.input_tokens;
       existing.outputTokens += r.output_tokens;
       existing.cost += r.cost;
+      existing.unknownPricingCalls += r.unknown_pricing_calls ?? 0;
     } else {
       const roleKind: string | null = r.role_kind ?? null;
       const modelId = r.model_id ?? "(unknown model)";
@@ -245,6 +256,7 @@ function doAggregateRoleGroups(
         inputTokens: r.input_tokens,
         outputTokens: r.output_tokens,
         cost: r.cost,
+        unknownPricingCalls: r.unknown_pricing_calls ?? 0,
       });
     }
   }

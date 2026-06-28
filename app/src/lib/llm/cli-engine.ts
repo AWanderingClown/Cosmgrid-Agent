@@ -7,6 +7,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import {
   buildCliArgs,
+  buildCliResumeArgs,
   buildPromptFromMessages,
   parseCliStreamLine,
   CLI_DEFAULT_PROGRAM,
@@ -34,12 +35,14 @@ export interface CliStreamCallbacks {
   onUsage?: (usage: { inputTokens: number; outputTokens: number }) => void;
   /** 订阅额度状态（claude 的 rate_limit_event），用于未来接 Token Plan 显示 */
   onRateLimit?: (info: { resetsAt: number | null; limitType: string | null }) => void;
+  onSession?: (officialSessionId: string) => void;
 }
 
 export interface CliStreamResult {
   inputTokens: number;
   outputTokens: number;
   finishReason: string;
+  officialSessionId: string | null;
 }
 
 /** 给本次 spawn 生成唯一 id，Rust 端据此存 child 句柄、abort 时按 id kill。 */
@@ -59,25 +62,36 @@ export async function streamViaCli(
   endpoint: CliEndpoint,
   messages: readonly CliMessage[],
   callbacks: CliStreamCallbacks,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; resumeSessionId?: string | null; resumePrompt?: string } = {},
 ): Promise<CliStreamResult> {
   const program = endpoint.program?.trim() || CLI_DEFAULT_PROGRAM[endpoint.providerType];
   const prompt = buildPromptFromMessages(messages);
-  const args = buildCliArgs(endpoint.providerType, endpoint.modelName, prompt);
+  const args = options.resumeSessionId
+    ? buildCliResumeArgs(
+        endpoint.providerType,
+        endpoint.modelName,
+        options.resumeSessionId,
+        options.resumePrompt ?? prompt,
+      )
+    : buildCliArgs(endpoint.providerType, endpoint.modelName, prompt);
   const sessionId = newCliSessionId();
 
   let usage = { inputTokens: 0, outputTokens: 0 };
   let finishReason = "stop";
   let errorMsg: string | null = null;
   let stderrBuf = "";
+  let officialSessionId: string | null = options.resumeSessionId ?? null;
 
   return new Promise<CliStreamResult>((resolve, reject) => {
     let settled = false;
     const settle = () => {
       if (settled) return;
       settled = true;
-      if (errorMsg) reject(new Error(errorMsg));
-      else resolve({ ...usage, finishReason });
+      if (errorMsg) {
+        const err = new Error(errorMsg) as Error & { officialSessionId?: string | null };
+        err.officialSessionId = officialSessionId;
+        reject(err);
+      } else resolve({ ...usage, finishReason, officialSessionId });
     };
 
     const channel = new Channel<RustCliEvent>();
@@ -92,6 +106,9 @@ export async function streamViaCli(
               else if (e.kind === "usage") {
                 usage = { inputTokens: e.inputTokens, outputTokens: e.outputTokens };
                 callbacks.onUsage?.(usage);
+              } else if (e.kind === "session") {
+                officialSessionId = e.sessionId;
+                callbacks.onSession?.(e.sessionId);
               } else if (e.kind === "rate_limit") {
                 callbacks.onRateLimit?.({ resetsAt: e.resetsAt, limitType: e.limitType });
               } else if (e.kind === "error") {
@@ -126,7 +143,7 @@ export async function streamViaCli(
       void invoke("kill_cli", { sessionId }).catch((err: unknown) => {
         console.warn("kill_cli 失败（子进程可能已结束）：", err);
       });
-      resolve({ ...usage, finishReason: "abort" });
+      resolve({ ...usage, finishReason: "abort", officialSessionId });
     });
 
     invoke("spawn_cli_stream", {

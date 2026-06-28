@@ -107,6 +107,36 @@ export function buildCliArgs(
   return args;
 }
 
+export function buildCliResumeArgs(
+  providerType: CliProviderType,
+  modelName: string,
+  officialSessionId: string,
+  prompt: string,
+): string[] {
+  if (providerType === "claude-cli") {
+    const args = [
+      "--resume",
+      officialSessionId,
+      "-p",
+      prompt,
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--setting-sources",
+      "",
+    ];
+    if (modelName.trim()) args.push("--model", modelName);
+    return args;
+  }
+  const args = ["exec", "resume", officialSessionId, prompt, "--json"];
+  if (modelName.trim()) args.push("--model", modelName);
+  return args;
+}
+
+export type CliResumeCapability =
+  | { mode: "stateless"; reason: string }
+  | { mode: "resumable"; sessionId: string; resumeArgs: string[] };
+
 // ============ JSONL 输出解析 ============
 
 /** 归一化后的流事件：上层只认这几种，不关心 claude / codex 的原始结构差异 */
@@ -114,6 +144,7 @@ export type CliStreamEvent =
   | { kind: "delta"; text: string }
   | { kind: "usage"; inputTokens: number; outputTokens: number }
   | { kind: "rate_limit"; resetsAt: number | null; limitType: string | null }
+  | { kind: "session"; sessionId: string }
   | { kind: "error"; message: string }
   | { kind: "done"; finishReason: string };
 
@@ -137,6 +168,11 @@ export function parseClaudeStreamLine(line: string): CliStreamEvent[] {
   }
   const type = obj["type"];
   const events: CliStreamEvent[] = [];
+
+  if (type === "system" && obj["subtype"] === "init" && typeof obj["session_id"] === "string") {
+    events.push({ kind: "session", sessionId: obj["session_id"] });
+    return events;
+  }
 
   if (type === "assistant") {
     const message = obj["message"] as { content?: ClaudeContentBlock[] } | undefined;
@@ -200,6 +236,11 @@ export function parseCodexStreamLine(line: string): CliStreamEvent[] {
   const type = obj["type"];
   const events: CliStreamEvent[] = [];
 
+  if (type === "thread.started" && typeof obj["thread_id"] === "string") {
+    events.push({ kind: "session", sessionId: obj["thread_id"] });
+    return events;
+  }
+
   // codex 文本增量：常见为 { type: "item.completed"/"agent_message", text/delta }
   const text = (obj["delta"] ?? obj["text"]) as unknown;
   if (
@@ -239,4 +280,32 @@ export function parseCliStreamLine(
   return providerType === "claude-cli"
     ? parseClaudeStreamLine(line)
     : parseCodexStreamLine(line);
+}
+
+export function extractOfficialSessionId(
+  providerType: CliProviderType,
+  line: string,
+): string | null {
+  const sessionEvent = parseCliStreamLine(providerType, line).find((event) => event.kind === "session");
+  return sessionEvent?.kind === "session" ? sessionEvent.sessionId : null;
+}
+
+export function detectCliResumeCapability(args: {
+  providerType: CliProviderType;
+  modelName: string;
+  officialSessionId: string | null;
+}): CliResumeCapability {
+  if (!args.officialSessionId) {
+    return { mode: "stateless", reason: "CLI output did not expose a stable official session id" };
+  }
+  return {
+    mode: "resumable",
+    sessionId: args.officialSessionId,
+    resumeArgs: buildCliResumeArgs(
+      args.providerType,
+      args.modelName,
+      args.officialSessionId,
+      "Continue from where you stopped. Do not repeat completed content.",
+    ),
+  };
 }

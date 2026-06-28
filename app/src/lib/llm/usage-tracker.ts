@@ -1,7 +1,13 @@
 // UsageEvent 写入器（v0.3：用 db.usageEvents 替代 Prisma）
-import { usageEvents } from "../db";
-import { calculateCost, type ChatUsage } from "./cost-calculator";
+import { savingsEvents, usageEvents } from "../db";
+import { estimateCostWithCatalog, type ChatUsage } from "./cost-calculator";
+import { isNormalFinishReason } from "./finish-reason";
 import { recordPerformanceSample } from "./model-performance-stats";
+import {
+  calculateCacheSavings,
+  calculateCompressionSavings,
+  calculateRoutingSavings,
+} from "./savings-calculator";
 
 export interface RecordUsageParams {
   modelId: string;
@@ -23,6 +29,15 @@ export interface RecordUsageParams {
   usage: ChatUsage;
   finishReason: string;
   interrupted?: boolean;
+  routingDecision?: {
+    baselineModelId: string;
+    baselineModelName: string;
+    actualModelId: string;
+  } | null;
+  compressionStats?: {
+    beforeTokens: number;
+    afterTokens: number;
+  } | null;
 }
 
 const pendingWrites = new Set<Promise<void>>();
@@ -38,10 +53,10 @@ export function recordUsageEvent(
 ): Promise<void> | void {
   const writePromise = (async () => {
     try {
-      const cost = calculateCost(params.modelName, params.usage);
+      const costEstimate = await estimateCostWithCatalog(params.modelName, params.usage);
       const role = params.role ?? "main_chat";
-      const success = params.finishReason === "stop";
-      await usageEvents.create({
+      const success = isNormalFinishReason(params.finishReason);
+      const usageEventId = await usageEvents.create({
         providerId: params.providerId,
         apiCredentialId: params.apiCredentialId,
         modelId: params.modelId,
@@ -54,15 +69,109 @@ export function recordUsageEvent(
         outputTokens: params.usage.outputTokens ?? 0,
         cacheCreationTokens: params.usage.cacheWriteInputTokens ?? 0,
         cacheHitTokens: params.usage.cacheReadInputTokens ?? 0,
-        cost,
+        cost: costEstimate.cost,
+        pricingKnown: costEstimate.pricingKnown,
+        priceVersion: costEstimate.priceVersion,
+        priceSource: costEstimate.priceSource,
         success,
         interrupted: params.interrupted ?? false,
       });
+
+      if (success && costEstimate.pricingKnown && costEstimate.resolvedPrice) {
+        const cacheSavings = calculateCacheSavings({
+          usage: params.usage,
+          actualCost: costEstimate.cost,
+          resolvedPrice: costEstimate.resolvedPrice,
+        });
+        if (cacheSavings) {
+          await savingsEvents.create({
+            usageEventId,
+            conversationId: params.conversationId ?? null,
+            projectId: params.projectId ?? null,
+            kind: "cache",
+            actualModelId: params.modelId,
+            baselineModelId: params.modelId,
+            baselineCost: cacheSavings.baselineCost,
+            actualCost: cacheSavings.actualCost,
+            savedCost: cacheSavings.savedCost,
+            formulaVersion: "cache-v1",
+            explainJson: JSON.stringify({
+              ...cacheSavings.explain,
+              priceVersion: costEstimate.priceVersion,
+              priceSource: costEstimate.priceSource,
+            }),
+          });
+        }
+
+        if (
+          params.routingDecision &&
+          params.routingDecision.actualModelId === params.modelId
+        ) {
+          const baselineEstimate = await estimateCostWithCatalog(
+            params.routingDecision.baselineModelName,
+            params.usage,
+          );
+          if (baselineEstimate.pricingKnown) {
+            const routingSavings = calculateRoutingSavings({
+              baselineCost: baselineEstimate.cost,
+              actualCost: costEstimate.cost,
+              baselineModelId: params.routingDecision.baselineModelId,
+              actualModelId: params.modelId,
+            });
+            if (routingSavings) {
+              await savingsEvents.create({
+                usageEventId,
+                conversationId: params.conversationId ?? null,
+                projectId: params.projectId ?? null,
+                kind: "routing",
+                actualModelId: params.modelId,
+                baselineModelId: params.routingDecision.baselineModelId,
+                baselineCost: routingSavings.baselineCost,
+                actualCost: routingSavings.actualCost,
+                savedCost: routingSavings.savedCost,
+                formulaVersion: "routing-v1",
+                explainJson: JSON.stringify({
+                  ...routingSavings.explain,
+                  actualPriceVersion: costEstimate.priceVersion,
+                  baselinePriceVersion: baselineEstimate.priceVersion,
+                }),
+              });
+            }
+          }
+        }
+
+        if (params.compressionStats) {
+          const compressionSavings = calculateCompressionSavings({
+            beforeTokens: params.compressionStats.beforeTokens,
+            afterTokens: params.compressionStats.afterTokens,
+            inputPricePer1m: costEstimate.resolvedPrice.input,
+          });
+          if (compressionSavings) {
+            await savingsEvents.create({
+              usageEventId,
+              conversationId: params.conversationId ?? null,
+              projectId: params.projectId ?? null,
+              kind: "compression",
+              actualModelId: params.modelId,
+              baselineModelId: params.modelId,
+              baselineCost: compressionSavings.baselineCost,
+              actualCost: compressionSavings.actualCost,
+              savedCost: compressionSavings.savedCost,
+              formulaVersion: "compression-v1",
+              explainJson: JSON.stringify({
+                ...compressionSavings.explain,
+                priceVersion: costEstimate.priceVersion,
+              }),
+            });
+          }
+        }
+      }
+
       // v0.9 阶段7：同一份样本喂给模型表现滚动统计（旁路，内部自吞错）
       await recordPerformanceSample(params.modelId, role, {
         inputTokens: params.usage.inputTokens ?? 0,
         outputTokens: params.usage.outputTokens ?? 0,
-        cost,
+        cost: costEstimate.cost,
         ...(params.latencyMs !== undefined ? { latencyMs: params.latencyMs } : {}),
         success,
       });

@@ -24,6 +24,8 @@ export interface ModelListItem {
   name: string;
   displayName: string | null;
   contextWindow: number | null;
+  inputPrice: number | null;
+  outputPrice: number | null;
   enabled: boolean;
   workRoles: string;
   /** 能力分 JSON 字符串（喂给 autoAssignModels 做评分） */

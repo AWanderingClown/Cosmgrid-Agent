@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   create: vi.fn(),
+  savingsCreate: vi.fn(),
 }));
 
 // db 的 usageEvents.create mock 掉，只验证传进去的 role
@@ -10,10 +11,18 @@ const mocks = vi.hoisted(() => ({
 // 本测试在 __tests__/，故 mock 路径要多一层 "../../db"
 vi.mock("../../db", () => ({
   usageEvents: { create: mocks.create },
+  savingsEvents: { create: mocks.savingsCreate },
 }));
 // 成本计算 mock 成固定值，隔离价格表
 vi.mock("../cost-calculator", () => ({
-  calculateCost: vi.fn(() => 0.001),
+  estimateCostWithCatalog: vi.fn(() => ({
+    cost: 0.001,
+    pricingKnown: true,
+    priceVersion: "test-version",
+    priceSource: "builtin",
+    priceSourceUrl: "builtin:test",
+    resolvedPrice: null,
+  })),
 }));
 // 模型表现统计是旁路，单测 usage-tracker 时 mock 掉，避免触达 db
 vi.mock("../model-performance-stats", () => ({
@@ -34,7 +43,9 @@ const baseParams = {
 describe("recordUsageEvent — role 落盘", () => {
   beforeEach(() => {
     mocks.create.mockClear();
-    mocks.create.mockResolvedValue(undefined);
+    mocks.create.mockResolvedValue("usage-1");
+    mocks.savingsCreate.mockClear();
+    mocks.savingsCreate.mockResolvedValue(undefined);
   });
 
   it("传入 role 时按传入值落盘（不再写死 main_chat）", async () => {
@@ -63,7 +74,22 @@ describe("recordUsageEvent — role 落盘", () => {
       inputTokens: 100,
       outputTokens: 50,
       cost: 0.001,
+      pricingKnown: true,
       success: true,
+    });
+  });
+
+  it("finishReason=end_turn 也算正常调用，避免 CLI 正常结束被误判为不稳定", async () => {
+    await recordUsageEvent({ ...baseParams, finishReason: "end_turn" }, { awaitWrite: true });
+    expect(mocks.create.mock.calls[0]![0]).toMatchObject({
+      success: true,
+    });
+  });
+
+  it("finishReason=length 不算正常调用", async () => {
+    await recordUsageEvent({ ...baseParams, finishReason: "length" }, { awaitWrite: true });
+    expect(mocks.create.mock.calls[0]![0]).toMatchObject({
+      success: false,
     });
   });
 
@@ -77,7 +103,9 @@ describe("recordUsageEvent — role 落盘", () => {
 describe("阶段 F1 H3：roleKind 透传 + spread 守门（review F1-7）", () => {
   beforeEach(() => {
     mocks.create.mockClear();
-    mocks.create.mockResolvedValue(undefined);
+    mocks.create.mockResolvedValue("usage-1");
+    mocks.savingsCreate.mockClear();
+    mocks.savingsCreate.mockResolvedValue(undefined);
   });
 
   it("roleKind='frontend' → usageEvents.create 入参含 roleKind='frontend'", async () => {

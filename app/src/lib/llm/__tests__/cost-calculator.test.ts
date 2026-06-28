@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { calculateCost } from "../cost-calculator";
+import { calculateCost, estimateCost } from "../cost-calculator";
 
 describe("calculateCost", () => {
   afterEach(() => {
@@ -8,6 +8,22 @@ describe("calculateCost", () => {
 
   it("未知模型返回 0", () => {
     expect(calculateCost("unknown-model-xyz", { inputTokens: 1000, outputTokens: 1000 })).toBe(0);
+  });
+
+  it("未知模型显式返回 pricingKnown=false，避免统计页误判为免费", () => {
+    expect(estimateCost("unknown-model-xyz", { inputTokens: 1000, outputTokens: 1000 })).toEqual({
+      cost: 0,
+      pricingKnown: false,
+    });
+  });
+
+  it("已知模型显式返回 pricingKnown=true", () => {
+    const estimate = estimateCost("claude-sonnet-4-6", {
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+    });
+    expect(estimate.pricingKnown).toBe(true);
+    expect(estimate.cost).toBe(18);
   });
 
   it("claude-sonnet-4-6: 1M input + 1M output = $18", () => {

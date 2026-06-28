@@ -1,4 +1,4 @@
-// StatsPage - v0.9 阶段7：用量与省钱统计（成本趋势 / 按模型 / 缓存 / 模型表现）
+// StatsPage - v0.9 阶段7：用量明细（成本趋势 / 按模型 / 缓存 / 模型表现）
 // 阶段 F2：在 byModel 卡片内加 drill-down 展开"按角色 × 模型"拆分（采纳 frontend-ui-expert review）
 //  - byModel 是主页（不动），点 modelId 行 → 展开该 model 的角色拆分
 //  - 角色卡片用 ROLE_COLOR_MAP 配色（orchestrator.ts 单一来源；本文件 0 处复用——ChainProgressBar 后续迭代时考虑统一）
@@ -9,12 +9,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   BarChart3, Coins, Sparkles, Activity, Cpu, Wrench, FileEdit, Terminal, Eye,
-  ChevronRight, ChevronDown,
+  ChevronRight, ChevronDown, Timer, CheckCircle2, DollarSign, Layers3,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import {
-  usageEvents, semanticCache, modelPerformanceStats, toolExecutions,
-  type ModelPerformanceStatRow, type ToolExecutionRow, type UsageEventRow,
+  usageEvents, semanticCache, modelPerformanceStats, savingsEvents, toolExecutions,
+  models as dbModels,
+  type Model, type ModelPerformanceStatRow, type ToolExecutionRow, type UsageEventRow,
 } from "@/lib/db";
 import {
   aggregateUsage,
@@ -24,7 +25,7 @@ import {
   type ActorRoleModelUsage,
 } from "@/lib/llm/usage-stats";
 import { cleanupExpiredCache } from "@/lib/llm/semantic-cache";
-import { formatCost as fmtCost } from "@/lib/utils";
+import { cn, formatCost as fmtCost } from "@/lib/utils";
 import {
   ROLE_IDS, ROLE_COLOR, STAGE_COLOR, UNKNOWN_COLOR,
   type RoleId,
@@ -35,6 +36,16 @@ export function StatsPage() {
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   const [cache, setCache] = useState<{ entries: number; totalHits: number }>({ entries: 0, totalHits: 0 });
   const [perf, setPerf] = useState<ModelPerformanceStatRow[]>([]);
+  const [modelList, setModelList] = useState<Model[]>([]);
+  const [savings, setSavings] = useState<Array<{
+    id: string;
+    kind: "cache" | "routing" | "compression";
+    savedCost: number;
+    baselineCost: number;
+    actualCost: number;
+    explainJson: string;
+    createdAt: string;
+  }>>([]);
   const [toolExecs, setToolExecs] = useState<ToolExecutionRow[]>([]);
   const [loading, setLoading] = useState(true);
   // 阶段 F2：byModel 行点击展开角色拆分（drill-down）
@@ -47,17 +58,21 @@ export function StatsPage() {
       try {
         void cleanupExpiredCache();
         const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
-        const [rowsRes, cacheStats, perfRows, execs] = await Promise.all([
+        const [rowsRes, cacheStats, perfRows, execs, modelRows, savingsRows] = await Promise.all([
           usageEvents.list(since),
           semanticCache.stats(),
           modelPerformanceStats.list(),
           toolExecutions.list(30),
+          dbModels.list(),
+          savingsEvents.list(since),
         ]);
         setSummary(aggregateUsage(rowsRes));
         setRows(rowsRes);  // ★ 保留 rows 给 F2 byActorRole 派生（零额外 SQL）
         setCache(cacheStats);
         setPerf(perfRows);
+        setModelList(modelRows);
         setToolExecs(execs);
+        setSavings(savingsRows);
       } catch (err) {
         // 阶段 I 修（铁律 4：静默吞错）：原 `} catch {` 没打日志，失败用户完全无感
         // 加 console.error 让 dev/QA 能看到；用户也至少在 devtools 看到 [StatsPage] 前缀
@@ -65,6 +80,8 @@ export function StatsPage() {
         console.error("[StatsPage] load failed:", err);
         setSummary(aggregateUsage([]));
         setRows([]);
+        setModelList([]);
+        setSavings([]);
       } finally {
         setLoading(false);
       }
@@ -77,6 +94,20 @@ export function StatsPage() {
     () => aggregateUsageByActorRoleFromRows(rows),
     [rows],
   );
+
+  const modelById = useMemo(
+    () => new Map(modelList.map((m) => [m.id, m])),
+    [modelList],
+  );
+  const savingsSummary = useMemo(() => {
+    const total = savings.reduce((sum, row) => sum + row.savedCost, 0);
+    const byKind = {
+      cache: savings.filter((row) => row.kind === "cache").reduce((sum, row) => sum + row.savedCost, 0),
+      routing: savings.filter((row) => row.kind === "routing").reduce((sum, row) => sum + row.savedCost, 0),
+      compression: savings.filter((row) => row.kind === "compression").reduce((sum, row) => sum + row.savedCost, 0),
+    };
+    return { total, byKind };
+  }, [savings]);
 
   const maxDayCost = Math.max(...(summary?.byDay.map((d) => d.cost) ?? [0]), 0.0001);
 
@@ -105,6 +136,30 @@ export function StatsPage() {
               <StatCard icon={<Activity className="w-4 h-4" />} label={t("stats.last30d")} value={fmtCost(summary!.last30dCost)} />
               <StatCard icon={<Sparkles className="w-4 h-4 text-emerald-500" />} label={t("stats.cacheHits")} value={String(cache.totalHits)} />
             </div>
+
+            <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 shadow-xl">
+              <div className="flex items-center gap-3 pb-6 border-b border-white/10">
+                <Coins className="w-5 h-5 text-emerald-500" />
+                <h2 className="text-lg font-bold dark:text-white">{t("stats.savingsTitle")}</h2>
+              </div>
+              <div className="pt-6 space-y-4">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  <StatCard icon={<Coins className="w-4 h-4" />} label={t("stats.savingsTotal")} value={fmtCost(savingsSummary.total)} />
+                  <StatCard icon={<Sparkles className="w-4 h-4" />} label={t("stats.savingsKinds.cache")} value={fmtCost(savingsSummary.byKind.cache)} />
+                  <StatCard icon={<Cpu className="w-4 h-4" />} label={t("stats.savingsKinds.routing")} value={fmtCost(savingsSummary.byKind.routing)} />
+                  <StatCard icon={<Layers3 className="w-4 h-4" />} label={t("stats.savingsKinds.compression")} value={fmtCost(savingsSummary.byKind.compression)} />
+                </div>
+                {savings.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">{t("stats.savingsEmpty")}</p>
+                ) : (
+                  <div className="space-y-2">
+                    {savings.slice(0, 12).map((row) => (
+                      <SavingsRow key={row.id} row={row} t={t} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            </Card>
 
             {/* 7 天成本趋势（零依赖 CSS 柱状图） */}
             <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 shadow-xl">
@@ -155,6 +210,11 @@ export function StatsPage() {
                         >
                           <span className="font-mono text-xs truncate flex-1">{m.modelId}</span>
                           <span className="text-muted-foreground text-xs">{t("stats.calls", { n: m.calls })}</span>
+                          {m.unknownPricingCalls > 0 && (
+                            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-500">
+                              {t("stats.pricingMissingCalls", { n: m.unknownPricingCalls })}
+                            </span>
+                          )}
                           <span className="font-bold tabular-nums">{fmtCost(m.cost)}</span>
                           {isExpanded
                             ? <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />
@@ -184,16 +244,14 @@ export function StatsPage() {
               {perf.length === 0 ? (
                 <p className="text-sm text-muted-foreground pt-6">{t("stats.perfEmpty")}</p>
               ) : (
-                <div className="pt-4 space-y-2">
+                <div className="pt-4 grid grid-cols-1 xl:grid-cols-2 gap-3">
                   {perf.map((p) => (
-                    <div key={`${p.modelId}-${p.taskType}`} className="flex items-center justify-between gap-3 p-3 bg-white/5 rounded-xl text-xs">
-                      <span className="font-mono truncate flex-1">{p.modelId}</span>
-                      <span className="px-2 py-0.5 rounded-full bg-white/10 font-bold">{p.taskType}</span>
-                      <span className="text-emerald-500 font-bold tabular-nums">{(p.successRate * 100).toFixed(0)}%</span>
-                      <span className="text-muted-foreground tabular-nums">{fmtCost(p.avgCost)}</span>
-                      <span className="text-muted-foreground tabular-nums">{Math.round(p.avgLatencyMs)}ms</span>
-                      <span className="text-muted-foreground/60">n={p.sampleCount}</span>
-                    </div>
+                    <PerformanceCard
+                      key={`${p.modelId}-${p.taskType}`}
+                      stat={p}
+                      model={modelById.get(p.modelId)}
+                      t={t}
+                    />
                   ))}
                 </div>
               )}
@@ -232,6 +290,161 @@ export function StatsPage() {
       </div>
     </div>
   );
+}
+
+function PerformanceCard({
+  stat,
+  model,
+  t,
+}: {
+  stat: ModelPerformanceStatRow;
+  model: Model | undefined;
+  t: (k: string, opts?: Record<string, unknown>) => string;
+}) {
+  const modelName = model?.displayName || model?.name || t("stats.perfUnknownModel");
+  const providerName = model?.provider?.name;
+  const successPercent = `${Math.round(stat.successRate * 100)}%`;
+  const latency = formatLatency(stat.avgLatencyMs, t);
+
+  return (
+    <div className="rounded-2xl bg-white/5 border border-white/10 p-4 space-y-4">
+      <div className="min-w-0">
+        <div className="font-bold text-sm dark:text-white truncate">{modelName}</div>
+        <div className="text-[10px] text-muted-foreground mt-1 truncate">
+          {providerName
+            ? t("stats.perfProviderLine", { provider: providerName, model: model?.name ?? modelName })
+            : t("stats.perfMissingModelLine")}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 text-xs">
+        <MetricPill
+          icon={<Layers3 className="w-3.5 h-3.5" />}
+          label={t("stats.perfTaskType")}
+          value={taskTypeLabel(stat.taskType, t)}
+        />
+        <MetricPill
+          icon={<CheckCircle2 className="w-3.5 h-3.5" />}
+          label={t("stats.perfSuccessRate")}
+          value={successPercent}
+          valueClassName="text-emerald-500"
+        />
+        <MetricPill
+          icon={<DollarSign className="w-3.5 h-3.5" />}
+          label={t("stats.perfAvgCost")}
+          value={t("stats.perfPerCall", { value: fmtCost(stat.avgCost) })}
+        />
+        <MetricPill
+          icon={<Timer className="w-3.5 h-3.5" />}
+          label={t("stats.perfAvgLatency")}
+          value={latency}
+        />
+      </div>
+
+      <div className="text-[10px] text-muted-foreground/70">
+        {t("stats.perfSampleHint", { n: stat.sampleCount })}
+      </div>
+    </div>
+  );
+}
+
+function SavingsRow({
+  row,
+  t,
+}: {
+  row: {
+    id: string;
+    kind: "cache" | "routing" | "compression";
+    savedCost: number;
+    baselineCost: number;
+    actualCost: number;
+    explainJson: string;
+    createdAt: string;
+  };
+  t: (k: string, opts?: Record<string, unknown>) => string;
+}) {
+  let explain: Record<string, unknown> = {};
+  try {
+    explain = JSON.parse(row.explainJson) as Record<string, unknown>;
+  } catch {
+    explain = {};
+  }
+
+  return (
+    <div className="rounded-2xl bg-white/5 border border-white/10 p-4 space-y-2 text-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-bold dark:text-white">{t(`stats.savingsKinds.${row.kind}`)}</div>
+        <div className="font-bold text-emerald-500 tabular-nums">{fmtCost(row.savedCost)}</div>
+      </div>
+      <div className="text-xs text-muted-foreground">
+        {t("stats.savingsExplain", { baseline: fmtCost(row.baselineCost), actual: fmtCost(row.actualCost) })}
+      </div>
+      <div className="text-[11px] text-muted-foreground/80">
+        {formatSavingsExplain(row.kind, explain, t)}
+      </div>
+      <div className="text-[10px] text-muted-foreground/60">
+        {new Date(row.createdAt).toLocaleString()}
+      </div>
+    </div>
+  );
+}
+
+function formatSavingsExplain(
+  kind: "cache" | "routing" | "compression",
+  explain: Record<string, unknown>,
+  t: (k: string, opts?: Record<string, unknown>) => string,
+): string {
+  if (kind === "cache") {
+    return t("stats.savingsCacheDetail", {
+      tokens: Number(explain.cacheHitTokens ?? 0).toLocaleString(),
+      input: explain.inputPricePer1m ?? "—",
+      cache: explain.cacheReadPricePer1m ?? "—",
+    });
+  }
+  if (kind === "routing") {
+    return t("stats.savingsRoutingDetail", {
+      baseline: String(explain.baselineModelId ?? "—"),
+      actual: String(explain.actualModelId ?? "—"),
+    });
+  }
+  return t("stats.savingsCompressionDetail", {
+    before: Number(explain.beforeTokens ?? 0).toLocaleString(),
+    after: Number(explain.afterTokens ?? 0).toLocaleString(),
+  });
+}
+
+function MetricPill({
+  icon,
+  label,
+  value,
+  valueClassName,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="rounded-xl bg-black/10 border border-white/5 p-3 space-y-1">
+      <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+        {icon}
+        {label}
+      </div>
+      <div className={cn("font-bold tabular-nums", valueClassName)}>{value}</div>
+    </div>
+  );
+}
+
+function taskTypeLabel(taskType: string, t: (k: string, opts?: Record<string, unknown>) => string): string {
+  if (["simple", "standard", "hard", "main_chat"].includes(taskType)) {
+    return t(`stats.perfTaskTypes.${taskType}`);
+  }
+  return taskType;
+}
+
+function formatLatency(ms: number, t: (k: string, opts?: Record<string, unknown>) => string): string {
+  if (ms < 1000) return t("stats.perfMilliseconds", { value: Math.round(ms) });
+  return t("stats.perfSeconds", { value: (ms / 1000).toFixed(1) });
 }
 
 /**
@@ -308,6 +521,11 @@ function RoleCard({
         <span className="text-[10px] text-muted-foreground/70 shrink-0">
           · {t("stats.calls", { n: group.totalCalls })}
         </span>
+        {row.unknownPricingCalls > 0 && (
+          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-500 shrink-0">
+            {t("stats.pricingMissingCalls", { n: row.unknownPricingCalls })}
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-3 shrink-0">
         <span className="text-muted-foreground tabular-nums">

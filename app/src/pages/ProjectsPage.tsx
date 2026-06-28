@@ -6,9 +6,9 @@ import { BUILT_IN_TEMPLATES } from "@/lib/templates";
 import { cn } from "@/lib/utils";
 
 /** 内置模板 name → i18nKey 映射（给 ProjectsPage select 显示用） */
-const BUILT_IN_TEMPLATE_NAME_TO_KEY: Record<string, "fullstack_web" | "data_science" | "mobile_app" | "small_script"> = Object.fromEntries(
+const BUILT_IN_TEMPLATE_NAME_TO_KEY: Record<string, "default_eight_roles"> = Object.fromEntries(
   BUILT_IN_TEMPLATES.map((b) => [b.name, b.nameKey]),
-) as Record<string, "fullstack_web" | "data_science" | "mobile_app" | "small_script">;
+) as Record<string, "default_eight_roles">;
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -311,7 +311,7 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
                       {templates.map((tpl) => (
                         <SelectItem key={tpl.id} value={tpl.id} className="rounded-lg">
                           {tpl.isBuiltIn && tpl.name
-                            ? t(`builtinTemplates.${(BUILT_IN_TEMPLATE_NAME_TO_KEY[tpl.name] ?? "small_script")}.name`, { defaultValue: tpl.name })
+                            ? t(`builtinTemplates.${(BUILT_IN_TEMPLATE_NAME_TO_KEY[tpl.name] ?? "default_eight_roles")}.name`, { defaultValue: tpl.name })
                             : tpl.name}
                         </SelectItem>
                       ))}

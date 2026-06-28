@@ -3,7 +3,7 @@
 // 所有 id 用 crypto.randomUUID()，Boolean 存 INTEGER，DateTime 存 TEXT ISO
 
 import Database from "@tauri-apps/plugin-sql";
-import { BUILT_IN_TEMPLATES } from "./templates";
+import { BUILT_IN_TEMPLATES, RETIRED_BUILT_IN_TEMPLATE_NAMES } from "./templates";
 import { ROLE_IDS, type RoleId } from "./llm/orchestrator";
 
 // ============ 单例 ============
@@ -230,7 +230,7 @@ export async function initSchema(): Promise<void> {
   await addColumnIfMissing(db, "conversations", "orchestration", "TEXT");
 
   // 迁移：主对话「工作文件夹」——给会话绑一个本地目录，AI 在此目录内读/改/跑命令（工具层 ToolContext.workspacePath）。
-  // 符合产品真北：工作文件夹挂在「对话」上（上下文是中心），不强绑项目工作区。旧库靠幂等 ALTER 补上。
+  // 符合产品真北：工作文件夹挂在「对话」上（上下文是中心），不强绑项目资产。旧库靠幂等 ALTER 补上。
   await addColumnIfMissing(db, "conversations", "workspace_path", "TEXT");
 
   await db.execute(`
@@ -305,6 +305,9 @@ export async function initSchema(): Promise<void> {
       cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
       cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
       cost REAL NOT NULL DEFAULT 0,
+      pricing_known INTEGER NOT NULL DEFAULT 1,
+      price_version TEXT,
+      price_source TEXT,
       success INTEGER NOT NULL DEFAULT 1,
       interrupted INTEGER NOT NULL DEFAULT 0,
       outcome TEXT,
@@ -321,6 +324,11 @@ export async function initSchema(): Promise<void> {
   // - NOT NULL 约束由 TypeScript 层保障（roleKind: RoleId | 'stage' | null）
   await addColumnIfMissing(db, "usage_events", "role_kind", "TEXT");
   await addColumnIfMissing(db, "usage_events", "conversation_id", "TEXT");
+  // 用量监控阶段：未知模型价格不能继续被默默当成 0 元。
+  // 旧数据默认 1，避免把历史已估算记录误标成未知。
+  await addColumnIfMissing(db, "usage_events", "pricing_known", "INTEGER NOT NULL DEFAULT 1");
+  await addColumnIfMissing(db, "usage_events", "price_version", "TEXT");
+  await addColumnIfMissing(db, "usage_events", "price_source", "TEXT");
 
   // 索引：① setOutcomeForLatest 按 model_id + outcome IS NULL 取最近一条（隐式反馈热路径）；
   //        ② usageEvents.list 按 created_at 过滤/排序（统计 + SmartRouter 数据源）；
@@ -399,6 +407,85 @@ export async function initSchema(): Promise<void> {
   await db.execute(`
     CREATE INDEX IF NOT EXISTS idx_semantic_cache_expires
     ON semantic_cache(expires_at)
+  `);
+
+  // 价格目录：内置默认价 + 远程同步价 + 用户手动覆盖价。
+  // 允许保留多版本，usage_events.price_version 会把历史调用绑定到当时价格版本。
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS model_price_catalog (
+      id TEXT PRIMARY KEY,
+      model_name TEXT NOT NULL,
+      provider_type TEXT,
+      input_per_1m REAL NOT NULL,
+      output_per_1m REAL NOT NULL,
+      cache_read_per_1m REAL,
+      cache_write_per_1m REAL,
+      context_window INTEGER,
+      source TEXT NOT NULL,
+      source_url TEXT,
+      version TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL
+    )
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_model_price_catalog_lookup
+    ON model_price_catalog(model_name, provider_type, enabled, source, updated_at DESC)
+  `);
+
+  // 价格同步状态：只存一条全局状态，用于 UI 展示“上次更新时间 / 失败原因”。
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS price_sync_status (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      source_url TEXT,
+      last_attempt_at TEXT,
+      last_success_at TEXT,
+      last_error TEXT,
+      catalog_version TEXT
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS savings_events (
+      id TEXT PRIMARY KEY,
+      usage_event_id TEXT,
+      conversation_id TEXT,
+      project_id TEXT,
+      kind TEXT NOT NULL,
+      baseline_model_id TEXT,
+      actual_model_id TEXT,
+      baseline_cost REAL NOT NULL,
+      actual_cost REAL NOT NULL,
+      saved_cost REAL NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'USD',
+      formula_version TEXT NOT NULL,
+      explain_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_savings_events_created
+    ON savings_events(created_at DESC)
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS cli_sessions (
+      id TEXT PRIMARY KEY,
+      provider_type TEXT NOT NULL,
+      conversation_id TEXT,
+      project_id TEXT,
+      official_session_id TEXT NOT NULL,
+      model_name TEXT,
+      program TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      last_event_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
+  await db.execute(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_cli_sessions_official
+    ON cli_sessions(provider_type, official_session_id)
   `);
 
   // v0.8 阶段5：多角色对弈会话（Solver/Critic/Judge 协作的一次实例）
@@ -873,6 +960,11 @@ export const models = {
     let i = 2;
     if (input.name !== undefined) { sets.push(`name = $${i++}`); vals.push(input.name); }
     if (input.displayName !== undefined) { sets.push(`display_name = $${i++}`); vals.push(input.displayName); }
+    if (input.contextWindow !== undefined) { sets.push(`context_window = $${i++}`); vals.push(input.contextWindow); }
+    if (input.inputPrice !== undefined) { sets.push(`input_price = $${i++}`); vals.push(input.inputPrice); }
+    if (input.outputPrice !== undefined) { sets.push(`output_price = $${i++}`); vals.push(input.outputPrice); }
+    if (input.capabilityTags !== undefined) { sets.push(`capability_tags = $${i++}`); vals.push(input.capabilityTags); }
+    if (input.capabilityScore !== undefined) { sets.push(`capability_score = $${i++}`); vals.push(input.capabilityScore); }
     if (input.enabled !== undefined) { sets.push(`enabled = $${i++}`); vals.push(boolToInt(input.enabled)); }
     if (input.workRoles !== undefined) { sets.push(`work_roles = $${i++}`); vals.push(input.workRoles); }
     vals.push(id);
@@ -886,6 +978,452 @@ export const models = {
   async delete(id: string): Promise<void> {
     const db = await getDb();
     await db.execute("DELETE FROM models WHERE id = $1", [id]);
+  },
+};
+
+// ============ model_price_catalog CRUD ============
+
+export interface ModelPriceCatalogEntry {
+  id: string;
+  modelName: string;
+  providerType: string | null;
+  inputPer1m: number;
+  outputPer1m: number;
+  cacheReadPer1m: number | null;
+  cacheWritePer1m: number | null;
+  contextWindow: number | null;
+  source: "builtin" | "remote" | "manual";
+  sourceUrl: string | null;
+  version: string;
+  enabled: boolean;
+  updatedAt: string;
+}
+
+interface ModelPriceCatalogRow {
+  id: string;
+  model_name: string;
+  provider_type: string | null;
+  input_per_1m: number;
+  output_per_1m: number;
+  cache_read_per_1m: number | null;
+  cache_write_per_1m: number | null;
+  context_window: number | null;
+  source: "builtin" | "remote" | "manual";
+  source_url: string | null;
+  version: string;
+  enabled: number;
+  updated_at: string;
+}
+
+function rowToModelPriceCatalogEntry(r: ModelPriceCatalogRow): ModelPriceCatalogEntry {
+  return {
+    id: r.id,
+    modelName: r.model_name,
+    providerType: r.provider_type,
+    inputPer1m: r.input_per_1m,
+    outputPer1m: r.output_per_1m,
+    cacheReadPer1m: r.cache_read_per_1m,
+    cacheWritePer1m: r.cache_write_per_1m,
+    contextWindow: r.context_window,
+    source: r.source,
+    sourceUrl: r.source_url,
+    version: r.version,
+    enabled: r.enabled === 1,
+    updatedAt: r.updated_at,
+  };
+}
+
+export const modelPriceCatalog = {
+  async create(input: {
+    modelName: string;
+    providerType?: string | null;
+    inputPer1m: number;
+    outputPer1m: number;
+    cacheReadPer1m?: number | null;
+    cacheWritePer1m?: number | null;
+    contextWindow?: number | null;
+    source: "builtin" | "remote" | "manual";
+    sourceUrl?: string | null;
+    version: string;
+    enabled?: boolean;
+  }): Promise<ModelPriceCatalogEntry> {
+    const db = await getDb();
+    const id = newId();
+    const ts = now();
+    await db.execute(
+      `INSERT INTO model_price_catalog
+        (id, model_name, provider_type, input_per_1m, output_per_1m,
+         cache_read_per_1m, cache_write_per_1m, context_window,
+         source, source_url, version, enabled, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [
+        id,
+        input.modelName,
+        input.providerType ?? null,
+        input.inputPer1m,
+        input.outputPer1m,
+        input.cacheReadPer1m ?? null,
+        input.cacheWritePer1m ?? null,
+        input.contextWindow ?? null,
+        input.source,
+        input.sourceUrl ?? null,
+        input.version,
+        boolToInt(input.enabled ?? true),
+        ts,
+      ],
+    );
+    const row = await this.getById(id);
+    if (!row) throw new Error(`price catalog row ${id} not found after create`);
+    return row;
+  },
+
+  async getById(id: string): Promise<ModelPriceCatalogEntry | null> {
+    const db = await getDb();
+    const rows = await db.select<ModelPriceCatalogRow[]>(
+      "SELECT * FROM model_price_catalog WHERE id = $1 LIMIT 1",
+      [id],
+    );
+    return rows[0] ? rowToModelPriceCatalogEntry(rows[0]) : null;
+  },
+
+  async list(): Promise<ModelPriceCatalogEntry[]> {
+    const db = await getDb();
+    const rows = await db.select<ModelPriceCatalogRow[]>(
+      "SELECT * FROM model_price_catalog ORDER BY updated_at DESC, model_name ASC",
+    );
+    return rows.map(rowToModelPriceCatalogEntry);
+  },
+
+  async listActive(): Promise<ModelPriceCatalogEntry[]> {
+    const db = await getDb();
+    const rows = await db.select<ModelPriceCatalogRow[]>(
+      "SELECT * FROM model_price_catalog WHERE enabled = 1 ORDER BY updated_at DESC, model_name ASC",
+    );
+    return rows.map(rowToModelPriceCatalogEntry);
+  },
+
+  async lookupActive(
+    modelName: string,
+    providerType?: string | null,
+  ): Promise<ModelPriceCatalogEntry | null> {
+    const db = await getDb();
+    const rows = await db.select<ModelPriceCatalogRow[]>(
+      `SELECT * FROM model_price_catalog
+       WHERE enabled = 1
+         AND lower(model_name) = lower($1)
+         AND ($2 IS NULL OR provider_type = $2 OR provider_type IS NULL)
+       ORDER BY
+         CASE source WHEN 'manual' THEN 0 WHEN 'remote' THEN 1 ELSE 2 END,
+         CASE WHEN provider_type = $2 THEN 0 WHEN provider_type IS NULL THEN 1 ELSE 2 END,
+         updated_at DESC
+       LIMIT 1`,
+      [modelName, providerType ?? null],
+    );
+    return rows[0] ? rowToModelPriceCatalogEntry(rows[0]) : null;
+  },
+
+  async disableSource(source: "builtin" | "remote" | "manual"): Promise<void> {
+    const db = await getDb();
+    await db.execute("UPDATE model_price_catalog SET enabled = 0 WHERE source = $1", [source]);
+  },
+
+  async disableManualForModel(modelName: string, providerType?: string | null): Promise<void> {
+    const db = await getDb();
+    await db.execute(
+      `UPDATE model_price_catalog
+       SET enabled = 0
+       WHERE source = 'manual'
+         AND lower(model_name) = lower($1)
+         AND (($2 IS NULL AND provider_type IS NULL) OR provider_type = $2)`,
+      [modelName, providerType ?? null],
+    );
+  },
+};
+
+// ============ price_sync_status CRUD ============
+
+export interface PriceSyncStatus {
+  id: string;
+  source: string;
+  sourceUrl: string | null;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  catalogVersion: string | null;
+}
+
+interface PriceSyncStatusRow {
+  id: string;
+  source: string;
+  source_url: string | null;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+  catalog_version: string | null;
+}
+
+function rowToPriceSyncStatus(r: PriceSyncStatusRow): PriceSyncStatus {
+  return {
+    id: r.id,
+    source: r.source,
+    sourceUrl: r.source_url,
+    lastAttemptAt: r.last_attempt_at,
+    lastSuccessAt: r.last_success_at,
+    lastError: r.last_error,
+    catalogVersion: r.catalog_version,
+  };
+}
+
+export const priceSyncStatus = {
+  async get(id = "global"): Promise<PriceSyncStatus | null> {
+    const db = await getDb();
+    const rows = await db.select<PriceSyncStatusRow[]>(
+      "SELECT * FROM price_sync_status WHERE id = $1 LIMIT 1",
+      [id],
+    );
+    return rows[0] ? rowToPriceSyncStatus(rows[0]) : null;
+  },
+
+  async upsert(input: {
+    id?: string;
+    source: string;
+    sourceUrl?: string | null;
+    lastAttemptAt?: string | null;
+    lastSuccessAt?: string | null;
+    lastError?: string | null;
+    catalogVersion?: string | null;
+  }): Promise<PriceSyncStatus> {
+    const db = await getDb();
+    const id = input.id ?? "global";
+    await db.execute(
+      `INSERT INTO price_sync_status
+        (id, source, source_url, last_attempt_at, last_success_at, last_error, catalog_version)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT(id) DO UPDATE SET
+         source = excluded.source,
+         source_url = excluded.source_url,
+         last_attempt_at = excluded.last_attempt_at,
+         last_success_at = excluded.last_success_at,
+         last_error = excluded.last_error,
+         catalog_version = excluded.catalog_version`,
+      [
+        id,
+        input.source,
+        input.sourceUrl ?? null,
+        input.lastAttemptAt ?? null,
+        input.lastSuccessAt ?? null,
+        input.lastError ?? null,
+        input.catalogVersion ?? null,
+      ],
+    );
+    return (await this.get(id))!;
+  },
+};
+
+// ============ savings_events CRUD ============
+
+export interface SavingsEventRow {
+  id: string;
+  usageEventId: string | null;
+  conversationId: string | null;
+  projectId: string | null;
+  kind: "cache" | "routing" | "compression";
+  baselineModelId: string | null;
+  actualModelId: string | null;
+  baselineCost: number;
+  actualCost: number;
+  savedCost: number;
+  currency: string;
+  formulaVersion: string;
+  explainJson: string;
+  createdAt: string;
+}
+
+interface SavingsEventDbRow {
+  id: string;
+  usage_event_id: string | null;
+  conversation_id: string | null;
+  project_id: string | null;
+  kind: "cache" | "routing" | "compression";
+  baseline_model_id: string | null;
+  actual_model_id: string | null;
+  baseline_cost: number;
+  actual_cost: number;
+  saved_cost: number;
+  currency: string;
+  formula_version: string;
+  explain_json: string;
+  created_at: string;
+}
+
+function rowToSavingsEvent(r: SavingsEventDbRow): SavingsEventRow {
+  return {
+    id: r.id,
+    usageEventId: r.usage_event_id,
+    conversationId: r.conversation_id,
+    projectId: r.project_id,
+    kind: r.kind,
+    baselineModelId: r.baseline_model_id,
+    actualModelId: r.actual_model_id,
+    baselineCost: r.baseline_cost,
+    actualCost: r.actual_cost,
+    savedCost: r.saved_cost,
+    currency: r.currency,
+    formulaVersion: r.formula_version,
+    explainJson: r.explain_json,
+    createdAt: r.created_at,
+  };
+}
+
+export const savingsEvents = {
+  async create(input: {
+    usageEventId?: string | null;
+    conversationId?: string | null;
+    projectId?: string | null;
+    kind: "cache" | "routing" | "compression";
+    baselineModelId?: string | null;
+    actualModelId?: string | null;
+    baselineCost: number;
+    actualCost: number;
+    savedCost: number;
+    currency?: string;
+    formulaVersion: string;
+    explainJson: string;
+  }): Promise<string> {
+    const db = await getDb();
+    const id = newId();
+    const ts = now();
+    await db.execute(
+      `INSERT INTO savings_events
+        (id, usage_event_id, conversation_id, project_id, kind, baseline_model_id, actual_model_id,
+         baseline_cost, actual_cost, saved_cost, currency, formula_version, explain_json, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [
+        id,
+        input.usageEventId ?? null,
+        input.conversationId ?? null,
+        input.projectId ?? null,
+        input.kind,
+        input.baselineModelId ?? null,
+        input.actualModelId ?? null,
+        input.baselineCost,
+        input.actualCost,
+        input.savedCost,
+        input.currency ?? "USD",
+        input.formulaVersion,
+        input.explainJson,
+        ts,
+      ],
+    );
+    return id;
+  },
+
+  async list(sinceTs?: string): Promise<SavingsEventRow[]> {
+    const db = await getDb();
+    const rows = sinceTs
+      ? await db.select<SavingsEventDbRow[]>(
+          "SELECT * FROM savings_events WHERE created_at >= $1 ORDER BY created_at DESC",
+          [sinceTs],
+        )
+      : await db.select<SavingsEventDbRow[]>(
+          "SELECT * FROM savings_events ORDER BY created_at DESC",
+        );
+    return rows.map(rowToSavingsEvent);
+  },
+};
+
+// ============ cli_sessions CRUD ============
+
+export interface CliSessionRow {
+  id: string;
+  providerType: string;
+  conversationId: string | null;
+  projectId: string | null;
+  officialSessionId: string;
+  modelName: string | null;
+  program: string | null;
+  status: "active" | "completed" | "failed" | "unknown";
+  lastEventAt: string;
+  createdAt: string;
+}
+
+interface CliSessionDbRow {
+  id: string;
+  provider_type: string;
+  conversation_id: string | null;
+  project_id: string | null;
+  official_session_id: string;
+  model_name: string | null;
+  program: string | null;
+  status: "active" | "completed" | "failed" | "unknown";
+  last_event_at: string;
+  created_at: string;
+}
+
+function rowToCliSession(r: CliSessionDbRow): CliSessionRow {
+  return {
+    id: r.id,
+    providerType: r.provider_type,
+    conversationId: r.conversation_id,
+    projectId: r.project_id,
+    officialSessionId: r.official_session_id,
+    modelName: r.model_name,
+    program: r.program,
+    status: r.status,
+    lastEventAt: r.last_event_at,
+    createdAt: r.created_at,
+  };
+}
+
+export const cliSessions = {
+  async upsert(input: {
+    providerType: string;
+    conversationId?: string | null;
+    projectId?: string | null;
+    officialSessionId: string;
+    modelName?: string | null;
+    program?: string | null;
+    status?: "active" | "completed" | "failed" | "unknown";
+  }): Promise<CliSessionRow> {
+    const db = await getDb();
+    const ts = now();
+    await db.execute(
+      `INSERT INTO cli_sessions
+        (id, provider_type, conversation_id, project_id, official_session_id, model_name, program, status, last_event_at, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT(provider_type, official_session_id) DO UPDATE SET
+         conversation_id = excluded.conversation_id,
+         project_id = excluded.project_id,
+         model_name = excluded.model_name,
+         program = excluded.program,
+         status = excluded.status,
+         last_event_at = excluded.last_event_at`,
+      [
+        newId(),
+        input.providerType,
+        input.conversationId ?? null,
+        input.projectId ?? null,
+        input.officialSessionId,
+        input.modelName ?? null,
+        input.program ?? null,
+        input.status ?? "active",
+        ts,
+        ts,
+      ],
+    );
+    const rows = await db.select<CliSessionDbRow[]>(
+      "SELECT * FROM cli_sessions WHERE provider_type = $1 AND official_session_id = $2 LIMIT 1",
+      [input.providerType, input.officialSessionId],
+    );
+    return rowToCliSession(rows[0]!);
+  },
+
+  async list(): Promise<CliSessionRow[]> {
+    const db = await getDb();
+    const rows = await db.select<CliSessionDbRow[]>(
+      "SELECT * FROM cli_sessions ORDER BY last_event_at DESC",
+    );
+    return rows.map(rowToCliSession);
   },
 };
 
@@ -1242,7 +1780,10 @@ export const projectTemplates = {
     const rows = await db.select<ProjectTemplateRow[]>(
       "SELECT * FROM project_templates ORDER BY is_built_in DESC, created_at ASC"
     );
-    return rows.map(rowToProjectTemplate);
+    const retiredNames = new Set<string>(RETIRED_BUILT_IN_TEMPLATE_NAMES);
+    return rows
+      .map(rowToProjectTemplate)
+      .filter((tpl) => !(tpl.isBuiltIn && retiredNames.has(tpl.name)));
   },
 
   async getById(id: string): Promise<ProjectTemplate | null> {
@@ -2116,6 +2657,9 @@ export const usageEvents = {
     cacheCreationTokens?: number;
     cacheHitTokens?: number;
     cost?: number;
+    pricingKnown?: boolean;
+    priceVersion?: string | null;
+    priceSource?: string | null;
     success?: boolean;
     interrupted?: boolean;
   }): Promise<string> {
@@ -2126,8 +2670,8 @@ export const usageEvents = {
       `INSERT INTO usage_events
         (id, provider_id, api_credential_id, model_id, project_id, conversation_id, role, role_kind,
          input_tokens, output_tokens, cache_creation_tokens, cache_hit_tokens,
-         cost, success, interrupted, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+         cost, pricing_known, price_version, price_source, success, interrupted, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
       [
         id,
         input.providerId ?? null,
@@ -2143,6 +2687,9 @@ export const usageEvents = {
         input.cacheCreationTokens ?? 0,
         input.cacheHitTokens ?? 0,
         input.cost ?? 0,
+        boolToInt(input.pricingKnown ?? true),
+        input.priceVersion ?? null,
+        input.priceSource ?? null,
         boolToInt(input.success ?? true),
         boolToInt(input.interrupted ?? false),
         ts,
@@ -2175,14 +2722,16 @@ export const usageEvents = {
     const db = await getDb();
     const rows = sinceTs
       ? await db.select<any[]>(
-          "SELECT id, model_id, project_id, conversation_id, role, role_kind, input_tokens, output_tokens, cost, success, created_at FROM usage_events WHERE created_at >= $1 ORDER BY created_at ASC",
+          "SELECT id, provider_id, api_credential_id, model_id, project_id, conversation_id, role, role_kind, input_tokens, output_tokens, cache_creation_tokens, cache_hit_tokens, cost, pricing_known, price_version, price_source, success, created_at FROM usage_events WHERE created_at >= $1 ORDER BY created_at ASC",
           [sinceTs],
         )
       : await db.select<any[]>(
-          "SELECT id, model_id, project_id, conversation_id, role, role_kind, input_tokens, output_tokens, cost, success, created_at FROM usage_events ORDER BY created_at ASC",
+          "SELECT id, provider_id, api_credential_id, model_id, project_id, conversation_id, role, role_kind, input_tokens, output_tokens, cache_creation_tokens, cache_hit_tokens, cost, pricing_known, price_version, price_source, success, created_at FROM usage_events ORDER BY created_at ASC",
         );
     return rows.map((r) => ({
       id: r.id,
+      providerId: r.provider_id ?? null,
+      apiCredentialId: r.api_credential_id ?? null,
       modelId: r.model_id,
       projectId: r.project_id ?? null,
       conversationId: r.conversation_id ?? null,
@@ -2191,7 +2740,12 @@ export const usageEvents = {
       roleKind: r.role_kind ?? null,
       inputTokens: r.input_tokens,
       outputTokens: r.output_tokens,
+      cacheCreationTokens: r.cache_creation_tokens ?? 0,
+      cacheHitTokens: r.cache_hit_tokens ?? 0,
       cost: r.cost,
+      pricingKnown: r.pricing_known !== 0,
+      priceVersion: r.price_version ?? null,
+      priceSource: r.price_source ?? null,
       success: !!r.success,
       createdAt: r.created_at,
     }));
@@ -2200,6 +2754,8 @@ export const usageEvents = {
 
 export interface UsageEventRow {
   id: string;
+  providerId: string | null;
+  apiCredentialId: string | null;
   modelId: string | null;
   projectId: string | null;
   conversationId: string | null;
@@ -2208,7 +2764,12 @@ export interface UsageEventRow {
   roleKind: string | null;
   inputTokens: number;
   outputTokens: number;
+  cacheCreationTokens: number;
+  cacheHitTokens: number;
   cost: number;
+  pricingKnown: boolean;
+  priceVersion: string | null;
+  priceSource: string | null;
   success: boolean;
   createdAt: string;
 }

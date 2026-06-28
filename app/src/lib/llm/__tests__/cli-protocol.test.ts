@@ -1,14 +1,28 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   isCliProviderType,
   CLI_DEFAULT_PROGRAM,
   buildControlledEnv,
   buildPromptFromMessages,
   buildCliArgs,
+  buildCliResumeArgs,
+  detectCliResumeCapability,
+  extractOfficialSessionId,
   parseClaudeStreamLine,
   parseCodexStreamLine,
   parseCliStreamLine,
 } from "../cli-protocol";
+
+const CLAUDE_SESSION_FIXTURE = readFileSync(
+  resolve(import.meta.dirname, "fixtures/claude-session-init.jsonl"),
+  "utf8",
+).trim();
+const CODEX_SESSION_FIXTURE = readFileSync(
+  resolve(import.meta.dirname, "fixtures/codex-thread-started.jsonl"),
+  "utf8",
+).trim();
 
 describe("isCliProviderType", () => {
   it("识别 CLI 类型", () => {
@@ -114,6 +128,18 @@ describe("buildCliArgs", () => {
     expect(args).toContain("--model");
     expect(args).toContain("gpt-5-codex");
   });
+  it("claude resume：用官方 session id 续跑", () => {
+    const args = buildCliResumeArgs("claude-cli", "claude-sonnet-4-6", "sess-1", "continue");
+    expect(args).toContain("--resume");
+    expect(args).toContain("sess-1");
+    expect(args).toContain("-p");
+    expect(args).toContain("continue");
+  });
+  it("codex resume：走 exec resume <id> <prompt> --json", () => {
+    const args = buildCliResumeArgs("codex-cli", "gpt-5", "thread-1", "continue");
+    expect(args.slice(0, 4)).toEqual(["exec", "resume", "thread-1", "continue"]);
+    expect(args).toContain("--json");
+  });
 });
 
 describe("parseClaudeStreamLine", () => {
@@ -200,6 +226,12 @@ describe("parseCodexStreamLine", () => {
   it("非 JSON 容错", () => {
     expect(parseCodexStreamLine("log line")).toEqual([]);
   });
+
+  it("fixture: thread.started → session", () => {
+    expect(parseCodexStreamLine(CODEX_SESSION_FIXTURE)).toEqual([
+      { kind: "session", sessionId: "019f0d30-fe84-7f61-b4e2-de3c2288ecb9" },
+    ]);
+  });
 });
 
 describe("parseCliStreamLine 分发", () => {
@@ -211,5 +243,41 @@ describe("parseCliStreamLine 分发", () => {
     expect(parseCliStreamLine("claude-cli", claudeLine)).toEqual([{ kind: "delta", text: "X" }]);
     const codexLine = JSON.stringify({ type: "agent_message", text: "Y" });
     expect(parseCliStreamLine("codex-cli", codexLine)).toEqual([{ kind: "delta", text: "Y" }]);
+  });
+});
+
+describe("official session id fixtures", () => {
+  it("Claude fixture 暴露 stable session_id", () => {
+    expect(extractOfficialSessionId("claude-cli", CLAUDE_SESSION_FIXTURE)).toBe(
+      "d781507b-b802-4061-b117-a69b724573cd",
+    );
+  });
+
+  it("Codex fixture 暴露 stable thread_id", () => {
+    expect(extractOfficialSessionId("codex-cli", CODEX_SESSION_FIXTURE)).toBe(
+      "019f0d30-fe84-7f61-b4e2-de3c2288ecb9",
+    );
+  });
+
+  it("detectCliResumeCapability: 有官方 id → resumable", () => {
+    expect(detectCliResumeCapability({
+      providerType: "claude-cli",
+      modelName: "claude-sonnet-4-6",
+      officialSessionId: "sess-1",
+    })).toMatchObject({
+      mode: "resumable",
+      sessionId: "sess-1",
+    });
+  });
+
+  it("detectCliResumeCapability: 无官方 id → stateless", () => {
+    expect(detectCliResumeCapability({
+      providerType: "codex-cli",
+      modelName: "gpt-5",
+      officialSessionId: null,
+    })).toEqual({
+      mode: "stateless",
+      reason: "CLI output did not expose a stable official session id",
+    });
   });
 });

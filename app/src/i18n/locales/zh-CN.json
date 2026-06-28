@@ -30,12 +30,11 @@
     "brandSubtitle": "智能核心管理层",
     "sidebar": {
       "chat": "智能对话",
-      "projects": "项目工作区",
       "providers": "模型供应商",
       "templates": "角色模板",
       "tokenPlans": "用量监控",
       "debate": "多模型对弈",
-      "stats": "省钱统计",
+      "stats": "用量明细",
       "settings": "设置"
     },
     "alerts": {
@@ -57,6 +56,11 @@
     "noApiKey": "API Key 缺失",
     "constructError": "构造失败",
     "switchedTo": "切换至 {{name}}",
+    "recovery": {
+      "native_resume": "系统已用 CLI 官方会话原生续跑",
+      "context_replay": "系统已从中断处继续，不会重复前面内容",
+      "fallback_handoff": "系统已把已完成内容交给下一个模型接力"
+    },
     "cacheHit": "命中缓存 · {{days}} 天前回答过",
     "contextTrimmed": "[较早的 {{count}} 条消息已省略以节省 token]",
     "harnessRetry": "检测到可能编造 · 正在让模型自查重答",
@@ -164,11 +168,11 @@
       "panelTitle": "工作节点",
       "currentBadge": "当前",
       "roles": {
-        "leader": "Leader",
+        "leader": "团队负责人",
         "architect": "架构评审",
         "frontend": "前端工程师",
         "backend": "后端工程师",
-        "runner": "执行者",
+        "runner": "运行执行员",
         "tester": "测试工程师",
         "reviewer": "审查工程师",
         "security": "安全工程师"
@@ -294,6 +298,8 @@
     "displayName": "显示名",
     "displayNamePlaceholder": "例如 Opus 4.8",
     "contextWindow": "上下文窗口",
+    "inputPrice": "输入价（USD / 1M）",
+    "outputPrice": "输出价（USD / 1M）",
     "workRoles": "工作角色",
     "workRolesHint": "至少选择 1 个工作角色",
     "submitting": "添加中...",
@@ -338,56 +344,58 @@
     "other": "其他"
   },
   "builtinTemplates": {
-    "fullstack_web": {
-      "name": "全栈 Web 项目模板",
-      "desc": "main_chat / planning / review / frontend / backend / testing / final_review"
-    },
-    "data_science": {
-      "name": "数据科学项目模板",
-      "desc": "main_chat / planning / review / data_exploration / modeling / testing / final_review"
-    },
-    "mobile_app": {
-      "name": "移动 App 模板",
-      "desc": "main_chat / planning / review / ios / android / testing / final_review"
-    },
-    "small_script": {
-      "name": "小型脚本模板",
-      "desc": "main_chat / direct_generation / testing（适合一次性脚本生成）"
-    },
     "default_eight_roles": {
       "name": "默认 8 角色",
-      "desc": "给 8 个团队角色（leader / architect / frontend / backend / runner / tester / reviewer / security）每个单独绑一个模型。主对话无 project 时用这套。"
+      "desc": "给 8 个团队角色（团队负责人 / 架构评审 / 前端工程师 / 后端工程师 / 运行执行员 / 测试工程师 / 审查工程师 / 安全工程师）每个单独绑一个模型。主对话未绑定项目时使用这套。"
     }
   },
   "handoffMarkdown": {
-    "title": "接力包 → {{role}}",
+    "title": "交接包 → {{role}}",
     "sourceCheckpoint": "_原检查点：{{title}}_",
     "generatedAt": "_生成时间：{{time}}_",
     "empty": "（未填）"
   },
   "templates": {
     "sectionLabel": "流水线配置架构师",
-    "title": "项目角色模板",
-    "desc": "定义不同协作场景下的 AI 专家组合。系统会自动根据各个模型的评分，为您推荐最擅长该领域的 AI 节点。",
+    "title": "角色模板",
+    "desc": "默认 8 角色是主协作方案。你可以给每个角色绑定最合适的模型，之后再复制成自己的自定义模板。",
     "available": "可用方案模板",
     "builtIn": "内置",
     "rolesCount": "共包含 {{count}} 个协作节点",
+    "addTemplate": "添加模板",
+    "copyTemplate": "复制模板",
+    "deleteTemplate": "删除模板",
+    "createTemplate": "创建模板",
+    "templateName": "模板名称",
+    "templateNamePlaceholder": "例如：我的日常开发模板",
+    "newTemplateDefaultName": "我的 8 角色模板",
+    "customTemplateDesc": "自定义 8 角色模板，可按你的工作习惯绑定模型。",
+    "copyName": "{{name}} 副本",
+    "deleteConfirm": "确定删除这个自定义模板？内置默认模板不会被删除。",
     "smartAssign": "智能一键分配",
-    "saveAs": "另存模板",
     "noModels": "未检测到已连接的 AI 模型。请先前往「模型供应商」页面添加配置。",
     "primaryModel": "首选专家模型",
     "primaryModelPlaceholder": "请选择主模型",
     "fallbackModel": "故障自动切换模型",
     "fallbackModelPlaceholder": "无备用方案",
     "fallbackDisabled": "不启用备用方案",
-    "eightRolesBinding": "8 角色 · 每个角色绑一个模型（推荐）",
-    "legacyWorkRoles": "老 Work-Role 列表（向后兼容）",
+    "eightRolesBinding": "默认 8 角色 · 每个角色绑一个模型",
+    "eightRole": {
+      "leader_desc": "拆任务、控节奏、日常答疑",
+      "architect_desc": "方案设计与架构取舍",
+      "frontend_desc": "界面、组件、交互",
+      "backend_desc": "接口、数据库、服务逻辑",
+      "runner_desc": "跑构建、测试、命令检查",
+      "tester_desc": "测试用例与回归验证",
+      "reviewer_desc": "代码质量与可维护性审查",
+      "security_desc": "密钥、注入、权限与安全风险"
+    },
     "selectTemplateHint": "请从左侧选择一个方案模版"
   },
   "projects": {
-    "sectionLabel": "活跃项目管理中心",
-    "title": "项目工作区",
-    "desc": "管理多 Agent 协作项目。基于工业级工作流模板，让 AI 团队自动化完成复杂的开发、审计与部署任务。",
+    "sectionLabel": "高级资产管理",
+    "title": "项目资产",
+    "desc": "这里保留旧项目、检查点、交接包、项目记忆和项目级工具安全配置。日常工作请优先在对话页绑定工作文件夹完成。",
     "createButton": "新建项目",
     "editButton": "编辑项目",
     "editDialog": {
@@ -456,6 +464,9 @@
     "custom": "自定义",
     "reset": "重置: {{rule}}",
     "used": "更新已用",
+    "autoRecorded": "自动统计",
+    "recordedEvents": "来自 {{n}} 次本地调用",
+    "priceIncomplete": "{{n}} 次调用价格未配置，美元成本可能偏低",
     "editDialog": {
       "title": "编辑用量计划"
     },
@@ -490,6 +501,16 @@
     },
     "deleteConfirm": "确定移除此用量计划？"
   },
+  "usageMonitor": {
+    "detailsTab": "实际消耗",
+    "plansTab": "额度配置",
+    "priceCatalog": "价格目录",
+    "priceUpdatedAt": "最近同步：{{time}}",
+    "priceNeverSynced": "还没同步过远程价格，当前先用内置价格或你手动补的价格。",
+    "priceSyncNow": "更新价格表",
+    "priceSyncing": "更新中…",
+    "priceSyncFailed": "最近一次更新失败：{{reason}}"
+  },
   "debate": {
     "sectionLabel": "多模型协作",
     "title": "多模型对弈",
@@ -511,26 +532,56 @@
   },
   "stats": {
     "sectionLabel": "用量分析",
-    "title": "省钱统计",
-    "desc": "看清每天花了多少、哪个模型最贵、智能路由帮你省了多少 token。",
+    "title": "用量明细",
+    "desc": "看清每天花了多少、哪个模型最贵、哪些角色消耗最多，以及 AI 实际执行过哪些工具操作。",
     "loading": "正在加载统计…",
     "today": "今日成本",
     "last7d": "近 7 天",
     "last30d": "近 30 天",
     "cacheHits": "缓存命中",
+    "savingsTitle": "已确认省钱",
+    "savingsTotal": "累计省下",
+    "savingsEmpty": "还没有可解释的省钱记录。出现缓存命中、智能挑模型或上下文压缩后，这里会显示明细。",
+    "savingsExplain": "原本约 {{baseline}}，实际约 {{actual}}",
+    "savingsCacheDetail": "缓存命中 {{tokens}} token，原价 {{input}} / 1M，缓存读价 {{cache}} / 1M",
+    "savingsRoutingDetail": "如果沿用 {{baseline}}，这次会更贵；实际用了 {{actual}}",
+    "savingsCompressionDetail": "压缩前约 {{before}} token，压缩后约 {{after}} token",
+    "savingsKinds": {
+      "cache": "缓存省钱",
+      "routing": "模型路由省钱",
+      "compression": "上下文压缩省钱"
+    },
     "trendTitle": "近 7 天成本趋势",
     "byModelTitle": "按模型成本",
     "calls": "{{n}} 次调用",
     "noData": "暂无用量数据，去对话页聊几句就有了。",
     "byModelDrilldownTitle": "按角色拆分（已展开该模型）",
     "byModelDrilldownHint": "点击模型行查看哪些角色用过",
+    "pricingMissingCalls": "{{n}} 次价格未配置",
     "actorRoleUnknown": "（未分类）",
-    "stage": "项目工作区",
+    "stage": "项目资产",
     "actorRoleEmptyHint": "该模型暂无角色用量",
     "actorRoleInputTokensCol": "输入",
     "actorRoleOutputTokensCol": "输出",
     "perfTitle": "模型真实表现（智能路由依据）",
-    "perfEmpty": "样本积累中——每个模型每类任务满 30 次后，智能路由才会据此评分选模型。",
+    "perfEmpty": "样本积累中——每个模型跑过至少 1 次后，智能路由就会开始参考真实表现，并用平滑算法避免小样本误判。",
+    "perfUnknownModel": "未知模型",
+    "perfProviderLine": "{{provider}} · {{model}}",
+    "perfMissingModelLine": "模型配置已删除或未找到",
+    "perfTaskType": "任务类型",
+    "perfSuccessRate": "调用稳定性",
+    "perfAvgCost": "平均成本",
+    "perfAvgLatency": "平均耗时",
+    "perfPerCall": "{{value}} / 次",
+    "perfMilliseconds": "{{value}} 毫秒",
+    "perfSeconds": "{{value}} 秒",
+    "perfSampleHint": "基于 {{n}} 次真实模型调用统计；调用稳定性表示用户未主动停止时，模型调用是否能正常完成，或中断后是否被系统自动恢复。它不是缓存命中率，也不是工具执行成功率。",
+    "perfTaskTypes": {
+      "simple": "简单问题",
+      "standard": "普通任务",
+      "hard": "复杂任务",
+      "main_chat": "主对话"
+    },
     "toolsTitle": "AI 工具操作记录",
     "toolsEmpty": "AI 还没动过文件或命令。在项目里给它工作区路径后，它读/改文件、跑命令都会记在这里。",
     "toolStatus": {
@@ -558,7 +609,13 @@
     "smartRouting": {
       "title": "智能路由",
       "toggleTitle": "智能路由（v2）",
-      "toggleDesc": "开启后，系统按各模型的真实表现（成功率/成本/延迟）自动选更省、更稳的模型，并对重复问题命中语义缓存省 token。样本不足时自动退回规则路由。关闭则只用基础规则路由。"
+      "toggleDesc": "开启后，系统按各模型的真实表现（调用稳定性/成本/延迟）自动选更省、更稳的模型，并对重复问题命中语义缓存省 token。样本不足时自动退回规则路由。关闭则只用基础规则路由。"
+    },
+    "projectAssets": {
+      "title": "项目资产（高级）",
+      "entryTitle": "查看旧项目、检查点和交接包",
+      "entryDesc": "项目资产不再作为主入口。它只用于管理历史项目、检查点、交接包、项目记忆和项目级工具安全配置。",
+      "open": "打开项目资产"
     },
     "security": {
       "title": "安全与本地数据",
@@ -588,7 +645,7 @@
     "nextTarget": {
       "providers": "API 接入",
       "templates": "模板",
-      "projects": "项目"
+      "chat": "对话"
     },
     "steps": {
       "addApiKey": {
@@ -600,12 +657,12 @@
         "desc": "至少 2 个模型才能体现「多 AI 协作」——主对话用 Opus、写代码用 Gemini、测试用 Haiku 这种组合。"
       },
       "browseTemplates": {
-        "title": "看看 4 个内置模板",
-        "desc": "全栈 Web / 数据科学 / 移动 App / 小型脚本——每个模板都自动给角色配好最优模型。"
+        "title": "看看默认 8 角色",
+        "desc": "默认 8 角色是主协作方案：团队负责人、架构、前端、后端、运行执行员、测试、审查、安全。后续你可以复制成自己的模板。"
       },
-      "createFirstProject": {
-        "title": "创建第一个项目",
-        "desc": "挑个模板，填项目名 + 工作空间路径（可以以后改），点创建就完事。"
+      "bindWorkspace": {
+        "title": "回到对话，绑定工作文件夹",
+        "desc": "主要工作都在对话页完成。点击输入框旁边的「工作文件夹」，选择项目目录，AI 就能读文件、改代码、跑检查。"
       }
     }
   },
@@ -641,6 +698,11 @@
       "awaiting": "等待指令",
       "endpointFailed": "端点连接失败",
       "failsafeSwitched": "故障保护：已切换至 {{name}}",
+      "recovery": {
+        "native_resume": "系统已用 CLI 官方会话原生续跑",
+        "context_replay": "系统已从中断处继续，不会重复前面内容",
+        "fallback_handoff": "系统已把已完成内容交给下一个模型接力"
+      },
       "apiKeyMissing": "API Key 缺失",
       "initFailed": "初始化失败",
       "syncing": "正在同步环境...",
@@ -662,7 +724,7 @@
       "completed": "已归档",
       "failed": "系统故障"
     },
-    "deleteCheckpoint": "删除这个检查点？关联的接力包也会一起删。",
+    "deleteCheckpoint": "删除这个检查点？关联的交接包也会一起删。",
     "deleteMemory": "删除这条记忆？此操作不可撤销。",
     "systemModel": "系统模型",
     "startSequence": "启动序列",
@@ -716,17 +778,17 @@
       "acceptanceCriteria": "怎么算「做完了」"
     },
     "generateHandoff": {
-      "title": "生成接力包",
+      "title": "生成交接包",
       "sourceCheckpoint": "原检查点：",
       "targetRole": "目标角色",
       "targetRolePlaceholder": "选择下一个接手的工作角色",
-      "hint": "接力包会把检查点所有字段拼成 markdown，存一条 handoff_packets 记录。",
+      "hint": "交接包会把检查点所有字段拼成 markdown，存一条 handoff_packets 记录。",
       "generate": "生成",
       "generating": "生成中…",
       "failed": "生成失败"
     },
     "handoffDetail": {
-      "title": "接力包 → {{role}}",
+      "title": "交接包 → {{role}}",
       "generatedAt": "生成于 {{time}}"
     },
     "addMemory": {

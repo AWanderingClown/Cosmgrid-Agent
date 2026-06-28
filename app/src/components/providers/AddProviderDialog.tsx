@@ -24,6 +24,7 @@ import { inferModelCapabilities } from "@/lib/llm/model-capabilities";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { PROVIDER_PRESETS, type ProviderPreset } from "@/lib/llm/provider-presets";
 import { fetchAvailableModels } from "@/lib/llm/fetch-models";
+import { saveManualModelPrice } from "@/lib/llm/price-catalog";
 import { ApiKeyInput } from "./ApiKeyInput";
 import { ProviderTypeSelect, type ProviderTypeValue } from "./ProviderTypeSelect";
 import { BasicFormFields } from "./BasicFormFields";
@@ -63,6 +64,8 @@ const INITIAL_STATE = {
   modelName: "",
   displayName: "",
   contextWindow: 200_000,
+  inputPrice: 0,
+  outputPrice: 0,
   workRoles: ["main_chat"] as WorkRole[],
 };
 
@@ -77,6 +80,8 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
   const [modelName, setModelName] = useState(INITIAL_STATE.modelName);
   const [displayName, setDisplayName] = useState(INITIAL_STATE.displayName);
   const [contextWindow, setContextWindow] = useState(INITIAL_STATE.contextWindow);
+  const [inputPrice, setInputPrice] = useState(INITIAL_STATE.inputPrice);
+  const [outputPrice, setOutputPrice] = useState(INITIAL_STATE.outputPrice);
   const [workRoles, setWorkRoles] = useState<WorkRole[]>(INITIAL_STATE.workRoles);
   // 用户是否手动改过角色——改过就不再被自动识别覆盖（尊重人工选择）
   const [rolesEditedManually, setRolesEditedManually] = useState(false);
@@ -186,11 +191,23 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
         name: modelName,
         displayName: displayName || null,
         contextWindow,
+        inputPrice: inputPrice > 0 ? inputPrice : null,
+        outputPrice: outputPrice > 0 ? outputPrice : null,
         capabilityTags: JSON.stringify([]),
         capabilityScore: JSON.stringify(inferred.capabilityScore),
         workRoles: JSON.stringify(workRoles),
       });
       createdModelId = model.id;
+
+      if (inputPrice > 0 && outputPrice > 0) {
+        await saveManualModelPrice({
+          modelName,
+          providerType,
+          inputPer1m: inputPrice,
+          outputPer1m: outputPrice,
+          contextWindow: contextWindow || null,
+        });
+      }
 
       // 5. 回填 defaultModelId
       await dbCredentials.update(credential.id, { defaultModelId: model.id });
@@ -363,9 +380,13 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
             modelName={modelName}
             displayName={displayName}
             contextWindow={contextWindow}
+            inputPrice={inputPrice}
+            outputPrice={outputPrice}
             onModelNameChange={handleModelNameChange}
             onDisplayNameChange={setDisplayName}
             onContextWindowChange={setContextWindow}
+            onInputPriceChange={setInputPrice}
+            onOutputPriceChange={setOutputPrice}
           />
 
           <WorkRoleSelector value={workRoles} onChange={handleWorkRolesChange} />

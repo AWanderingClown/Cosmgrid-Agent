@@ -35,6 +35,8 @@ export interface CompressResult {
   messages: ChatMsg[];
   compressed: boolean;
   droppedCount: number;
+  beforeTokens: number;
+  afterTokens: number;
 }
 
 export interface CompressOptions {
@@ -54,10 +56,11 @@ export function compressHistory(messages: ChatMsg[], opts: CompressOptions = {})
   const maxTokens = opts.maxTokens ?? 12000;
   const minRecent = opts.minRecent ?? 4;
   const noticeText = opts.noticeText ?? ((n: number) => `[${n} earlier messages omitted to save tokens]`);
+  const beforeTokens = estimateMessagesTokens(messages);
 
   // 在预算内：原样返回
-  if (estimateMessagesTokens(messages) <= maxTokens) {
-    return { messages: [...messages], compressed: false, droppedCount: 0 };
+  if (beforeTokens <= maxTokens) {
+    return { messages: [...messages], compressed: false, droppedCount: 0, beforeTokens, afterTokens: beforeTokens };
   }
 
   const systemMsgs = messages.filter((m) => m.role === "system");
@@ -81,13 +84,16 @@ export function compressHistory(messages: ChatMsg[], opts: CompressOptions = {})
 
   const droppedCount = nonSystem.length - kept.length;
   if (droppedCount <= 0) {
-    return { messages: [...messages], compressed: false, droppedCount: 0 };
+    return { messages: [...messages], compressed: false, droppedCount: 0, beforeTokens, afterTokens: beforeTokens };
   }
 
   const notice: ChatMsg = { role: "system", content: noticeText(droppedCount) };
+  const outputMessages = [...systemMsgs, notice, ...kept];
   return {
-    messages: [...systemMsgs, notice, ...kept],
+    messages: outputMessages,
     compressed: true,
     droppedCount,
+    beforeTokens,
+    afterTokens: estimateMessagesTokens(outputMessages),
   };
 }

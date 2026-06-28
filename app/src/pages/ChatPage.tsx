@@ -611,6 +611,12 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   const workPanel = usePanelResize({ initial: 320, min: 240, max: 560, edge: "left" });
 
   const abortRef = useRef<AbortController | null>(null);
+  const pendingRoutingDecisionRef = useRef<{
+    prompt: string;
+    baselineModelId: string;
+    baselineModelName: string;
+    actualModelId: string;
+  } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // 浮动输入框是 absolute 盖在消息上的——按它的真实高度给消息区底部预留空间，
@@ -687,6 +693,8 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       name: m.name,
       displayName: m.displayName,
       contextWindow: m.contextWindow,
+      inputPrice: m.inputPrice,
+      outputPrice: m.outputPrice,
       enabled: m.enabled,
       workRoles: m.workRoles,
       capabilityScore: m.capabilityScore,
@@ -918,6 +926,17 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     const model = availableModels.find((m) => m.id === effectiveId);
     if (!model || isStreaming) return;
     if (effectiveId !== selectedModelId) setSelectedModelId(effectiveId);
+    const routingDecision =
+      pendingRoutingDecisionRef.current &&
+      pendingRoutingDecisionRef.current.prompt === text &&
+      pendingRoutingDecisionRef.current.actualModelId === model.id
+        ? {
+            baselineModelId: pendingRoutingDecisionRef.current.baselineModelId,
+            baselineModelName: pendingRoutingDecisionRef.current.baselineModelName,
+            actualModelId: pendingRoutingDecisionRef.current.actualModelId,
+          }
+        : null;
+    pendingRoutingDecisionRef.current = null;
 
     // 首条消息：用它给会话自动命名
     const isFirstMessage = messages.length === 0;
@@ -1120,10 +1139,18 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
           : { role: m.role, content: m.content }
       ),
     ];
+    let compressionStats: { beforeTokens: number; afterTokens: number } | null = null;
     if (smart) {
-      outgoing = compressHistory(outgoing, {
+      const compressed = compressHistory(outgoing, {
         noticeText: (n) => t("chat.contextTrimmed", { count: n }),
-      }).messages;
+      });
+      outgoing = compressed.messages;
+      if (compressed.compressed) {
+        compressionStats = {
+          beforeTokens: compressed.beforeTokens,
+          afterTokens: compressed.afterTokens,
+        };
+      }
     }
 
     // Harness 闭环：回答完后评估是否在编造；编了就回填一条纠正指令让模型自查重答（封顶 1 次，防造假死循环）。
@@ -1164,6 +1191,9 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
                 prev.map((m) => (m.id === assistantId ? { ...m, switched: true, switchedTo: label, modelLabel: label } : m)),
               );
             },
+            onRecovered: (mode) => {
+              setSwitchNotice(t(`chat.recovery.${mode}`));
+            },
             onUsage: (usage, usedModel, finishReason) => {
               // 不在此落库——闭环可能重答，只落最终版（循环结束后统一 persist）
               lastUsage = {
@@ -1183,7 +1213,15 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
           // role = 这条消息的难度桶，落 UsageEvent 供 v0.9 SmartRouter 按 taskType 滚动统计
           // actorRole = 阶段 F1：哪个 actor 跑的（leader 主对话 → 'leader'，chain → role: RoleId，stage → 'stage'）
           // tools：绑了工作文件夹才传，开启多步工具循环（maxToolSteps 防死循环）
-          { signal: controller.signal, conversationId: convId ?? undefined, role: taskRole, actorRole, ...(tools ? { tools, maxToolSteps: 12 } : {}) },
+          {
+            signal: controller.signal,
+            conversationId: convId ?? undefined,
+            role: taskRole,
+            actorRole,
+            ...(routingDecision ? { routingDecision } : {}),
+            ...(compressionStats ? { compressionStats } : {}),
+            ...(tools ? { tools, maxToolSteps: 12 } : {}),
+          },
         );
         lastResultModelId = result.usedModelId;
         if (controller.signal.aborted) break;
@@ -1596,7 +1634,17 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         if (routed) {
           const name = routed.model.displayName ?? routed.model.name;
           const reason = routed.decisionLog.reasons[0] ?? "";
+          const currentModel = currentId ? availableModels.find((m) => m.id === currentId) : null;
           setSelectedModelId(routed.model.id);
+          pendingRoutingDecisionRef.current =
+            currentModel && currentModel.id !== routed.model.id
+              ? {
+                  prompt: text,
+                  baselineModelId: currentModel.id,
+                  baselineModelName: currentModel.name,
+                  actualModelId: routed.model.id,
+                }
+              : null;
           setSwitchNotice(reason || null);
           await alert({
             title,

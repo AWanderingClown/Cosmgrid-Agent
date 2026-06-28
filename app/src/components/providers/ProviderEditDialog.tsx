@@ -25,6 +25,7 @@ import { providers as dbProviders, apiCredentials as dbCredentials, models as db
 import { saveApiKey } from "@/lib/keystore";
 import { ApiKeyInput } from "./ApiKeyInput";
 import { WorkRoleSelector } from "./WorkRoleSelector";
+import { saveManualModelPrice } from "@/lib/llm/price-catalog";
 
 export type EditTarget =
   | { kind: "provider"; data: ProviderListItem }
@@ -47,6 +48,8 @@ export function ProviderEditDialog({ target, onClose, onSaved }: ProviderEditDia
   const [apiKey, setApiKey] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [contextWindow, setContextWindow] = useState(0);
+  const [inputPrice, setInputPrice] = useState(0);
+  const [outputPrice, setOutputPrice] = useState(0);
   const [workRoles, setWorkRoles] = useState<WorkRole[]>([]);
 
   // target 变化时用当前值预填表单
@@ -62,6 +65,8 @@ export function ProviderEditDialog({ target, onClose, onSaved }: ProviderEditDia
     } else {
       setDisplayName(target.data.displayName ?? "");
       setContextWindow(target.data.contextWindow ?? 0);
+      setInputPrice(target.data.inputPrice ?? 0);
+      setOutputPrice(target.data.outputPrice ?? 0);
       setWorkRoles(parseWorkRoles(target.data.workRoles) as WorkRole[]);
     }
   }, [target]);
@@ -83,8 +88,19 @@ export function ProviderEditDialog({ target, onClose, onSaved }: ProviderEditDia
         await dbModels.update(target.data.id, {
           displayName: displayName.trim() || null,
           contextWindow: contextWindow || null,
+          inputPrice: inputPrice > 0 ? inputPrice : null,
+          outputPrice: outputPrice > 0 ? outputPrice : null,
           workRoles: JSON.stringify(workRoles),
         });
+        if (inputPrice > 0 && outputPrice > 0) {
+          await saveManualModelPrice({
+            modelName: target.data.name,
+            providerType: target.data.provider?.type,
+            inputPer1m: inputPrice,
+            outputPer1m: outputPrice,
+            contextWindow: contextWindow || null,
+          });
+        }
       }
       onSaved();
       onClose();
@@ -136,6 +152,26 @@ export function ProviderEditDialog({ target, onClose, onSaved }: ProviderEditDia
                     type="number"
                     value={contextWindow}
                     onChange={(e) => setContextWindow(Number(e.target.value) || 0)}
+                    className="rounded-xl"
+                  />
+                </Field>
+                <Field label={t("addProvider.inputPrice")}>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.0001"
+                    value={inputPrice}
+                    onChange={(e) => setInputPrice(Number(e.target.value) || 0)}
+                    className="rounded-xl"
+                  />
+                </Field>
+                <Field label={t("addProvider.outputPrice")}>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.0001"
+                    value={outputPrice}
+                    onChange={(e) => setOutputPrice(Number(e.target.value) || 0)}
                     className="rounded-xl"
                   />
                 </Field>
