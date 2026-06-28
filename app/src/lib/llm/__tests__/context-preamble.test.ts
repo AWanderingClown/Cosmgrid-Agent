@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildTimePreamble, buildNoToolsPreamble, buildProjectMemoryPreamble } from "../context-preamble";
+import { buildTimePreamble, buildNoToolsPreamble, buildProjectMemoryPreamble, buildCrossProjectMemoryPreamble } from "../context-preamble";
 
 describe("buildTimePreamble", () => {
   it("用固定时间格式化出年月日 + 星期 + 时分", () => {
@@ -107,5 +107,27 @@ describe("buildProjectMemoryPreamble", () => {
     expect(out).not.toContain("A".repeat(80));
     expect(out).not.toContain("B".repeat(220));
     expect(out).toContain("…");
+  });
+});
+
+describe("buildCrossProjectMemoryPreamble", () => {
+  it("无跨项目命中时返回 null", () => {
+    expect(buildCrossProjectMemoryPreamble([])).toBeNull();
+  });
+
+  it("明确标注其他项目仅作借鉴，不代表当前项目事实", () => {
+    const out = buildCrossProjectMemoryPreamble([
+      {
+        projectName: "Legacy App",
+        kind: "lesson",
+        title: "桌面端打包避开 Prisma",
+        content: "打包时不要依赖运行时 Node 服务",
+        importance: 88,
+      },
+    ]);
+    expect(out).toContain("其他项目");
+    expect(out).toContain("仅作借鉴");
+    expect(out).toContain("Legacy App");
+    expect(out).toContain("桌面端打包避开 Prisma");
   });
 });

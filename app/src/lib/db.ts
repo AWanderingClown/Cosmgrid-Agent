@@ -364,6 +364,25 @@ export async function initSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_project_memories_project
     ON project_memories(project_id, importance DESC)
   `);
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS project_memory_vectors (
+      memory_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      provider_name TEXT NOT NULL,
+      dim INTEGER NOT NULL,
+      embedding_json TEXT NOT NULL,
+      source_hash TEXT NOT NULL,
+      source_updated_at TEXT NOT NULL,
+      indexed_at TEXT NOT NULL,
+      PRIMARY KEY (memory_id, provider_name),
+      FOREIGN KEY (memory_id) REFERENCES project_memories(id) ON DELETE CASCADE,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    )
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_project_memory_vectors_lookup
+    ON project_memory_vectors(provider_name, project_id, indexed_at DESC)
+  `);
 
   // v0.9 阶段7：模型表现滚动统计（SmartRouter 评分数据源）
   // 一行 = 某模型在某难度桶（simple/standard/hard）上的累积表现；每写 UsageEvent 增量更新
@@ -3214,6 +3233,28 @@ export interface SearchProjectMemoriesOptions {
 }
 
 export const projectMemories = {
+  async listAll(options: { excludeProjectId?: string; minImportance?: number; limit?: number } = {}): Promise<ProjectMemory[]> {
+    const db = await getDb();
+    const params: unknown[] = [];
+    const clauses: string[] = [];
+    if (options.excludeProjectId) {
+      params.push(options.excludeProjectId);
+      clauses.push(`project_id != $${params.length}`);
+    }
+    if (options.minImportance !== undefined) {
+      params.push(Math.max(0, options.minImportance));
+      clauses.push(`importance >= $${params.length}`);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const limitClause = options.limit ? `LIMIT $${params.length + 1}` : "";
+    if (options.limit) params.push(options.limit);
+    const rows = await db.select<ProjectMemoryRow[]>(
+      `SELECT * FROM project_memories ${where} ORDER BY importance DESC, updated_at DESC ${limitClause}`,
+      params,
+    );
+    return rows.map(rowToProjectMemory);
+  },
+
   async listByProject(projectId: string): Promise<ProjectMemory[]> {
     const db = await getDb();
     const rows = await db.select<ProjectMemoryRow[]>(
@@ -3358,5 +3399,157 @@ export const projectMemories = {
       if (filtered.length >= limit) break;
     }
     return filtered;
+  },
+};
+
+export interface ProjectMemoryVector {
+  memoryId: string;
+  projectId: string;
+  providerName: string;
+  dim: number;
+  embedding: number[];
+  sourceHash: string;
+  sourceUpdatedAt: string;
+  indexedAt: string;
+}
+
+interface ProjectMemoryVectorRow {
+  memory_id: string;
+  project_id: string;
+  provider_name: string;
+  dim: number;
+  embedding_json: string;
+  source_hash: string;
+  source_updated_at: string;
+  indexed_at: string;
+}
+
+export interface ProjectMemoryVectorSearchRow extends ProjectMemory {
+  providerName: string;
+  dim: number;
+  embedding: number[];
+  sourceHash: string;
+  sourceUpdatedAt: string;
+  indexedAt: string;
+}
+
+function rowToProjectMemoryVector(r: ProjectMemoryVectorRow): ProjectMemoryVector {
+  return {
+    memoryId: r.memory_id,
+    projectId: r.project_id,
+    providerName: r.provider_name,
+    dim: r.dim,
+    embedding: JSON.parse(r.embedding_json),
+    sourceHash: r.source_hash,
+    sourceUpdatedAt: r.source_updated_at,
+    indexedAt: r.indexed_at,
+  };
+}
+
+export const projectMemoryVectors = {
+  async get(memoryId: string, providerName: string): Promise<ProjectMemoryVector | null> {
+    const db = await getDb();
+    const rows = await db.select<ProjectMemoryVectorRow[]>(
+      "SELECT * FROM project_memory_vectors WHERE memory_id = $1 AND provider_name = $2 LIMIT 1",
+      [memoryId, providerName],
+    );
+    return rows[0] ? rowToProjectMemoryVector(rows[0]) : null;
+  },
+
+  async listByProvider(providerName: string): Promise<ProjectMemoryVector[]> {
+    const db = await getDb();
+    const rows = await db.select<ProjectMemoryVectorRow[]>(
+      "SELECT * FROM project_memory_vectors WHERE provider_name = $1",
+      [providerName],
+    );
+    return rows.map(rowToProjectMemoryVector);
+  },
+
+  async upsert(input: {
+    memoryId: string;
+    projectId: string;
+    providerName: string;
+    dim: number;
+    embedding: number[];
+    sourceHash: string;
+    sourceUpdatedAt: string;
+  }): Promise<void> {
+    const db = await getDb();
+    const ts = now();
+    await db.execute(
+      `INSERT INTO project_memory_vectors
+        (memory_id, project_id, provider_name, dim, embedding_json, source_hash, source_updated_at, indexed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT(memory_id, provider_name)
+       DO UPDATE SET
+         project_id = excluded.project_id,
+         dim = excluded.dim,
+         embedding_json = excluded.embedding_json,
+         source_hash = excluded.source_hash,
+         source_updated_at = excluded.source_updated_at,
+         indexed_at = excluded.indexed_at`,
+      [
+        input.memoryId,
+        input.projectId,
+        input.providerName,
+        input.dim,
+        JSON.stringify(input.embedding),
+        input.sourceHash,
+        input.sourceUpdatedAt,
+        ts,
+      ],
+    );
+  },
+
+  async listSearchRows(options: {
+    providerName: string;
+    excludeProjectId?: string;
+    minImportance?: number;
+  }): Promise<ProjectMemoryVectorSearchRow[]> {
+    const db = await getDb();
+    const params: unknown[] = [options.providerName];
+    const clauses = ["pmv.provider_name = $1"];
+    if (options.excludeProjectId) {
+      params.push(options.excludeProjectId);
+      clauses.push(`pm.project_id != $${params.length}`);
+    }
+    if (options.minImportance !== undefined) {
+      params.push(Math.max(0, options.minImportance));
+      clauses.push(`pm.importance >= $${params.length}`);
+    }
+    const rows = await db.select<Array<ProjectMemoryVectorRow & ProjectMemoryRow>>(
+      `SELECT
+          pm.id,
+          pm.project_id,
+          p.name AS project_name,
+          pm.kind,
+          pm.title,
+          pm.content,
+          pm.importance,
+          pm.tags,
+          pm.created_at,
+          pm.updated_at,
+          pmv.provider_name,
+          pmv.dim,
+          pmv.embedding_json,
+          pmv.source_hash,
+          pmv.source_updated_at,
+          pmv.indexed_at,
+          pmv.memory_id
+       FROM project_memory_vectors pmv
+       INNER JOIN project_memories pm ON pm.id = pmv.memory_id
+       LEFT JOIN projects p ON p.id = pm.project_id
+       WHERE ${clauses.join(" AND ")}`,
+      params,
+    );
+    return rows.map((r) => ({
+      ...rowToProjectMemory(r),
+      providerName: r.provider_name,
+      dim: r.dim,
+      embedding: JSON.parse(r.embedding_json),
+      sourceHash: r.source_hash,
+      sourceUpdatedAt: r.source_updated_at,
+      indexedAt: r.indexed_at,
+    }));
   },
 };

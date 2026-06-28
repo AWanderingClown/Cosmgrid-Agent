@@ -36,6 +36,7 @@ import { type RoleId } from "@/lib/llm/orchestrator";
 import type { ReadRecord } from "@/lib/llm/harness/verify-claims";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
 import { ingestFile, ingestPath, toUserCoreMessage, parseAttachments, type Attachment } from "@/lib/llm/attachments";
+import { retrieveCrossProjectMemoriesForPrompt } from "@/lib/memory/retrieval";
 import { listen } from "@tauri-apps/api/event";
 import {
   planNodes,
@@ -1125,6 +1126,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     let tools: WorkspaceToolRuntime["tools"];
     let workspacePreamble: string | null = null;
     let projectMemoryPreamble: string | null = null;
+    let crossProjectPreamble: string | null = null;
 
     if (effectiveWorkspace && !primaryIsCli) {
       const includeWrite = permissionMode !== "read";
@@ -1144,11 +1146,13 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       (convId ? conversationList.find((c) => c.id === convId)?.projectId : null) ?? null;
     if (currentProjectId) {
       try {
-        const [project, memories] = await Promise.all([
+        const [{ preamble }, project, memories] = await Promise.all([
+          retrieveCrossProjectMemoriesForPrompt(currentProjectId, text),
           dbProjects.getById(currentProjectId),
           dbProjectMemories.listByProject(currentProjectId),
         ]);
         projectMemoryPreamble = buildProjectMemoryPreamble(project?.name, memories);
+        crossProjectPreamble = preamble;
       } catch {
         // 项目记忆读取失败不阻断主流程，只是少一层上下文
       }
@@ -1163,6 +1167,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     let outgoing: ChatMsg[] = [
       { role: "system", content: buildTimePreamble() },
       ...(projectMemoryPreamble ? [{ role: "system" as const, content: projectMemoryPreamble }] : []),
+      ...(crossProjectPreamble ? [{ role: "system" as const, content: crossProjectPreamble }] : []),
       ...(workspacePreamble ? [{ role: "system" as const, content: workspacePreamble }] : []),
       // 阶段 H：绑工作区时塞图片守卫 preamble——防止模型先 read 二进制图再编造幻觉
       ...(effectiveWorkspace ? [{ role: "system" as const, content: buildImageGuardPreamble() }] : []),

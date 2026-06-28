@@ -53,6 +53,7 @@ import { type ToolConfirmRequest } from "@/lib/llm/tools";
 import { prepareWorkspaceToolRuntime, type WorkspaceToolRuntime } from "@/lib/llm/workspace-tool-runtime";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
 import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble, buildProjectMemoryPreamble } from "@/lib/llm/context-preamble";
+import { retrieveCrossProjectMemoriesForPrompt, searchAcrossProjectsHybrid } from "@/lib/memory/retrieval";
 import {
   projectMemories as dbMemories,
   memoryKindLabel,
@@ -224,10 +225,12 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
     let tools: WorkspaceToolRuntime["tools"];
     let workspacePreamble: string | null = null;
     let projectMemoryPreamble: string | null = null;
+    let crossProjectPreamble: string | null = null;
     try {
       const proj = await dbProjects.getById(stage.projectId);
       const memories = await dbMemories.listByProject(stage.projectId);
       projectMemoryPreamble = buildProjectMemoryPreamble(proj?.name, memories);
+      crossProjectPreamble = (await retrieveCrossProjectMemoriesForPrompt(stage.projectId, text)).preamble;
       if (proj?.workspacePath) {
         const blockedCommands = await dbWorkspaceConfigs.getBlockedCommands(stage.projectId);
         const runtime = await prepareWorkspaceToolRuntime({
@@ -253,6 +256,7 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
         [
           { role: "system" as const, content: buildTimePreamble() },
           ...(projectMemoryPreamble ? [{ role: "system" as const, content: projectMemoryPreamble }] : []),
+          ...(crossProjectPreamble ? [{ role: "system" as const, content: crossProjectPreamble }] : []),
           ...(workspacePreamble ? [{ role: "system" as const, content: workspacePreamble }] : []),
           ...(tools ? [{ role: "system" as const, content: buildImageGuardPreamble() }] : []),
           ...(!tools ? [{ role: "system" as const, content: buildNoToolsPreamble() }] : []),
@@ -431,7 +435,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
       if (p.templateId) setTemplateRoles(await dbTemplateRoles.listByTemplate(p.templateId));
       const query = [p.name, p.description].filter(Boolean).join(" ");
       if (query) {
-        setRelatedMemories(await dbMemories.searchAcrossProjects(query, {
+        setRelatedMemories(await searchAcrossProjectsHybrid(query, {
           excludeProjectId: projectId,
           limit: 3,
           minImportance: 60,

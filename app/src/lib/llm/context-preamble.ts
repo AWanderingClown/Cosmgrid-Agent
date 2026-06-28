@@ -96,3 +96,20 @@ export function buildProjectMemoryPreamble(
     ...lines,
   ].join("\n");
 }
+
+/**
+ * 构造「跨项目参考」system 小抄。它不是当前项目事实，只是其他项目的可借鉴经验。
+ */
+export function buildCrossProjectMemoryPreamble(
+  memories: Pick<ProjectMemory, "projectName" | "kind" | "title" | "content" | "importance">[],
+): string | null {
+  if (memories.length === 0) return null;
+  const lines = memories.slice(0, 3).map((m, idx) => {
+    const project = m.projectName?.trim() || "未命名项目";
+    return `${idx + 1}. [${project}｜${m.kind}｜重要度 ${m.importance}] ${shorten(m.title, 36)}：${shorten(m.content, 120)}`;
+  });
+  return [
+    "以下内容来自其他项目，仅作借鉴，不代表当前项目事实；若与当前项目记忆、当前代码或当前工作区冲突，以当前项目为准。",
+    ...lines,
+  ].join("\n");
+}

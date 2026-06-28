@@ -24,6 +24,7 @@ import {
   projectMemories as dbMemories,
   type MemoryKind,
 } from "@/lib/db";
+import { syncProjectMemoryVector } from "@/lib/memory/retrieval";
 
 const MEMORY_KINDS: readonly MemoryKind[] = ["decision", "lesson", "context", "preference", "other"];
 
@@ -62,13 +63,18 @@ export function AddMemoryDialog({
     setSaving(true);
     setError(null);
     try {
-      await dbMemories.create({
+      const created = await dbMemories.create({
         projectId,
         kind,
         title: title.trim(),
         content: content.trim(),
         tags: tags.trim() || null,
       });
+      try {
+        await syncProjectMemoryVector(created);
+      } catch {
+        // 索引失败不影响记忆本身保存成功；后续后台回填会补上
+      }
       reset();
       onOpenChange(false);
       onCreated();

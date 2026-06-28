@@ -17,6 +17,7 @@ import {
 import { planUsageLevel, type UsageLevel } from "@/lib/llm/plan-thresholds";
 import { computeTokenPlanUsageMap } from "@/lib/llm/token-plan-usage";
 import { syncModelPrices } from "@/lib/llm/price-catalog";
+import { backfillProjectMemoryVectors } from "@/lib/memory/retrieval";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
@@ -89,6 +90,7 @@ function App() {
     if (!dbReady) return;
     void loadPlansWithRecordedUsage().then(setPlans);
     void syncModelPrices();
+    void backfillProjectMemoryVectors({ limit: 120 }).catch(() => {});
     const id = setInterval(() => {
       void loadPlansWithRecordedUsage().then(setPlans);
     }, 60_000);

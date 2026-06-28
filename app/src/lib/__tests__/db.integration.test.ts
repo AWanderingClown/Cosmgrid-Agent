@@ -33,6 +33,7 @@ vi.mock("@tauri-apps/plugin-sql", () => ({
 }));
 
 const db = await import("../db");
+const retrieval = await import("../memory/retrieval");
 
 beforeAll(async () => {
   await db.initSchema();
@@ -58,6 +59,7 @@ describe("initSchema", () => {
       "tool_executions",
       "workspace_configs",
       "project_memories",
+      "project_memory_vectors",
     ]) {
       expect(tables).toContain(t);
     }
@@ -802,6 +804,71 @@ describe("projectMemories", () => {
     expect(filtered.every((m) => m.importance >= 60)).toBe(true);
     expect(filtered.some((m) => m.title === "次优先 Tauri")).toBe(false);
     expect(filtered.some((m) => m.title === "低优先 Tauri")).toBe(false);
+  });
+
+  it("project memory vectors 回填 + hybrid 检索可用", async () => {
+    const current = await db.projects.create({ name: "current-proj" });
+    const projA = await db.projects.create({ name: "desktop-a" });
+    const projB = await db.projects.create({ name: "desktop-b" });
+    await db.projectMemories.create({
+      projectId: current.id,
+      kind: "context",
+      title: "当前项目约束",
+      content: "只作排除当前项目用",
+      importance: 95,
+    });
+    const a = await db.projectMemories.create({
+      projectId: projA.id,
+      kind: "lesson",
+      title: "桌面端打包经验",
+      content: "Tauri 桌面应用构建要避免运行时 Node 服务",
+      importance: 90,
+      tags: "tauri,desktop,build",
+    });
+    await db.projectMemories.create({
+      projectId: projB.id,
+      kind: "lesson",
+      title: "低优先无关项",
+      content: "完全不相关",
+      importance: 30,
+    });
+
+    const synced = await retrieval.backfillProjectMemoryVectors({ limit: 20 });
+    expect(synced).toBeGreaterThanOrEqual(2);
+
+    const vector = await db.projectMemoryVectors.get(a.id, "keyword-hash-v2");
+    expect(vector).not.toBeNull();
+    expect(vector!.projectId).toBe(projA.id);
+    expect(vector!.embedding.length).toBeGreaterThan(0);
+
+    const hits = await retrieval.searchAcrossProjectsHybrid("Tauri 桌面应用 打包 避开 Node 服务", {
+      excludeProjectId: current.id,
+      minImportance: 60,
+      limit: 3,
+      perProjectLimit: 1,
+    });
+    expect(hits.length).toBeGreaterThanOrEqual(1);
+    expect(hits[0]!.projectId).toBe(projA.id);
+    expect(hits.every((m) => m.projectId !== current.id)).toBe(true);
+    expect(hits[0]!.providerName).toBe("keyword-hash-v2");
+  });
+
+  it("retrieveCrossProjectMemoriesForPrompt 返回可直接注入的 preamble", async () => {
+    const current = await db.projects.create({ name: "chat-current" });
+    const other = await db.projects.create({ name: "legacy-chat" });
+    await db.projectMemories.create({
+      projectId: other.id,
+      kind: "decision",
+      title: "桌面打包不要依赖 Prisma",
+      content: "本地桌面应用尽量别依赖运行时 Node server",
+      importance: 92,
+    });
+    await retrieval.backfillProjectMemoryVectors({ limit: 10 });
+
+    const result = await retrieval.retrieveCrossProjectMemoriesForPrompt(current.id, "桌面应用打包时如何避开 Node 运行时");
+    expect(result.hits.length).toBeGreaterThanOrEqual(1);
+    expect(result.preamble).toContain("其他项目");
+    expect(result.preamble).toContain("legacy-chat");
   });
 });
 
