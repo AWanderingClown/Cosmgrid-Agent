@@ -32,6 +32,7 @@ export interface CliEndpoint {
 
 export interface CliStreamCallbacks {
   onDelta: (text: string) => void;
+  onStatus?: (text: string) => void;
   onUsage?: (usage: { inputTokens: number; outputTokens: number }) => void;
   /** 订阅额度状态（claude 的 rate_limit_event），用于未来接 Token Plan 显示 */
   onRateLimit?: (info: { resetsAt: number | null; limitType: string | null }) => void;
@@ -103,6 +104,7 @@ export async function streamViaCli(
           for (const line of ev.line.split("\n")) {
             for (const e of parseCliStreamLine(endpoint.providerType, line)) {
               if (e.kind === "delta") callbacks.onDelta(e.text);
+              else if (e.kind === "status") callbacks.onStatus?.(e.text);
               else if (e.kind === "usage") {
                 usage = { inputTokens: e.inputTokens, outputTokens: e.outputTokens };
                 callbacks.onUsage?.(usage);

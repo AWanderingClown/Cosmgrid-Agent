@@ -33,6 +33,27 @@ describe("provider-presets", () => {
     expect(ds?.providerType).toBe("openai-compatible");
   });
 
+  it("CLI 预设不要求用户填写路径和价格，Codex 默认使用 GPT 5.5 元数据", () => {
+    const codex = getPresetById("codex-cli");
+    expect(codex).toMatchObject({
+      providerType: "codex-cli",
+      baseUrl: "",
+      defaultModel: "gpt-5.5",
+      defaultDisplayName: "GPT 5.5",
+      defaultContextWindow: 1_050_000,
+      supportsModelFetch: false,
+    });
+    const claude = getPresetById("claude-cli");
+    expect(claude).toMatchObject({
+      providerType: "claude-cli",
+      baseUrl: "",
+      defaultModel: "sonnet",
+      defaultDisplayName: "Claude Sonnet",
+      defaultContextWindow: 1_000_000,
+      supportsModelFetch: false,
+    });
+  });
+
   it("getPresetById 找不到返回 undefined", () => {
     expect(getPresetById("nope")).toBeUndefined();
   });

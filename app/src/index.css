@@ -32,6 +32,7 @@
   --animate-float: float 3s ease-in-out infinite;
   --animate-shimmer: shimmer 2s linear infinite;
   --animate-pulse-slow: pulse-slow 4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-chain-node-active: chain-node-active 1.55s ease-in-out infinite;
 
   @keyframes float {
     0%, 100% { transform: translateY(0); }
@@ -44,6 +45,18 @@
   @keyframes pulse-slow {
     0%, 100% { opacity: 1; filter: brightness(1); }
     50% { opacity: 0.8; filter: brightness(1.2); }
+  }
+  @keyframes chain-node-active {
+    0%, 100% {
+      transform: translateY(0) scale(1);
+      box-shadow: 0 0 0 rgba(96, 165, 250, 0), 0 0 18px rgba(96, 165, 250, 0.16);
+      filter: brightness(1);
+    }
+    50% {
+      transform: translateY(-2px) scale(1.015);
+      box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.24), 0 0 28px rgba(96, 165, 250, 0.34);
+      filter: brightness(1.18);
+    }
   }
 }
 
@@ -126,6 +139,10 @@
 
   .nav-item-active {
     @apply bg-primary text-primary-foreground shadow-lg shadow-primary/20 scale-[1.02];
+  }
+
+  .chain-node-active {
+    animation: chain-node-active 1.55s ease-in-out infinite;
   }
 }
 

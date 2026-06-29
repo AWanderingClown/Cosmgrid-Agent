@@ -2,7 +2,8 @@
 // v0.3：apiFetch → db.ts 直连 SQLite，API Key → keystore
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2, Download, ExternalLink } from "lucide-react";
+import { Loader2, Download, ExternalLink, RefreshCw } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Dialog,
   DialogContent,
@@ -24,34 +25,24 @@ import { inferModelCapabilities } from "@/lib/llm/model-capabilities";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { PROVIDER_PRESETS, type ProviderPreset } from "@/lib/llm/provider-presets";
 import { fetchAvailableModels } from "@/lib/llm/fetch-models";
-import { saveManualModelPrice } from "@/lib/llm/price-catalog";
+import { lookupPriceFromCatalog, saveManualModelPrice } from "@/lib/llm/price-catalog";
 import { ApiKeyInput } from "./ApiKeyInput";
 import { ProviderTypeSelect, type ProviderTypeValue } from "./ProviderTypeSelect";
 import { BasicFormFields } from "./BasicFormFields";
 import { WorkRoleSelector } from "./WorkRoleSelector";
 import { ModelConfigFields } from "./ModelConfigFields";
 import { TestConnectionButton } from "./TestConnectionButton";
+import {
+  DEFAULT_BASE_URLS,
+  getPresetForProviderType,
+  inferRolesForModel,
+  isCliType,
+} from "./provider-form-defaults";
 
 interface AddProviderDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess?: () => void;
-}
-
-const DEFAULT_BASE_URLS: Record<ProviderTypeValue, string> = {
-  anthropic: "https://api.anthropic.com",
-  openai: "https://api.openai.com/v1",
-  google: "https://generativelanguage.googleapis.com/v1beta",
-  // openai-compatible 默认空，让用户在 BasicFormFields 自己填
-  "openai-compatible": "",
-  // CLI 引擎：baseUrl 复用为「可执行文件路径」，默认空＝用系统 PATH 里的 claude/codex
-  "claude-cli": "",
-  "codex-cli": "",
-};
-
-/** CLI 引擎类型：spawn 本机 CLI 吃订阅额度，不需要 API Key / URL 端点 */
-function isCliType(type: ProviderTypeValue): boolean {
-  return type === "claude-cli" || type === "codex-cli";
 }
 
 const INITIAL_STATE = {
@@ -93,19 +84,75 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
   const [fetchingModels, setFetchingModels] = useState(false);
   const [fetchedModels, setFetchedModels] = useState<string[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [resolvingCliPath, setResolvingCliPath] = useState(false);
+  const [cliPathDetected, setCliPathDetected] = useState(false);
+
+  async function resolveCliPath(providerTypeValue: ProviderTypeValue): Promise<string | null> {
+    const program = providerTypeValue === "claude-cli" ? "claude" : providerTypeValue === "codex-cli" ? "codex" : null;
+    if (!program) return null;
+    try {
+      return await invoke<string | null>("resolve_cli_program", { program });
+    } catch {
+      return null;
+    }
+  }
+
+  async function detectCliPath(providerTypeValue = providerType) {
+    if (!isCliType(providerTypeValue)) return;
+    setResolvingCliPath(true);
+    setCliPathDetected(false);
+    const resolved = await resolveCliPath(providerTypeValue);
+    if (resolved) {
+      setBaseUrl(resolved);
+      setCliPathDetected(true);
+    }
+    setResolvingCliPath(false);
+  }
+
+  async function applyKnownModelMetadata(name: string, type = providerType) {
+    if (isCliType(type)) {
+      setInputPrice(0);
+      setOutputPrice(0);
+      return;
+    }
+    const price = await lookupPriceFromCatalog(name, type);
+    if (!price) return;
+    if (price.contextWindow > 0) setContextWindow(price.contextWindow);
+    setInputPrice(price.input);
+    setOutputPrice(price.output);
+  }
+
+  function applyModelName(name: string, opts: { forceRoles?: boolean } = {}) {
+    setModelName(name);
+    if (opts.forceRoles || !rolesEditedManually) {
+      setWorkRoles(inferRolesForModel(name));
+    }
+  }
 
   // 选一个厂商预设：自动带出 type / 名称 / baseUrl / 官网 / 默认模型，用户只需粘 key
-  function applyPreset(preset: ProviderPreset) {
+  async function applyPreset(preset: ProviderPreset) {
     setPresetId(preset.id);
     setProviderType(preset.providerType);
     setProviderName(preset.name);
     setBaseUrl(preset.baseUrl);
     setWebsite(preset.website ?? "");
+    setNotes("");
     setContextWindow(preset.defaultContextWindow);
+    setInputPrice(0);
+    setOutputPrice(0);
+    setDisplayName(preset.defaultDisplayName ?? "");
     setApiKeyUrl(preset.apiKeyUrl ?? null);
     setFetchedModels([]);
     setFetchError(null);
-    handleModelNameChange(preset.defaultModel);
+    setCliPathDetected(false);
+    setResolvingCliPath(false);
+    setRolesEditedManually(false);
+    applyModelName(preset.defaultModel, { forceRoles: true });
+    void applyKnownModelMetadata(preset.defaultModel, preset.providerType);
+
+    if (isCliType(preset.providerType)) {
+      await detectCliPath(preset.providerType);
+    }
   }
 
   // 粘 key 后拉取该厂商账号下真实可用的模型，避免手敲填错名字
@@ -131,11 +178,8 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
 
   // 填模型名时自动识别它适合的角色（用户没手动改过的前提下）
   function handleModelNameChange(name: string) {
-    setModelName(name);
-    if (!rolesEditedManually) {
-      const inferred = name.trim() ? inferModelCapabilities(name).workRoles : INITIAL_STATE.workRoles;
-      setWorkRoles(inferred);
-    }
+    applyModelName(name);
+    void applyKnownModelMetadata(name);
   }
 
   function handleWorkRolesChange(roles: WorkRole[]) {
@@ -252,7 +296,7 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
                 <button
                   key={p.id}
                   type="button"
-                  onClick={() => applyPreset(p)}
+                  onClick={() => void applyPreset(p)}
                   className={cn(
                     "px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors",
                     presetId === p.id
@@ -270,6 +314,8 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
                   setApiKeyUrl(null);
                   setFetchedModels([]);
                   setFetchError(null);
+                  setCliPathDetected(false);
+                  setResolvingCliPath(false);
                 }}
                 className={cn(
                   "px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors",
@@ -284,9 +330,17 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
           <ProviderTypeSelect
             value={providerType}
             onChange={(v) => {
-              // 手动改协议类型 = 走自定义，清掉预设关联
+              const mappedPreset = getPresetForProviderType(v);
+              if (mappedPreset) {
+                void applyPreset(mappedPreset);
+                return;
+              }
+
+              // 手动改普通协议类型 = 走自定义，清掉预设关联
               setPresetId(null);
               setApiKeyUrl(null);
+              setCliPathDetected(false);
+              setResolvingCliPath(false);
               setProviderType(v);
               setBaseUrl(DEFAULT_BASE_URLS[v]);
             }}
@@ -310,7 +364,26 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder={providerType === "claude-cli" ? "/usr/local/bin/claude" : "/usr/local/bin/codex"}
               />
-              <p className="text-xs text-muted-foreground">{t("addProvider.cliHint")}</p>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-muted-foreground">
+                  {cliPathDetected
+                    ? t("addProvider.cliDetected")
+                    : resolvingCliPath
+                      ? t("addProvider.cliDetecting")
+                      : t("addProvider.cliHint")}
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void detectCliPath()}
+                  disabled={resolvingCliPath}
+                  className="shrink-0"
+                >
+                  {resolvingCliPath ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                  {t("addProvider.cliDetectButton")}
+                </Button>
+              </div>
             </div>
           ) : (
             <>
@@ -387,6 +460,8 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
             onContextWindowChange={setContextWindow}
             onInputPriceChange={setInputPrice}
             onOutputPriceChange={setOutputPrice}
+            showPricing={!isCli}
+            helperText={isCli ? t("addProvider.cliPricingHint") : t("addProvider.modelMetadataHint")}
           />
 
           <WorkRoleSelector value={workRoles} onChange={handleWorkRolesChange} />

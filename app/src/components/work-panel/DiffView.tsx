@@ -45,7 +45,7 @@ export function DiffView({ oldText, newText, maxLines = MAX_DETAIL_LINES }: Diff
           </span>
         )}
       </div>
-      <pre className="text-[10px] leading-relaxed font-mono text-muted-foreground/80 whitespace-pre-wrap break-words bg-black/20 rounded-lg p-2 max-h-64 overflow-auto custom-scrollbar">
+      <pre className="text-[10px] leading-relaxed font-mono text-muted-foreground/80 whitespace-pre-wrap break-words bg-foreground/[0.04] rounded-lg p-2 max-h-64 overflow-auto custom-scrollbar">
         {shown.map((line, i) => {
           const isAdd = line.startsWith("+");
           const isDel = line.startsWith("-");

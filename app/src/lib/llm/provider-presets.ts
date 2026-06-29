@@ -23,6 +23,8 @@ export interface ProviderPreset {
   apiKeyUrl?: string;
   /** 默认模型名：拉取真实列表前的占位/兜底（拉取成功后用真实列表覆盖） */
   defaultModel: string;
+  /** 默认展示名：只给用户看，实际调用仍使用 defaultModel */
+  defaultDisplayName?: string;
   /** 默认上下文窗口（粗略，用户可改） */
   defaultContextWindow: number;
   /** 是否支持「粘 key 后自动拉取模型列表」（CLI / 无 /models 的厂商为 false） */
@@ -39,6 +41,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     website: "https://www.deepseek.com",
     apiKeyUrl: "https://platform.deepseek.com/api_keys",
     defaultModel: "deepseek-chat",
+    defaultDisplayName: "DeepSeek Chat",
     defaultContextWindow: 128_000,
     supportsModelFetch: true,
   },
@@ -50,6 +53,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     website: "https://www.bigmodel.cn",
     apiKeyUrl: "https://www.bigmodel.cn/usercenter/proj-mgmt/apikeys",
     defaultModel: "glm-4.6",
+    defaultDisplayName: "GLM-4.6",
     defaultContextWindow: 128_000,
     supportsModelFetch: true,
   },
@@ -61,6 +65,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     website: "https://dashscope.aliyun.com",
     apiKeyUrl: "https://bailian.console.aliyun.com/?apiKey=1",
     defaultModel: "qwen-plus",
+    defaultDisplayName: "Qwen Plus",
     defaultContextWindow: 131_072,
     supportsModelFetch: true,
   },
@@ -72,6 +77,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     website: "https://www.moonshot.cn",
     apiKeyUrl: "https://platform.moonshot.cn/console/api-keys",
     defaultModel: "moonshot-v1-8k",
+    defaultDisplayName: "Moonshot v1 8K",
     defaultContextWindow: 128_000,
     supportsModelFetch: true,
   },
@@ -83,6 +89,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     website: "https://www.minimaxi.com",
     apiKeyUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key",
     defaultModel: "MiniMax-Text-01",
+    defaultDisplayName: "MiniMax Text 01",
     defaultContextWindow: 1_000_000,
     supportsModelFetch: true,
   },
@@ -95,6 +102,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     website: "https://agnes-ai.com",
     apiKeyUrl: "https://platform.agnes-ai.com/",
     defaultModel: "agnes-2.0-flash",
+    defaultDisplayName: "Agnes 2.0 Flash",
     defaultContextWindow: 128_000,
     supportsModelFetch: true,
   },
@@ -108,6 +116,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     website: "https://openai.com",
     apiKeyUrl: "https://platform.openai.com/api-keys",
     defaultModel: "gpt-4o",
+    defaultDisplayName: "GPT-4o",
     defaultContextWindow: 128_000,
     supportsModelFetch: true,
   },
@@ -119,7 +128,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     website: "https://www.anthropic.com",
     apiKeyUrl: "https://console.anthropic.com/settings/keys",
     defaultModel: "claude-opus-4-8",
-    defaultContextWindow: 200_000,
+    defaultDisplayName: "Claude Opus 4.8",
+    defaultContextWindow: 1_000_000,
     supportsModelFetch: true,
   },
   {
@@ -130,6 +140,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     website: "https://ai.google.dev",
     apiKeyUrl: "https://aistudio.google.com/apikey",
     defaultModel: "gemini-2.5-pro",
+    defaultDisplayName: "Gemini 2.5 Pro",
     defaultContextWindow: 1_000_000,
     supportsModelFetch: true,
   },
@@ -141,8 +152,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     providerType: "claude-cli",
     baseUrl: "",
     website: "https://docs.claude.com/claude-code",
-    defaultModel: "claude-opus-4-8",
-    defaultContextWindow: 200_000,
+    defaultModel: "sonnet",
+    defaultDisplayName: "Claude Sonnet",
+    defaultContextWindow: 1_000_000,
     supportsModelFetch: false,
   },
   {
@@ -151,8 +163,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     providerType: "codex-cli",
     baseUrl: "",
     website: "https://developers.openai.com/codex",
-    defaultModel: "gpt-5.5-codex",
-    defaultContextWindow: 256_000,
+    defaultModel: "gpt-5.5",
+    defaultDisplayName: "GPT 5.5",
+    defaultContextWindow: 1_050_000,
     supportsModelFetch: false,
   },
 ];

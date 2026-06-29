@@ -61,7 +61,7 @@ const ArtifactItem = memo(function ArtifactItem({ artifact }: { artifact: WorkAr
           ) : isHtmlTooLarge ? (
             // html 工件超大 → 降级显示 source + 截断提示（不直接 iframe 防卡顿）
             <>
-              <pre className="text-[10px] leading-relaxed font-mono text-muted-foreground/70 whitespace-pre-wrap break-words bg-black/20 rounded-lg p-2 max-h-64 overflow-auto custom-scrollbar">
+              <pre className="text-[10px] leading-relaxed font-mono text-muted-foreground/70 whitespace-pre-wrap break-words bg-foreground/[0.04] rounded-lg p-2 max-h-64 overflow-auto custom-scrollbar">
                 {shown}
               </pre>
               <div className="text-[9px] text-amber-500/70 italic">
@@ -104,7 +104,7 @@ const ArtifactItem = memo(function ArtifactItem({ artifact }: { artifact: WorkAr
           ) : (
             // 默认 file/terminal 走 pre
             <>
-              <pre className="text-[10px] leading-relaxed font-mono text-muted-foreground/70 whitespace-pre-wrap break-words bg-black/20 rounded-lg p-2 max-h-64 overflow-auto custom-scrollbar">
+              <pre className="text-[10px] leading-relaxed font-mono text-muted-foreground/70 whitespace-pre-wrap break-words bg-foreground/[0.04] rounded-lg p-2 max-h-64 overflow-auto custom-scrollbar">
                 {shown}
               </pre>
               {truncated && (

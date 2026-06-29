@@ -130,6 +130,8 @@ export interface StreamCallbacks {
   onUsage?: (usage: StreamUsage, model: ModelEndpoint, finishReason: string, interrupted: boolean) => void;
   /** 系统自动恢复的方式：原生续跑 / 上下文重放 / fallback 接力 */
   onRecovered?: (mode: "native_resume" | "context_replay" | "fallback_handoff") => void;
+  /** CLI/agent 中间状态，不计入最终回答正文 */
+  onStatus?: (status: string) => void;
   /**
    * streamText 全部 step 跑完后，把累积的所有 toolCalls 一次交给 caller。
    * 不传=noop，零侵入。Abort 中断时不调。
@@ -294,6 +296,7 @@ export async function streamWithFallback(
               officialSessionId = sessionId;
               persistCliSession(sessionId, "active");
             },
+            onStatus: callbacks.onStatus,
           },
           {
             ...(options.signal ? { signal: options.signal } : {}),

@@ -76,7 +76,7 @@
       "confirm": "Confirm writes",
       "auto": "Auto",
       "readHint": "Read-only: AI can read files, search, and view git — it changes nothing",
-      "confirmHint": "Confirm writes: before writing files or running commands, AI shows the change and waits for approval",
+      "confirmHint": "Confirm writes: before writing files or running commands, AI only asks you to confirm or cancel; details stay in the work panel",
       "autoHint": "Auto: AI writes files / runs commands without per-action prompts (use for trusted work)"
     },
     "tools": {
@@ -84,6 +84,21 @@
       "approve": "Approve",
       "reject": "Cancel",
       "confirmHint": "Details will be shown in the work panel."
+    },
+    "working": {
+      "idle": "Idle — your turn",
+      "working": "Working",
+      "awaitingApproval": "Waiting for your approval"
+    },
+    "toolSteps": {
+      "read": "Read {{file}}",
+      "write": "Write {{file}} ({{lines}} lines)",
+      "edit": "Edit {{file}}",
+      "bash": "Run command: {{command}}",
+      "glob": "Find files: {{pattern}}",
+      "grep": "Search text: {{pattern}}",
+      "git_read": "Read Git status",
+      "unknown": "{{tool}}"
     },
     "smartPickResult": {
       "title": "Smart Pick",
@@ -135,6 +150,30 @@
       "outTokens": "Out",
       "currentActivity": "Current Activity",
       "idle": "Idle — your turn",
+      "chainGraph": "Multi-AI Chain",
+      "chainGraphHint": "Runs left to right; each step can use a different model",
+      "changeNodeModel": "Change model for {{step}}",
+      "chainSteps": {
+        "leader": "Main Chat",
+        "architect": "Plan",
+        "frontend": "Frontend Build",
+        "backend": "Backend Build",
+        "runner": "Run Checks",
+        "tester": "Test",
+        "reviewer": "Final Review",
+        "security": "Security Review"
+      },
+      "ideTitle": "IDE View",
+      "noFileOpen": "No file open",
+      "noFileOpenHint": "Files written or edited by AI open here automatically. You can also open files from the tree.",
+      "noWorkspaceHint": "Bind a workspace first. AI-produced files will appear here.",
+      "streamingLines": "Writing line {{current}} / {{total}}",
+      "fileTree": "File tree",
+      "loading": "Loading...",
+      "noFiles": "No files to show",
+      "openTabs": "Open files",
+      "closeTab": "Close {{name}}",
+      "readOnlyCode": "Read-only code view",
       "artifacts": "Artifacts",
       "artifactsEmpty": "No files or commands produced yet",
       "files": "Files",
@@ -283,7 +322,12 @@
       "codex-cli": "Codex local CLI (uses subscription)"
     },
     "cliPathLabel": "CLI executable path (optional)",
-    "cliHint": "Leave blank to auto-use claude/codex from your PATH. No API key needed — uses the subscription you're already logged into locally.",
+    "cliHint": "The app auto-detects the local claude/codex path. If detection fails, leaving this blank still uses the system default. No API key needed — it uses your local subscription login.",
+    "cliDetectButton": "Detect again",
+    "cliDetecting": "Detecting local CLI path...",
+    "cliDetected": "Detected the local CLI path. You can still edit it manually.",
+    "cliPricingHint": "CLI subscriptions are not billed by API token price here. The app stores the model and context only; usage is tracked against the local subscription.",
+    "modelMetadataHint": "Known models auto-fill context and catalog prices. You can still edit them manually.",
     "apiKey": "API Key",
     "show": "Show",
     "hide": "Hide",

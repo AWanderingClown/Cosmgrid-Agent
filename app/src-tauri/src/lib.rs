@@ -5,6 +5,8 @@
 //        模型路由 / 计费 / 解析仍全在 TS。
 
 use std::collections::HashMap;
+use std::env;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::ipc::Channel;
 use tauri::State;
@@ -35,6 +37,58 @@ const POLLUTING_ENV_PREFIXES: [&str; 4] = [
     "CLAUDE_CODE_",
     "CLAUDE_AGENT_SDK_",
 ];
+
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+}
+
+fn find_in_path(program: &str) -> Option<PathBuf> {
+    let path_var = env::var_os("PATH")?;
+    env::split_paths(&path_var)
+        .map(|dir| dir.join(program))
+        .find(|candidate| is_executable_file(candidate))
+}
+
+fn find_in_common_locations(program: &str) -> Option<PathBuf> {
+    let home = env::var_os("HOME").map(PathBuf::from);
+    let mut candidates = vec![
+        PathBuf::from(format!("/opt/homebrew/bin/{program}")),
+        PathBuf::from(format!("/usr/local/bin/{program}")),
+        PathBuf::from(format!("/usr/bin/{program}")),
+        PathBuf::from(format!("/bin/{program}")),
+    ];
+
+    if let Some(home_dir) = home {
+        candidates.push(home_dir.join(format!(".local/bin/{program}")));
+        let nvm_versions = home_dir.join(".nvm/versions/node");
+        if let Ok(entries) = std::fs::read_dir(nvm_versions) {
+            let mut node_bins: Vec<PathBuf> = entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path().join(format!("bin/{program}")))
+                .collect();
+            node_bins.sort();
+            node_bins.reverse();
+            candidates.extend(node_bins);
+        }
+    }
+
+    candidates
+        .into_iter()
+        .find(|candidate| is_executable_file(candidate))
+}
+
+/// Resolve a local CLI executable to an absolute path for the provider form.
+/// Returning None is valid: the caller can leave the field blank and rely on PATH at runtime.
+#[tauri::command]
+fn resolve_cli_program(program: String) -> Option<String> {
+    if program.contains('/') {
+        let path = PathBuf::from(program);
+        return is_executable_file(&path).then(|| path.to_string_lossy().to_string());
+    }
+    find_in_path(&program)
+        .or_else(|| find_in_common_locations(&program))
+        .map(|path| path.to_string_lossy().to_string())
+}
 
 /// spawn 一个本机 CLI，流式把 stdout/stderr 按行推给前端。
 ///
@@ -224,6 +278,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             spawn_cli_stream,
             kill_cli,
+            resolve_cli_program,
             run_shell_command,
             git_commit_file,
             git_read

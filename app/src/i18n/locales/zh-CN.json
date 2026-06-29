@@ -76,7 +76,7 @@
       "confirm": "确认写",
       "auto": "自动",
       "readHint": "只读：AI 只能读文件、搜索、看 git，不改任何东西",
-      "confirmHint": "确认写：AI 写文件或跑命令前弹窗给你看改动，按确认才执行",
+      "confirmHint": "确认写：AI 写文件或跑命令前只弹出确认 / 取消，详细内容在工作面板里看",
       "autoHint": "自动：AI 写文件/跑命令不再逐个弹窗（信任的活才用）"
     },
     "tools": {
@@ -84,6 +84,21 @@
       "approve": "确认执行",
       "reject": "取消",
       "confirmHint": "详细内容将在工作面板中展示。"
+    },
+    "working": {
+      "idle": "空闲，等你发话",
+      "working": "正在工作",
+      "awaitingApproval": "等待你确认"
+    },
+    "toolSteps": {
+      "read": "读取 {{file}}",
+      "write": "写入 {{file}}（{{lines}} 行）",
+      "edit": "修改 {{file}}",
+      "bash": "执行命令：{{command}}",
+      "glob": "查找文件：{{pattern}}",
+      "grep": "搜索文本：{{pattern}}",
+      "git_read": "读取 Git 状态",
+      "unknown": "{{tool}}"
     },
     "smartPickResult": {
       "title": "智能推荐",
@@ -135,6 +150,30 @@
       "outTokens": "输出",
       "currentActivity": "当前活动",
       "idle": "空闲，等你发话",
+      "chainGraph": "多 AI 协作链",
+      "chainGraphHint": "从左到右依次执行，每步模型可单独更换",
+      "changeNodeModel": "更换 {{step}} 的模型",
+      "chainSteps": {
+        "leader": "主对话",
+        "architect": "计划方案",
+        "frontend": "前端工程师执行",
+        "backend": "后端工程师执行",
+        "runner": "运行检查",
+        "tester": "测试",
+        "reviewer": "最终审查",
+        "security": "安全审查"
+      },
+      "ideTitle": "IDE 视图",
+      "noFileOpen": "还没有打开文件",
+      "noFileOpenHint": "AI 写入或修改文件后会自动在这里打开；你也可以从左侧文件树手动打开。",
+      "noWorkspaceHint": "先绑定工作文件夹，AI 产出的文件会在这里显示。",
+      "streamingLines": "写入第 {{current}} / {{total}} 行",
+      "fileTree": "文件树",
+      "loading": "加载中...",
+      "noFiles": "没有可显示文件",
+      "openTabs": "打开的文件",
+      "closeTab": "关闭 {{name}}",
+      "readOnlyCode": "只读代码视图",
       "artifacts": "产出物",
       "artifactsEmpty": "还没产出文件或命令",
       "files": "文件",
@@ -283,7 +322,12 @@
       "codex-cli": "Codex 本机 CLI（吃订阅额度）"
     },
     "cliPathLabel": "CLI 可执行文件路径（可选）",
-    "cliHint": "留空则自动用系统里的 claude/codex。无需 API Key——直接用你本机已登录的订阅额度。",
+    "cliHint": "系统会自动检测本机 claude/codex 路径；检测不到时留空也会走系统默认。无需 API Key——直接用你本机已登录的订阅额度。",
+    "cliDetectButton": "重新检测",
+    "cliDetecting": "正在检测本机 CLI 路径...",
+    "cliDetected": "已自动检测到本机 CLI 路径。也可以手动改成其他路径。",
+    "cliPricingHint": "CLI 订阅不按 API token 单价结算，这里只保存模型和上下文；用量按本机订阅额度记录。",
+    "modelMetadataHint": "已知模型会自动回填上下文和官方/价格目录单价；不确定时可手动修改。",
     "apiKey": "API Key",
     "show": "显示",
     "hide": "隐藏",

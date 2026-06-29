@@ -142,6 +142,7 @@ export type CliResumeCapability =
 /** 归一化后的流事件：上层只认这几种，不关心 claude / codex 的原始结构差异 */
 export type CliStreamEvent =
   | { kind: "delta"; text: string }
+  | { kind: "status"; text: string }
   | { kind: "usage"; inputTokens: number; outputTokens: number }
   | { kind: "rate_limit"; resetsAt: number | null; limitType: string | null }
   | { kind: "session"; sessionId: string }
@@ -175,7 +176,10 @@ export function parseClaudeStreamLine(line: string): CliStreamEvent[] {
   }
 
   if (type === "assistant") {
-    const message = obj["message"] as { content?: ClaudeContentBlock[] } | undefined;
+    const message = obj["message"] as { content?: ClaudeContentBlock[]; model?: string } | undefined;
+    // Claude CLI 在鉴权失败时会先吐一条 model="<synthetic>" 的 assistant 文本，
+    // 随后才在 result 事件里标 is_error=true。这里不能把那条合成文本当成正常回复。
+    if (typeof obj["error"] === "string" || message?.model === "<synthetic>") return [];
     const blocks = message?.content ?? [];
     for (const b of blocks) {
       if (b.type === "text" && typeof b.text === "string" && b.text) {
@@ -241,27 +245,51 @@ export function parseCodexStreamLine(line: string): CliStreamEvent[] {
     return events;
   }
 
-  // codex 文本增量：常见为 { type: "item.completed"/"agent_message", text/delta }
-  const text = (obj["delta"] ?? obj["text"]) as unknown;
+  const item = obj["item"] as Record<string, unknown> | undefined;
+
+  // codex 文本增量：
+  // - 旧格式：{ type: "agent_message", text: "..." }
+  // - 当前实测：{ type: "item.completed", item: { type: "agent_message", text: "..." } }
+  const text = (item?.["text"] ?? item?.["delta"] ?? obj["delta"] ?? obj["text"]) as unknown;
+  const itemType = item?.["type"];
   if (
     (type === "agent_message" || type === "item.completed" || type === "message") &&
+    (type !== "item.completed" || itemType === undefined || itemType === "agent_message") &&
     typeof text === "string" &&
     text
   ) {
     events.push({ kind: "delta", text });
   }
 
-  if (type === "token_count" || type === "usage") {
+  if (type === "token_count" || type === "usage" || type === "turn.completed") {
     const usage = (obj["usage"] ?? obj) as { input_tokens?: number; output_tokens?: number };
-    events.push({
-      kind: "usage",
-      inputTokens: usage.input_tokens ?? 0,
-      outputTokens: usage.output_tokens ?? 0,
-    });
+    if (typeof usage.input_tokens === "number" || typeof usage.output_tokens === "number") {
+      events.push({
+        kind: "usage",
+        inputTokens: usage.input_tokens ?? 0,
+        outputTokens: usage.output_tokens ?? 0,
+      });
+    }
+  }
+
+  if (type === "item.started" && itemType === "mcp_tool_call") {
+    const server = typeof item?.["server"] === "string" ? item.server : "tool";
+    const tool = typeof item?.["tool"] === "string" ? item.tool : "call";
+    events.push({ kind: "status", text: `正在调用 ${server}.${tool}...` });
+  }
+
+  if (type === "item.completed" && itemType === "mcp_tool_call") {
+    const status = item?.["status"];
+    if (status === "failed") {
+      const error = item?.["error"] as { message?: string } | null | undefined;
+      const message = typeof error?.message === "string" ? error.message : "工具调用失败";
+      events.push({ kind: "status", text: `工具调用失败：${message}` });
+    }
   }
 
   if (type === "error") {
-    const msg = typeof obj["message"] === "string" ? obj["message"] : "codex returned an error";
+    const rawMessage = obj["message"];
+    const msg = typeof rawMessage === "string" ? rawMessage : "codex returned an error";
     events.push({ kind: "error", message: msg });
   }
 

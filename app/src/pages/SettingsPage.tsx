@@ -7,7 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useTheme } from "@/lib/theme";
+import { useTheme, type Theme } from "@/lib/theme";
 import { useSmartRoutingSetting } from "@/lib/app-settings";
 import { SUPPORTED_LANGUAGES, LANGUAGE_LABELS, type SupportedLanguage } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -26,7 +26,7 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
       : "zh-CN",
   );
 
-  const themes = [
+  const themes: Array<{ id: Theme; label: string; icon: typeof Sun }> = [
     { id: "light", label: t("settings.appearance.themes.light"), icon: Sun },
     { id: "dark", label: t("settings.appearance.themes.dark"), icon: Moon },
     { id: "system", label: t("settings.appearance.themes.system"), icon: Monitor },
@@ -71,7 +71,7 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
                     return (
                       <button
                         key={th.id}
-                        onClick={() => setTheme(th.id as any)}
+                        onClick={() => setTheme(th.id)}
                         className={cn(
                           "group flex flex-col items-center justify-center rounded-2xl border-2 p-6 transition-all duration-300 relative overflow-hidden",
                           isActive

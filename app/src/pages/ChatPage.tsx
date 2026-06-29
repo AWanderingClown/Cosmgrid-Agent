@@ -1,6 +1,6 @@
 // ChatPage - 重构为 "Cosmic Cyber" 视觉风格
-import { memo, useEffect, useRef, useState } from "react";
-import { Bot, Send, Square, User, Zap, Sparkles, Cpu, PanelRight, X, Activity, Swords, Plus, Trash2, MessageSquare, ChevronDown, Pencil, Check, Pin, FolderOpen, Lock, ShieldAlert, ShieldCheck, Paperclip, Brain, Terminal, ArrowDown } from "lucide-react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { Bot, Send, Square, User, Zap, Sparkles, Cpu, PanelRight, X, Activity, Swords, Plus, Trash2, MessageSquare, ChevronDown, Pencil, Check, FolderOpen, Lock, ShieldAlert, ShieldCheck, Paperclip, Brain, Terminal, ArrowDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -10,8 +10,13 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 import { parseThinking } from "@/lib/parse-thinking";
 import { deriveArtifacts, type WorkArtifact } from "@/lib/work-artifacts";
+import { deriveToolCallViews, type ToolCallView } from "@/lib/work-artifact-views";
 import { WorkArtifacts } from "@/components/work-panel/WorkArtifacts";
-import { ChainProgressBar } from "@/components/chat/ChainProgressBar";
+import { ChainNodeGraph } from "@/components/work-panel/ChainNodeGraph";
+import { deriveChainNodeGraph } from "@/components/work-panel/derive-chain-node-graph";
+import { WorkPanelIde } from "@/components/work-panel/WorkPanelIde";
+import { ToolCallCard } from "@/components/chat/ToolCallCard";
+import { WorkingStatusBar } from "@/components/chat/WorkingStatusBar";
 import { ensureModelLimitsLoaded } from "@/lib/llm/model-limits";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
 import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, toolExecutions, getRoleBindingsForConversation, projects as dbProjects, projectMemories as dbProjectMemories, type Conversation, type DbMessage, type ToolExecutionRow } from "@/lib/db";
@@ -24,6 +29,7 @@ import { pickBestModelForRole, rankFallbackModels, scoreModelForRole } from "@/l
 import { applyOutcomeForLatest } from "@/lib/llm/outcome-tracker";
 import { isCliProviderType } from "@/lib/llm/cli-protocol";
 import { classifyMessageComplexity } from "@/lib/llm/message-router";
+import { shouldRunBackgroundOrchestration } from "@/lib/llm/orchestration-gating";
 import { shouldSuggestDebate } from "@/lib/llm/debate-suggester";
 import { routeMessage } from "@/lib/llm/smart-router";
 import { isSmartRoutingEnabled, usePermissionModeSetting } from "@/lib/app-settings";
@@ -219,6 +225,7 @@ const MessageItem = memo(function MessageItem({
   roleId,
   chainStep,
   chainDone,
+  toolCalls,
 }: {
   role: "user" | "assistant";
   text: string;
@@ -232,6 +239,7 @@ const MessageItem = memo(function MessageItem({
   roleId?: RoleId;
   chainStep?: { index: number; total: number };
   chainDone?: boolean;
+  toolCalls?: ToolCallView[];
 }) {
   const { t } = useTranslation();
   const isAssistant = role === "assistant";
@@ -292,6 +300,13 @@ const MessageItem = memo(function MessageItem({
                   吐了伪工具调用文本（{harness.pseudoToolNames.join("、")}）——这些不是本应用真工具，未实际执行
                 </div>
               )}
+            </div>
+          )}
+          {isAssistant && toolCalls && toolCalls.length > 0 && (
+            <div className="space-y-1">
+              {toolCalls.slice(-8).map((call) => (
+                <ToolCallCard key={call.id} call={call} />
+              ))}
             </div>
           )}
           <div
@@ -595,6 +610,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   const [workspacePath, setWorkspacePath] = useState<string | null>(null);
   /** 右侧工作面板的产出物工件——从 tool_executions 派生，回答完成后刷新 */
   const [artifacts, setArtifacts] = useState<WorkArtifact[]>([]);
+  const [toolCallViews, setToolCallViews] = useState<ToolCallView[]>([]);
   const [permissionMode, setPermissionMode] = usePermissionModeSetting();
   const [pendingConfirm, setPendingConfirm] = useState<ToolConfirmRequest | null>(null);
   const confirmResolverRef = useRef<((ok: boolean) => void) | null>(null);
@@ -610,6 +626,16 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   function applyOrchestration(next: OrchestrationState | null) {
     orchestrationRef.current = next;
     setOrchestration(next);
+  }
+
+  function applyToolExecutionRows(rows: ToolExecutionRow[]) {
+    setArtifacts(deriveArtifacts(rows));
+    setToolCallViews(deriveToolCallViews(rows));
+  }
+
+  function clearToolExecutionViews() {
+    setArtifacts([]);
+    setToolCallViews([]);
   }
   // 镜像当前会话 id，供后台编排回调判断"用户是否已切走会话"（避免回执落到错的会话）
   const conversationIdRef = useRef<string | null>(null);
@@ -657,7 +683,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     if (!convId || !content.trim()) return null;
     try {
       const all = await toolExecutions.listByConversation(convId);
-      setArtifacts(deriveArtifacts(all));
+      applyToolExecutionRows(all);
       const readRecords = filterReadRecordsSince(all, sinceIso);
       return evaluateHarness(content, readRecords);
     } catch {
@@ -788,6 +814,12 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         const hist = await dbMessages.listByConversation(activeConv.id);
         setMessages(dbMessagesToChat(hist, ml));
         try {
+          applyToolExecutionRows(await toolExecutions.listByConversation(activeConv.id));
+        } catch {
+          setArtifacts([]);
+          setToolCallViews([]);
+        }
+        try {
           applyOrchestration(parseOrchestration(await dbConversations.getOrchestration(activeConv.id)));
         } catch {
           applyOrchestration(null);
@@ -870,6 +902,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       setWorkspacePath(null);
       setSelectedModelId(pickConversationModelId(conv, availableModels, selectedModelId));
       setMessages([]);
+      clearToolExecutionViews();
       applyOrchestration(null);
       setPendingQueue([]);
       setStreamError(null);
@@ -898,9 +931,10 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     }
     // 加载该会话的历史工具执行 → 派生工件（切回旧会话能看到之前的产出物）
     try {
-      setArtifacts(deriveArtifacts(await toolExecutions.listByConversation(id)));
+      applyToolExecutionRows(await toolExecutions.listByConversation(id));
     } catch {
       setArtifacts([]);
+      setToolCallViews([]);
     }
     try {
       applyOrchestration(parseOrchestration(await dbConversations.getOrchestration(id)));
@@ -926,6 +960,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       setSelectedModelId(pickConversationModelId(conv, availableModels, selectedModelId));
       setMessages([]);
       setArtifacts([]);
+      setToolCallViews([]);
       applyOrchestration(null);
       return;
     }
@@ -942,9 +977,10 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         setMessages([]);
       }
       try {
-        setArtifacts(deriveArtifacts(await toolExecutions.listByConversation(next.id)));
+        applyToolExecutionRows(await toolExecutions.listByConversation(next.id));
       } catch {
         setArtifacts([]);
+        setToolCallViews([]);
       }
       try {
         applyOrchestration(parseOrchestration(await dbConversations.getOrchestration(next.id)));
@@ -1255,6 +1291,9 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
             onRecovered: (mode) => {
               setSwitchNotice(t(`chat.recovery.${mode}`));
             },
+            onStatus: (status) => {
+              setSwitchNotice(status);
+            },
             onUsage: (usage, usedModel, finishReason) => {
               // 不在此落库——闭环可能重答，只落最终版（循环结束后统一 persist）
               lastUsage = {
@@ -1347,7 +1386,12 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
 
     // 后台滚动编排：本轮答完后用便宜模型重判节点 + 按节点定模型。非阻塞、失败静默、不进 prompt。
     // E2a：编排算完 chainPlan 后通过 onChainPlan 回调触发 watch 接力执行（最多 3 跳，每跳真调模型）。
-    if (convId && fullContent && !controller.signal.aborted) {
+    if (
+      convId &&
+      fullContent &&
+      !controller.signal.aborted &&
+      shouldRunBackgroundOrchestration({ text, taskRole, hasWorkspace: Boolean(effectiveWorkspace) })
+    ) {
       void runBackgroundOrchestration(convId, [...newMessages, { ...assistantMsg, content: fullContent }], {
         onChainPlan: ({ chain, roleBindings: bindings }) => {
           if (chain.length === 0 || controller.signal.aborted) return;
@@ -1431,6 +1475,12 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       const chainPlan = computeChain(plan);
       const nextWithChain = withChainPlan(next, chainPlan);
       const change = diffOrchestration(prev, next);
+      const onlyLeaderIdlePlan =
+        chainPlan.length === 0 &&
+        nextWithChain.nodes.length === 1 &&
+        nextWithChain.nodes[0]?.role === "leader";
+
+      if (onlyLeaderIdlePlan) return;
 
       // E2a：通知调用方 chain 接力计划（让 ChatPage 决定是否触发 watch 接力执行）
       opts?.onChainPlan?.({ chain: chainPlan, roleBindings });
@@ -1633,7 +1683,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         setChainSkippedRoles(result.skippedRoles);
       }
       try {
-        setArtifacts(deriveArtifacts(await toolExecutions.listByConversation(args.conversationId)));
+        applyToolExecutionRows(await toolExecutions.listByConversation(args.conversationId));
       } catch {
         // 工件刷新失败不影响已完成的接力消息
       }
@@ -1848,6 +1898,41 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   }
 
   const selectedModel = availableModels.find(m => m.id === selectedModelId);
+  const latestToolCalls = toolCallViews.slice(-8);
+  const activeToolCall = pendingConfirm
+    ? {
+        id: "pending-confirm",
+        toolName: pendingConfirm.toolName,
+        status: "awaiting_approval" as const,
+        shortSummary: pendingConfirm.summary,
+        summaryKey: "unknown",
+        summaryVars: { tool: pendingConfirm.toolName },
+        detailPreview: "",
+        detailFull: "",
+        createdAt: new Date().toISOString(),
+        durationMs: 0,
+      }
+    : latestToolCalls[latestToolCalls.length - 1];
+  const chainNodeGraph = useMemo(() => deriveChainNodeGraph({
+    orchestration,
+    selectedModelId,
+    selectedModelName: selectedModel?.displayName ?? selectedModel?.name ?? selectedModelId,
+    availableModels,
+    chainRunning,
+    chainExecutedRoles,
+    chainSkippedRoles,
+    chainAbortedRole,
+  }), [
+    orchestration,
+    selectedModelId,
+    selectedModel?.displayName,
+    selectedModel?.name,
+    availableModels,
+    chainRunning,
+    chainExecutedRoles,
+    chainSkippedRoles,
+    chainAbortedRole,
+  ]);
 
   if (loadError) {
     return (
@@ -1873,24 +1958,8 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
             </div>
             <div className="px-4 py-3 space-y-3">
               <p className="text-xs text-muted-foreground leading-relaxed">
-                {pendingConfirm.summary || t("chat.tools.confirmHint")}
+                {t("chat.tools.confirmHint")}
               </p>
-              {pendingConfirm.diff && (
-                <pre className="max-h-44 overflow-auto rounded-xl bg-black/30 p-3 text-[11px] leading-relaxed font-mono custom-scrollbar">
-                  {pendingConfirm.diff.split("\n").map((line, i) => (
-                    <div
-                      key={i}
-                      className={
-                        line.startsWith("+") ? "text-emerald-400"
-                          : line.startsWith("-") ? "text-red-400"
-                          : "text-muted-foreground/70"
-                      }
-                    >
-                      {line || " "}
-                    </div>
-                  ))}
-                </pre>
-              )}
             </div>
             <div className="flex justify-end gap-2 px-4 py-3 border-t border-white/10 bg-black/10">
               <Button variant="outline" size="sm" className="rounded-xl" onClick={() => resolveConfirm(false)}>
@@ -2028,6 +2097,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
               }
               const isLastAssistant = m.role === "assistant" && m === messages[messages.length - 1];
               const streamingThis = isLastAssistant && isStreaming;
+              const showToolCalls = isLastAssistant ? latestToolCalls : undefined;
               return (
                 <MessageItem
                   key={m.id}
@@ -2040,6 +2110,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
                   roleId={m.roleId}
                   chainStep={m.chainStep}
                   chainDone={m.chainDone}
+                  toolCalls={showToolCalls}
                 />
               );
             })}
@@ -2100,6 +2171,9 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
 
       {/* 输入框区域 - Floating Command Center */}
       <div ref={inputAreaRef} className="absolute bottom-8 left-8 right-8 z-20 pointer-events-none">
+        <div className="pointer-events-auto">
+          <WorkingStatusBar activeCall={activeToolCall} running={isStreaming} />
+        </div>
         {onOpenDebate && showDebateHint && !isStreaming && (
           <div className="max-w-4xl mx-auto mb-2.5 pointer-events-auto">
             <div className="glass rounded-2xl border border-primary/30 shadow-lg px-4 py-2.5 flex items-center gap-3">
@@ -2269,129 +2343,33 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
               <X className="w-4 h-4" />
             </Button>
           </div>
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3">
-            {/* 当前活动：直观告诉用户"模型此刻在做什么"——思考中/回复中/空闲 + 模型 + 计时。
-                这才是工作面板的本义（看模型在干活），而不只是 token 账单。 */}
-            <div className={cn("glass rounded-2xl p-4 border", isStreaming ? "border-primary/30" : "border-white/5")}>
-              <div className="text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50 mb-2">
-                {t("chat.workPanel.currentActivity")}
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 space-y-3">
+            <ChainNodeGraph
+              nodes={chainNodeGraph.nodes}
+              availableModels={availableModels}
+              disabled={isStreaming}
+              onMainModelChange={handleModelChange}
+              onNodeModelChange={handleNodeModelChange}
+            />
+            <WorkPanelIde
+              resetKey={conversationId ?? "new"}
+              workspacePath={workspacePath}
+              artifacts={artifacts}
+              running={isStreaming}
+              activeLabel={
+                isStreaming
+                  ? `${t("chat.replying")} · ${formatElapsed(streamElapsedMs)} · ${selectedModel?.displayName ?? selectedModel?.name ?? "—"}`
+                  : t("chat.workPanel.idle")
+              }
+            />
+            <details className="group">
+              <summary className="cursor-pointer list-none px-4 py-3 text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50 hover:text-foreground">
+                {t("chat.workPanel.artifacts")}
+              </summary>
+              <div>
+                <WorkArtifacts artifacts={artifacts} />
               </div>
-              {isStreaming ? (
-                <div className="flex items-center gap-2.5">
-                  <ThinkingLogo className="w-5 h-5 shrink-0" />
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold text-primary">
-                      {t("chat.replying")} · {formatElapsed(streamElapsedMs)}
-                    </div>
-                    <div className="text-[10px] text-muted-foreground/60 truncate">{selectedModel?.displayName ?? selectedModel?.name ?? "—"}</div>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2.5">
-                  <div className="w-2 h-2 rounded-full bg-emerald-400/70 shrink-0" />
-                  <span className="text-xs font-medium text-muted-foreground">{t("chat.workPanel.idle")}</span>
-                </div>
-              )}
-            </div>
-            {/* 编排者节点地图：已规划节点 + 当前高亮 + 每节点绑定模型（看得见、可接管） */}
-            {/* 产出物（阶段B）：tool_executions 派生的文件/终端工件，面板主角，模型名不出现 */}
-            <WorkArtifacts artifacts={artifacts} />
-            {/* 阶段 E2b：watch 接力进度条（单一来源：chainPlan + executedRoles + skippedRoles + abortedRole 派生）*/}
-            {orchestration?.chainPlan && orchestration.chainPlan.length > 0 && (
-              <ChainProgressBar
-                chainPlan={orchestration.chainPlan}
-                executedRoles={chainExecutedRoles}
-                skippedRoles={chainSkippedRoles}
-                abortedRole={chainAbortedRole}
-                running={chainRunning}
-                onStop={() => chainAbortRef.current?.abort()}
-              />
-            )}
-            {/* watch 接力链：展示本轮会追加执行的角色顺序 */}
-            {orchestration?.chainPlan && orchestration.chainPlan.length > 0 && (
-              <div className="glass rounded-2xl p-4 border border-white/5 space-y-2">
-                <div className="text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50">
-                  {t("chat.orchestrator.chainPlanTitle")}
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                  {orchestration.chainPlan.map((role, i) => (
-                    <span key={role} className="flex items-center gap-1.5">
-                      <span className="px-2 py-0.5 rounded-md bg-primary/10 text-primary font-bold">
-                        {t(`chat.orchestrator.roles.${role}`)}
-                      </span>
-                      {i < orchestration.chainPlan!.length - 1 && (
-                        <span className="text-muted-foreground/40">→</span>
-                      )}
-                    </span>
-                  ))}
-                </div>
-                <div className="text-[9px] text-muted-foreground/40 italic">
-                  {t("chat.orchestrator.chainPlanHint")}
-                </div>
-              </div>
-            )}
-            {orchestration && orchestration.nodes.length > 0 && (
-              <div className="glass rounded-2xl p-4 border border-white/5 space-y-2.5">
-                <div className="text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50">
-                  {t("chat.orchestrator.panelTitle")}
-                </div>
-                <div className="space-y-1.5">
-                  {orchestration.nodes.map((n) => {
-                    const isCurrent = n.id === orchestration.currentNodeId;
-                    const mm = n.modelId ? availableModels.find((m) => m.id === n.modelId) : undefined;
-                    const modelName = mm?.displayName ?? mm?.name ?? null;
-                    return (
-                      <div
-                        key={n.id}
-                        className={cn(
-                          "rounded-xl px-3 py-2 border",
-                          isCurrent ? "bg-primary/10 border-primary/20" : "bg-white/[0.02] border-white/5",
-                        )}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={cn(
-                              "w-1.5 h-1.5 rounded-full shrink-0",
-                              n.status === "done"
-                                ? "bg-emerald-400"
-                                : n.status === "active"
-                                ? "bg-primary animate-pulse"
-                                : "bg-muted-foreground/30",
-                            )}
-                          />
-                          <span className={cn("text-xs font-bold", isCurrent ? "text-primary" : "text-foreground/80")}>
-                            {t(`chat.orchestrator.roles.${n.role}`)}
-                          </span>
-                          {isCurrent && (
-                            <span className="ml-auto text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full bg-primary/15 text-primary">
-                              {t("chat.orchestrator.currentBadge")}
-                            </span>
-                          )}
-                        </div>
-                        <div className="mt-1 text-[11px] text-muted-foreground/70 truncate pl-3.5">{n.title}</div>
-                        {/* 每个节点可主动改模型（含还没轮到的）：选了就钉住，编排不再自动覆盖 */}
-                        <div className="mt-1 flex items-center gap-1 pl-3.5">
-                          <Cpu className="w-2.5 h-2.5 shrink-0 text-muted-foreground/50" />
-                          <Select value={n.modelId ?? ""} onValueChange={(v) => handleNodeModelChange(n.id, v)} disabled={isStreaming}>
-                            <SelectTrigger className="h-6 border-0 bg-transparent shadow-none focus-visible:ring-0 px-1 text-[10px] text-muted-foreground/60 hover:text-foreground gap-1 [&>svg]:w-2.5 [&>svg]:h-2.5">
-                              <SelectValue placeholder={t("chat.orchestrator.receiptNoModel")}>{modelName ?? undefined}</SelectValue>
-                            </SelectTrigger>
-                            <SelectContent position="popper" side="bottom" align="start" avoidCollisions={false}>
-                              {availableModels.map((m) => (
-                                <SelectItem key={m.id} value={m.id} className="text-xs focus:bg-primary focus:text-primary-foreground">
-                                  {m.displayName ?? m.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          {n.pinned && <Pin className="w-2.5 h-2.5 shrink-0 text-amber-400/70" />}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+            </details>
             {(() => {
               const turns = messages.filter((m) => m.role === "assistant" && (m.modelLabel || m.usage));
               if (turns.length === 0) {

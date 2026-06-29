@@ -23,15 +23,22 @@
 
 > 这 4 条是同一个病：上下文被锁死在「某模型 + 某套餐 + 某 app」，任何「想换」的理由都导致断片。真北就是解这个病。
 
-完整方案文档（2026-06-22 已收口到项目内 `项目文档/`，全部文档归一处）：
-- 文档路径：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/Cosmgrid-Agent-独立多模型AI工作平台完整方案.md`
-- 文档版本：v0.9（2026-06-24 同步现状；进度横幅 v0.7-v0.9 全完成）
-- 同目录还有：诚实审查报告 / 改进增强方案 / 竞品对比；`项目文档/归档文件/` 存使命已完成的历史规划与技术侦察
-- ⚠️ `项目文档/` 已在 `.gitignore`（过程文档不入版本管理，本地保留）
+当前文档入口（2026-06-29 已收口，后续先读这两份）：
+- 索引：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/00-项目文档索引.md`
+- 当前事实：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/Cosmgrid-Agent-当前状态与后续路线.md`
+- 长期总方案：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/Cosmgrid-Agent-独立多模型AI工作平台完整方案.md`
+- UI 规范：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/CosmGrid-Agent-Ui.md`
+- 打开方式：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/应用打开方式.md`
+
+文档纪律：
+- 桌面不再放散落过程稿；已完成方案统一归档到 `项目文档/归档文件/`。
+- 2026-06-28/29 的冗余整理、v3/v3.1 工作面板、项目记忆语义检索、大改状态文档都已归档到 `项目文档/归档文件/2026-06-28-29-大改与文档收口/`。
+- 给用户看先看“当前状态与后续路线”；给 AI 查历史依据再进归档。
+- ⚠️ `项目文档/` 已在 `.gitignore`（过程文档不入版本管理，本地保留）。
 
 ## 进度与当前任务
 
-> ⚠️ 进度以 git 提交历史为准（本段 2026-06-24 复核同步到 v0.9 / v0.7.5 Stable）。
+> ⚠️ 进度以 git 提交历史和 `项目文档/Cosmgrid-Agent-当前状态与后续路线.md` 为准（本段 2026-06-29 同步到 v0.9 + v3.1 工作面板收尾）。
 
 - ✅ v0.1 数据底座
 - ✅ v0.2 多模型对话 + workRoles（API 接入页 + 对话页 + Vercel AI SDK）
@@ -54,12 +61,20 @@
   - ✅ StatsPage 用量统计 + 隐式反馈学习 Step B（用户换更强模型 → 给上个模型记 `switched_up` 负反馈喂回评分）
 - ✅ v0.7.5 Stable UI 美化（当前 About 页版本号）
 - ✅ v0.9 后迭代（2026-06-24）：主对话多会话（侧栏切换/新建/删除 + 首条消息自动命名，分支 `feat/main-chat-multi-conversation`）；品牌 logo 换 dock 图标；i18n 清 31 个孤儿 key（559→528）；安全债 4 条全清；项目文档归一处整理（14 文档全在 `项目文档/`）
+- ✅ 2026-06-28/29 大改收尾
+  - ✅ 冗余入口整理：项目工作区降级到设置页项目资产；对话页工作文件夹作为主入口；模板收敛到默认 8 角色；用量入口合并为用量监控。
+  - ✅ 执行确认弹窗：只做审批，只显示确认 / 取消，不展示正文、diff、命令或摘要。
+  - ✅ 工作面板 v3.1：右侧顶部多 AI 协作链独立圆角板块；右侧 IDE 内容展示独立圆角板块；历史产出折叠保留；新建对话清空旧工作面板状态。
+  - ✅ 左侧步骤卡：工具执行在对话区显示简短步骤，内容放右侧工作面板。
+  - ✅ 验证：TypeScript、相关测试（823 tests）、前端 build、Tauri build 均通过；安装包已生成到桌面。
 
-### 🔜 下一步（2026-06-24 复核，按「产品真北」+ 改进增强方案校准）
+### 🔜 下一步（2026-06-29 复核，按「当前状态与后续路线」校准）
 
-v0.7-v0.9 主线已落地。第一梯队改进（SmartRouter 去死锁 Step A+B / 写后类型检查 diagnostics / 对弈自动建议）**全做完了**。按 `项目文档/Cosmgrid-Agent-改进增强方案-2026-06-22.md`（已 06-24 刷新）：
-- **真仍未做**：增强-4 MCP 接入口子；transformers.js 真 embedding（v0.9.1，现用关键词哈希保底）；Step B 其余采集点（重答/回滚/确认弹窗）；待办② 上下文护照条
-- **明确不做**：bash sidecar / git worktree 隔离 / 技能市场（详见改进方案）
+v0.7-v0.9 主线和 2026-06-28/29 大改都已落地。下一步以 `项目文档/Cosmgrid-Agent-当前状态与后续路线.md` 为准：
+- **第一梯队**：真实安装试用 + 截图复核；左侧步骤卡展开详情从 JSON 改成人能看懂的简要结果。
+- **第二梯队**：价格表版本管理；再决定是否实现可追溯“省钱统计”。
+- **第三梯队**：真 embedding spike；包体积 / 动态导入优化。
+- **明确不做**：可编辑 IDE、bash terminal 混入代码 tab、技能市场、未实现公式却宣传“省钱”。
 - **已知安全债（2026-06-24 代码实测复核，前一轮文档已过期）**：
   - ✅ ① API Key 仍是 [keystore.ts](app/src/lib/keystore.ts) 的 `cosmgrid-keys.json` 明文 JSON（非系统 keychain，文件本身明文）——但 Settings UI Badge 文案已改诚实为「本地明文文件」/「Local file」，i18n 残留的「keychain 插件」placeholder 也已改诚实。**真接 keychain 得换 `keyring` crate，留作可选增强，非阻塞。**
   - ✅ ② [App.tsx](app/src/App.tsx) `dbError` 故障页已正常渲染（`if (dbError)` 出图标+错误详情+reload 按钮），不再被吞

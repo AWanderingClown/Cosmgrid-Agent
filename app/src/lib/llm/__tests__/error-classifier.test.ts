@@ -88,6 +88,12 @@ describe("classifyLlmError", () => {
     expect(result.shouldFallback).toBe(true);
   });
 
+  it("Claude CLI 401 凭据错误 → auth_invalid 且不自动 fallback", () => {
+    const result = classifyLlmError(new Error("Failed to authenticate. API Error: 401 Invalid authentication credentials"));
+    expect(result.category).toBe("auth_invalid");
+    expect(result.shouldFallback).toBe(false);
+  });
+
   it("未知错误 → unknown", () => {
     const result = classifyLlmError(new Error("some weird error"));
     expect(result.category).toBe("unknown");

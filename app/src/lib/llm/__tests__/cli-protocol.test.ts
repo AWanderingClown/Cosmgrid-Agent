@@ -192,6 +192,18 @@ describe("parseClaudeStreamLine", () => {
     ]);
   });
 
+  it("assistant 合成错误消息不当成正常回复", () => {
+    const line = JSON.stringify({
+      type: "assistant",
+      error: "authentication_failed",
+      message: {
+        model: "<synthetic>",
+        content: [{ type: "text", text: "Failed to authenticate. API Error: 401 Invalid authentication credentials" }],
+      },
+    });
+    expect(parseClaudeStreamLine(line)).toEqual([]);
+  });
+
   it("rate_limit_event → rate_limit（订阅额度状态）", () => {
     const line = JSON.stringify({
       type: "rate_limit_event",
@@ -218,6 +230,37 @@ describe("parseCodexStreamLine", () => {
   it("agent_message → delta", () => {
     const line = JSON.stringify({ type: "agent_message", text: "hello" });
     expect(parseCodexStreamLine(line)).toEqual([{ kind: "delta", text: "hello" }]);
+  });
+  it("item.completed agent_message → delta", () => {
+    const line = JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: "OK" },
+    });
+    expect(parseCodexStreamLine(line)).toEqual([{ kind: "delta", text: "OK" }]);
+  });
+  it("item.completed error 是 Codex 普通条目警告，不当成致命错误", () => {
+    const line = JSON.stringify({
+      type: "item.completed",
+      item: { type: "error", message: "Skill descriptions were shortened" },
+    });
+    expect(parseCodexStreamLine(line)).toEqual([]);
+  });
+  it("item.started mcp_tool_call → status 事件", () => {
+    const line = JSON.stringify({
+      type: "item.started",
+      item: { type: "mcp_tool_call", server: "codegraph", tool: "codegraph_files" },
+    });
+    expect(parseCodexStreamLine(line)).toEqual([{ kind: "status", text: "正在调用 codegraph.codegraph_files..." }]);
+  });
+  it("turn.completed 同时产出 usage + done", () => {
+    const line = JSON.stringify({
+      type: "turn.completed",
+      usage: { input_tokens: 7, output_tokens: 11 },
+    });
+    expect(parseCodexStreamLine(line)).toEqual([
+      { kind: "usage", inputTokens: 7, outputTokens: 11 },
+      { kind: "done", finishReason: "stop" },
+    ]);
   });
   it("error → error 事件", () => {
     const line = JSON.stringify({ type: "error", message: "quota exceeded" });
