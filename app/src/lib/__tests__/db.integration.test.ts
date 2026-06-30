@@ -416,10 +416,12 @@ describe("usageEvents", () => {
       pricingKnown: true,
       priceVersion: "remote:2026-06-28",
       priceSource: "remote",
+      priceCatalogId: "price-row-1",
     });
     const row = (await db.usageEvents.list()).find((x) => x.id === id)!;
     expect(row.priceVersion).toBe("remote:2026-06-28");
     expect(row.priceSource).toBe("remote");
+    expect(row.priceCatalogId).toBe("price-row-1");
   });
 });
 
@@ -485,6 +487,8 @@ describe("savingsEvents", () => {
       actualCost: 0.02,
       savedCost: 0.03,
       formulaVersion: "cache-v1",
+      actualPriceCatalogId: "price-actual",
+      baselinePriceCatalogId: "price-baseline",
       explainJson: JSON.stringify({ cacheHitTokens: 1000 }),
     });
 
@@ -494,6 +498,8 @@ describe("savingsEvents", () => {
         kind: "cache",
         savedCost: 0.03,
         formulaVersion: "cache-v1",
+        actualPriceCatalogId: "price-actual",
+        baselinePriceCatalogId: "price-baseline",
       },
     ]);
   });

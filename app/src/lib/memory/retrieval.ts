@@ -4,8 +4,9 @@ import {
   type ProjectMemory,
 } from "@/lib/db";
 import { buildCrossProjectMemoryPreamble } from "@/lib/llm/context-preamble";
-import { getEmbeddingProvider } from "@/lib/llm/embedding";
+import type { EmbeddingProvider } from "@/lib/llm/embedding";
 import { cosineSimilarity } from "@/lib/llm/similarity";
+import { getProjectMemoryEmbeddingProvider } from "./embedding-provider";
 
 export interface ProjectMemorySearchHit extends ProjectMemory {
   score: number;
@@ -58,8 +59,8 @@ export function buildProjectMemorySourceHash(memory: Pick<ProjectMemory, "kind" 
   return hashText(buildProjectMemoryEmbeddingSource(memory));
 }
 
-export async function syncProjectMemoryVector(memory: ProjectMemory): Promise<void> {
-  const provider = getEmbeddingProvider();
+export async function syncProjectMemoryVector(memory: ProjectMemory, providerArg?: EmbeddingProvider): Promise<void> {
+  const provider = providerArg ?? await getProjectMemoryEmbeddingProvider();
   const sourceHash = buildProjectMemorySourceHash(memory);
   const existing = await projectMemoryVectors.get(memory.id, provider.name);
   if (existing?.sourceHash === sourceHash && existing.sourceUpdatedAt === memory.updatedAt) return;
@@ -69,7 +70,7 @@ export async function syncProjectMemoryVector(memory: ProjectMemory): Promise<vo
     memoryId: memory.id,
     projectId: memory.projectId,
     providerName: provider.name,
-    dim: provider.dim,
+    dim: embedding.length,
     embedding,
     sourceHash,
     sourceUpdatedAt: memory.updatedAt,
@@ -80,9 +81,11 @@ export async function backfillProjectMemoryVectors(options: {
   limit?: number;
   excludeProjectId?: string;
   minImportance?: number;
+  allowRemote?: boolean;
 } = {}): Promise<number> {
   const limit = options.limit ?? DEFAULT_BACKFILL_LIMIT;
-  const provider = getEmbeddingProvider();
+  const provider = await getProjectMemoryEmbeddingProvider();
+  if (!provider.supportsHotBackfill && !options.allowRemote) return 0;
   const [memories, vectors] = await Promise.all([
     projectMemories.listAll({
       excludeProjectId: options.excludeProjectId,
@@ -97,7 +100,7 @@ export async function backfillProjectMemoryVectors(options: {
     const nextHash = buildProjectMemorySourceHash(memory);
     const existing = vectorMap.get(memory.id);
     if (existing?.sourceHash === nextHash && existing.sourceUpdatedAt === memory.updatedAt) continue;
-    await syncProjectMemoryVector(memory);
+    await syncProjectMemoryVector(memory, provider);
     synced += 1;
   }
   return synced;
@@ -141,13 +144,15 @@ export async function searchAcrossProjectsHybrid(
       });
 
   try {
-    await backfillProjectMemoryVectors({
-      limit: options.backfillLimit ?? DEFAULT_BACKFILL_LIMIT,
-      excludeProjectId: options.excludeProjectId,
-      minImportance,
-    });
+    const provider = await getProjectMemoryEmbeddingProvider();
+    if (provider.supportsHotBackfill) {
+      await backfillProjectMemoryVectors({
+        limit: options.backfillLimit ?? DEFAULT_BACKFILL_LIMIT,
+        excludeProjectId: options.excludeProjectId,
+        minImportance,
+      });
+    }
 
-    const provider = getEmbeddingProvider();
     const [queryEmbedding, rows, lexicalHits] = await Promise.all([
       provider.embed(q),
       projectMemoryVectors.listSearchRows({

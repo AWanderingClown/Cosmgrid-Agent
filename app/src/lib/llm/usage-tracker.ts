@@ -12,6 +12,7 @@ import {
 export interface RecordUsageParams {
   modelId: string;
   modelName: string;
+  providerType?: string | null;
   providerId: string;
   apiCredentialId: string;
   projectId?: string;
@@ -32,6 +33,7 @@ export interface RecordUsageParams {
   routingDecision?: {
     baselineModelId: string;
     baselineModelName: string;
+    baselineProviderType?: string | null;
     actualModelId: string;
   } | null;
   compressionStats?: {
@@ -53,7 +55,7 @@ export function recordUsageEvent(
 ): Promise<void> | void {
   const writePromise = (async () => {
     try {
-      const costEstimate = await estimateCostWithCatalog(params.modelName, params.usage);
+      const costEstimate = await estimateCostWithCatalog(params.modelName, params.usage, params.providerType ?? null);
       const role = params.role ?? "main_chat";
       const success = isNormalFinishReason(params.finishReason);
       const usageEventId = await usageEvents.create({
@@ -73,6 +75,7 @@ export function recordUsageEvent(
         pricingKnown: costEstimate.pricingKnown,
         priceVersion: costEstimate.priceVersion,
         priceSource: costEstimate.priceSource,
+        priceCatalogId: costEstimate.priceCatalogId,
         success,
         interrupted: params.interrupted ?? false,
       });
@@ -95,6 +98,8 @@ export function recordUsageEvent(
             actualCost: cacheSavings.actualCost,
             savedCost: cacheSavings.savedCost,
             formulaVersion: "cache-v1",
+            actualPriceCatalogId: costEstimate.priceCatalogId,
+            baselinePriceCatalogId: costEstimate.priceCatalogId,
             explainJson: JSON.stringify({
               ...cacheSavings.explain,
               priceVersion: costEstimate.priceVersion,
@@ -110,6 +115,7 @@ export function recordUsageEvent(
           const baselineEstimate = await estimateCostWithCatalog(
             params.routingDecision.baselineModelName,
             params.usage,
+            params.routingDecision.baselineProviderType ?? null,
           );
           if (baselineEstimate.pricingKnown) {
             const routingSavings = calculateRoutingSavings({
@@ -130,6 +136,8 @@ export function recordUsageEvent(
                 actualCost: routingSavings.actualCost,
                 savedCost: routingSavings.savedCost,
                 formulaVersion: "routing-v1",
+                actualPriceCatalogId: costEstimate.priceCatalogId,
+                baselinePriceCatalogId: baselineEstimate.priceCatalogId,
                 explainJson: JSON.stringify({
                   ...routingSavings.explain,
                   actualPriceVersion: costEstimate.priceVersion,
@@ -158,6 +166,8 @@ export function recordUsageEvent(
               actualCost: compressionSavings.actualCost,
               savedCost: compressionSavings.savedCost,
               formulaVersion: "compression-v1",
+              actualPriceCatalogId: costEstimate.priceCatalogId,
+              baselinePriceCatalogId: costEstimate.priceCatalogId,
               explainJson: JSON.stringify({
                 ...compressionSavings.explain,
                 priceVersion: costEstimate.priceVersion,

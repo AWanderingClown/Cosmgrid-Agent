@@ -11,6 +11,7 @@ describe("calculateCacheSavings", () => {
       usage: { cacheReadInputTokens: 500_000 },
       actualCost: 1,
       resolvedPrice: {
+        catalogId: "price-1",
         input: 3,
         output: 15,
         cacheRead: 0.3,
@@ -33,6 +34,7 @@ describe("calculateCacheSavings", () => {
       usage: { cacheReadInputTokens: 500_000 },
       actualCost: 1,
       resolvedPrice: {
+        catalogId: "price-1",
         input: 3,
         output: 15,
         contextWindow: 200000,

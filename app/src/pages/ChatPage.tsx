@@ -19,7 +19,7 @@ import { ToolCallCard } from "@/components/chat/ToolCallCard";
 import { WorkingStatusBar } from "@/components/chat/WorkingStatusBar";
 import { ensureModelLimitsLoaded } from "@/lib/llm/model-limits";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
-import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, toolExecutions, workflowRuns, intentLearning, getRoleBindingsForConversation, projects as dbProjects, projectMemories as dbProjectMemories, type Conversation, type DbMessage, type ToolExecutionRow } from "@/lib/db";
+import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, toolExecutions, workflowRuns, intentLearning, getRoleBindingsForConversation, projects as dbProjects, projectMemories as dbProjectMemories, usageEvents, type Conversation, type DbMessage, type ToolExecutionRow } from "@/lib/db";
 import { type ToolConfirmRequest } from "@/lib/llm/tools";
 import { prepareWorkspaceToolRuntime, type WorkspaceToolRuntime } from "@/lib/llm/workspace-tool-runtime";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -27,12 +27,14 @@ import { getApiKey } from "@/lib/keystore";
 import { streamWithFallback, toModelEndpoint, type ModelEndpoint, type StreamUsage } from "@/lib/llm/chat-fallback";
 import { runDynamicDebate, type DebateRoleConfig } from "@/lib/llm/debate-engine";
 import { realRunRole } from "@/lib/llm/debate-runner";
+import { archiveDynamicDebateResult } from "@/lib/llm/debate-persistence";
 import { pickBestModelForRole, rankFallbackModels, scoreModelForRole } from "@/lib/llm/model-capabilities";
 import { applyOutcomeForLatest } from "@/lib/llm/outcome-tracker";
 import { isCliProviderType } from "@/lib/llm/cli-protocol";
 import { classifyMessageComplexity } from "@/lib/llm/message-router";
 import { shouldAutoRunChain, shouldRunBackgroundOrchestration } from "@/lib/llm/orchestration-gating";
 import { routeMessage } from "@/lib/llm/smart-router";
+import { buildRolePerformanceScoresFromUsageRows } from "@/lib/llm/model-performance-scoring";
 import { isSmartRoutingEnabled, usePermissionModeSetting } from "@/lib/app-settings";
 import { shouldExposeWriteTools } from "@/lib/llm/tool-permission-policy";
 import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
@@ -713,6 +715,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     prompt: string;
     baselineModelId: string;
     baselineModelName: string;
+    baselineProviderType?: string | null;
     actualModelId: string;
   } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1110,6 +1113,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         ? {
             baselineModelId: pendingRoutingDecisionRef.current.baselineModelId,
             baselineModelName: pendingRoutingDecisionRef.current.baselineModelName,
+            baselineProviderType: pendingRoutingDecisionRef.current.baselineProviderType ?? null,
             actualModelId: pendingRoutingDecisionRef.current.actualModelId,
           }
         : null;
@@ -1533,6 +1537,10 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           prev.map((m) => (m.id === assistantId ? { ...m, content: finalContent, usage: { ...totalUsage, toolCallCount: 0 } } : m)),
         );
         persistAssistant(finalContent, result.rounds.at(-1)?.modelId ?? model.id, totalUsage);
+        await archiveDynamicDebateResult({
+          projectId: (convId ? conversationList.find((c) => c.id === convId)?.projectId : null) ?? null,
+          result,
+        });
 
         if (convId && turnWorkflowSnapshot && turnWorkflowRunId) {
           const nextWorkflow = completeCurrentWorkflowNode({
@@ -2039,7 +2047,10 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       const plan = await planNodes(lm, history, prev);
       // 阶段 D：查用户在模板里配的 8 角色绑定（无 project 走"默认 8 角色"内置模板兜底）
       const roleBindings = await getRoleBindingsForConversation(convId);
-      const next = resolveOrchestration(plan, availableModels, prev, roleBindings);
+      const rolePerformanceScores = await usageEvents.list()
+        .then(buildRolePerformanceScoresFromUsageRows)
+        .catch(() => undefined);
+      const next = resolveOrchestration(plan, availableModels, prev, roleBindings, rolePerformanceScores);
       // 阶段 E1：算 watch 接力链（零额外 LLM，纯函数按 plan.nodes 顺序 + 封顶 MAX_CHAIN_LENGTH=3）
       const chainPlan = computeChain(plan);
       const nextWithChain = withChainPlan(next, chainPlan);
@@ -2052,7 +2063,11 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       if (onlyLeaderIdlePlan) return;
 
       // E2a：通知调用方 chain 接力计划（让 ChatPage 决定是否触发 watch 接力执行）
-      opts?.onChainPlan?.({ chain: chainPlan, roleBindings });
+      const effectiveChainBindings = new Map(roleBindings);
+      for (const node of nextWithChain.nodes) {
+        if (node.modelId) effectiveChainBindings.set(node.role, node.modelId);
+      }
+      opts?.onChainPlan?.({ chain: chainPlan, roleBindings: effectiveChainBindings });
 
       // 落库总用正确的 convId（即使用户已切走也要存对）
       void dbConversations.saveOrchestration(convId, serializeOrchestration(nextWithChain)).catch(() => {});
@@ -2397,6 +2412,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
                   prompt: text,
                   baselineModelId: currentModel.id,
                   baselineModelName: currentModel.name,
+                  baselineProviderType: currentModel.provider?.type ?? null,
                   actualModelId: routed.model.id,
                 }
               : null;

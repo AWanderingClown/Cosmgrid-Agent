@@ -7,7 +7,7 @@
 // 设计：LLM 调用抽成可注入的 RunRole，引擎本身是纯编排逻辑、可单测（不打真 API）。
 // 协议（Reflexion + Constitutional）：
 //   1. Solver 看 topic 出方案
-//   2. Critic 看 topic + Solver 方案，对抗式给"关键缺陷"（quickMode 跳过）
+//   2. Critic 看 topic + Solver 方案，对抗式给"关键缺陷"
 //   3. Judge 看 topic + 方案 + 批评，裁决出最终方案
 // 与方案文档的细节偏差：让 Critic 看到 Solver 方案（而非只看 topic），这样批评针对性更强、更有用。
 

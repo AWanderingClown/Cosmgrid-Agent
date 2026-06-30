@@ -10,7 +10,15 @@ const store = new Map<string, string>();
   clear: () => store.clear(),
 };
 
-import { isSmartRoutingEnabled, setSmartRoutingEnabled, getPermissionMode, setPermissionMode } from "../app-settings";
+import {
+  DEFAULT_MEMORY_EMBEDDING_MODEL,
+  getMemoryEmbeddingSetting,
+  getPermissionMode,
+  isSmartRoutingEnabled,
+  setMemoryEmbeddingSetting,
+  setPermissionMode,
+  setSmartRoutingEnabled,
+} from "../app-settings";
 
 describe("智能路由开关", () => {
   beforeEach(() => store.clear());
@@ -53,5 +61,42 @@ describe("权限档持久化", () => {
   it("localStorage 脏写（非三档之一）降级回 read，绝不让 UI 拿到非法值", () => {
     store.set("cosmgrid.permissionMode", "garbage_value");
     expect(getPermissionMode()).toBe("read");
+  });
+});
+
+describe("项目记忆 embedding 设置", () => {
+  beforeEach(() => store.clear());
+
+  it("默认使用本地快速检索", () => {
+    expect(getMemoryEmbeddingSetting()).toEqual({
+      mode: "local",
+      credentialId: null,
+      modelName: DEFAULT_MEMORY_EMBEDDING_MODEL,
+    });
+  });
+
+  it("可保存远程真实向量配置", () => {
+    setMemoryEmbeddingSetting({
+      mode: "remote",
+      credentialId: "cred-1",
+      modelName: "text-embedding-3-large",
+    });
+
+    expect(getMemoryEmbeddingSetting()).toEqual({
+      mode: "remote",
+      credentialId: "cred-1",
+      modelName: "text-embedding-3-large",
+    });
+  });
+
+  it("脏 mode 降级回 local，空模型降级到默认模型", () => {
+    store.set("cosmgrid.memoryEmbedding.mode", "garbage");
+    store.set("cosmgrid.memoryEmbedding.modelName", "   ");
+
+    expect(getMemoryEmbeddingSetting()).toEqual({
+      mode: "local",
+      credentialId: null,
+      modelName: DEFAULT_MEMORY_EMBEDDING_MODEL,
+    });
   });
 });

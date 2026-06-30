@@ -18,6 +18,7 @@ import { planUsageLevel, type UsageLevel } from "@/lib/llm/plan-thresholds";
 import { computeTokenPlanUsageMap } from "@/lib/llm/token-plan-usage";
 import { syncModelPrices } from "@/lib/llm/price-catalog";
 import { backfillProjectMemoryVectors } from "@/lib/memory/retrieval";
+import { migrateLegacyApiKeys } from "@/lib/keystore";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
@@ -98,7 +99,10 @@ function App() {
 
   useEffect(() => {
     if (!dbReady) return;
-    void dbCredentials.list().then((c) => setProviderCount(c.length));
+    void dbCredentials.list().then((c) => {
+      setProviderCount(c.length);
+      void migrateLegacyApiKeys(c.map((cred) => cred.id)).catch(() => {});
+    });
   }, [dbReady]);
 
   useEffect(() => {

@@ -35,6 +35,7 @@ export interface CostEstimate {
 }
 
 export interface CatalogCostEstimate extends CostEstimate {
+  priceCatalogId: string | null;
   priceVersion: string | null;
   priceSource: "builtin" | "remote" | "manual" | null;
   priceSourceUrl: string | null;
@@ -84,6 +85,7 @@ function estimateCostFromResolvedPrice(
     return {
       cost: 0,
       pricingKnown: false,
+      priceCatalogId: null,
       priceVersion: null,
       priceSource: null,
       priceSourceUrl: null,
@@ -108,6 +110,7 @@ function estimateCostFromResolvedPrice(
   return {
     cost: Math.round(cost * 10_000) / 10_000,
     pricingKnown: true,
+    priceCatalogId: resolvedPrice.catalogId,
     priceVersion: resolvedPrice.version,
     priceSource: resolvedPrice.source,
     priceSourceUrl: resolvedPrice.sourceUrl,

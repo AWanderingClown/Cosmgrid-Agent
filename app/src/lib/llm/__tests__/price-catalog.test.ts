@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   lookupActive: vi.fn(),
   disableSource: vi.fn(),
   create: vi.fn(),
+  replaceSourceEntries: vi.fn(),
   disableManualForModel: vi.fn(),
   syncUpsert: vi.fn(),
 }));
@@ -13,6 +14,7 @@ vi.mock("../../db", () => ({
     lookupActive: mocks.lookupActive,
     disableSource: mocks.disableSource,
     create: mocks.create,
+    replaceSourceEntries: mocks.replaceSourceEntries,
     disableManualForModel: mocks.disableManualForModel,
   },
   priceSyncStatus: {
@@ -29,6 +31,7 @@ import {
 describe("lookupPriceFromCatalog", () => {
   beforeEach(() => {
     mocks.lookupActive.mockReset();
+    mocks.create.mockReset();
   });
 
   it("优先返回本地目录中的手动价格", async () => {
@@ -49,6 +52,7 @@ describe("lookupPriceFromCatalog", () => {
     });
 
     await expect(lookupPriceFromCatalog("custom-model", "openai-compatible")).resolves.toMatchObject({
+      catalogId: "1",
       input: 0.5,
       output: 2,
       source: "manual",
@@ -58,7 +62,23 @@ describe("lookupPriceFromCatalog", () => {
 
   it("目录没命中时回退内置价格", async () => {
     mocks.lookupActive.mockResolvedValueOnce(null);
+    mocks.create.mockResolvedValueOnce({
+      id: "builtin-1",
+      modelName: "gpt-5",
+      providerType: null,
+      inputPer1m: 5,
+      outputPer1m: 20,
+      cacheReadPer1m: null,
+      cacheWritePer1m: null,
+      contextWindow: 400000,
+      source: "builtin",
+      sourceUrl: "builtin:gpt-5",
+      version: "builtin-2026-06-28",
+      enabled: true,
+      updatedAt: "2026-06-28T00:00:00.000Z",
+    });
     await expect(lookupPriceFromCatalog("gpt-5")).resolves.toMatchObject({
+      catalogId: "builtin-1",
       input: 5,
       output: 20,
       source: "builtin",

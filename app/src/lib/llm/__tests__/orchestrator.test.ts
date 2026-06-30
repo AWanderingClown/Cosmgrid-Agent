@@ -209,6 +209,21 @@ describe("resolveOrchestration（纯函数：按角色定模型）", () => {
 });
 
 describe("resolveOrchestration roleBindings（阶段 D：用户角色绑定）", () => {
+  it("角色级真实表现分只影响 L3 自动分配", () => {
+    const p = plan({
+      nodes: [{ role: "frontend", title: "写前端", status: "active" }],
+      currentNodeRole: "frontend",
+    });
+    const roleScores = new Map([
+      ["frontend", new Map([
+        ["m-flagship", 100],
+        ["m-coder", 0],
+      ])],
+    ]);
+    const state = resolveOrchestration(p, allModels, null, undefined, roleScores, fixedNow);
+    expect(state.nodes[0]!.modelId).toBe("m-flagship");
+  });
+
   it("绑定生效：roleBindings={frontend→m-coder} → 该角色用绑定模型", () => {
     const bindings = new Map<RoleId, string>([["frontend", "m-coder"]]);
     // 注意：即使 m-flagship 在分数上更适合 frontend role，绑定仍覆盖（用户明确指定）
@@ -258,6 +273,24 @@ describe("resolveOrchestration roleBindings（阶段 D：用户角色绑定）",
     const frontend = state.nodes.find((n) => n.role === "frontend")!;
     expect(frontend.modelId).toBe("m-coder");
     expect(frontend.pinned).toBe(false); // 关键：绑定不冒充用户手选
+  });
+
+  it("模板绑定优先级高于角色级真实表现分", () => {
+    const bindings = new Map<RoleId, string>([["frontend", "m-coder"]]);
+    const roleScores = new Map([
+      ["frontend", new Map([
+        ["m-flagship", 100],
+        ["m-coder", 0],
+      ])],
+    ]);
+    const p = plan({
+      nodes: [{ role: "frontend", title: "写前端", status: "active" }],
+      currentNodeRole: "frontend",
+    });
+    const state = resolveOrchestration(p, allModels, null, bindings, roleScores, fixedNow);
+    const frontend = state.nodes.find((n) => n.role === "frontend")!;
+    expect(frontend.modelId).toBe("m-coder");
+    expect(frontend.pinned).toBe(false);
   });
 
   it("绑定的 modelId 不在 availableModels → 忽略该绑定，fallback 自动选", () => {

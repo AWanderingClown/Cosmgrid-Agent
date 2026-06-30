@@ -40,6 +40,7 @@ function row(over: Partial<UsageEventRow> = {}): UsageEventRow {
     pricingKnown: true,
     priceVersion: null,
     priceSource: null,
+    priceCatalogId: null,
     success: true,
     createdAt: "2026-06-28T00:00:00.000Z",
     ...over,

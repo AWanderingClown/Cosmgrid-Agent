@@ -605,25 +605,6 @@
     "priceSyncing": "Refreshing…",
     "priceSyncFailed": "Last refresh failed: {{reason}}"
   },
-  "debate": {
-    "sectionLabel": "Multi-Model Collaboration",
-    "title": "Model Debate",
-    "desc": "Three AIs collaborate on one topic: propose → critique → judge, killing the blind spots of a single model talking to itself.",
-    "topicPlaceholder": "Enter a topic to debate, e.g. should v0.7 build a tool sandbox?",
-    "quickMode": "Quick mode (skip critique, save 1/3 tokens)",
-    "start": "Start debate",
-    "running": "Debating…",
-    "finalSolution": "Final solution (judge's verdict)",
-    "history": "Debate history",
-    "quickTag": "Quick",
-    "noModels": "No usable model — configure and enable at least one under Providers first.",
-    "failed": "Debate failed, please retry or check model config.",
-    "role": {
-      "solver": "Solver",
-      "critic": "Critic",
-      "judge": "Judge"
-    }
-  },
   "stats": {
     "sectionLabel": "Usage Analytics",
     "title": "Usage Details",
@@ -707,6 +688,22 @@
       "toggleTitle": "Smart Routing (v2)",
       "toggleDesc": "When on, the app picks cheaper, more reliable models based on each model's real track record (call stability / cost / latency), and serves repeated questions from a semantic cache to save tokens. Falls back to rule-based routing when samples are insufficient. Turn off to use basic rule-based routing only."
     },
+    "memoryEmbedding": {
+      "title": "Project Memory Search",
+      "modeTitle": "Memory embedding mode",
+      "modeDesc": "Local mode is fastest and free. Real embeddings call your configured embedding model for better cross-project memory matching, but require a manual index sync.",
+      "local": "Local fast search",
+      "remote": "Real embedding search",
+      "credential": "API Credential",
+      "credentialPlaceholder": "Choose a credential with embedding support",
+      "model": "Embedding Model",
+      "sync": "Sync Memory Index",
+      "syncing": "Syncing...",
+      "syncDone": "Synced {{count}} project memories.",
+      "syncFailed": "Sync failed. Check the API key, Base URL, and embedding model name.",
+      "noCredential": "No OpenAI / OpenAI-compatible credential is available yet. Add a provider that supports embeddings first.",
+      "remoteHint": "Remote real embeddings do not batch-index during chat, avoiding unexpected slowdowns or extra cost."
+    },
     "projectAssets": {
       "title": "Project Assets (Advanced)",
       "entryTitle": "View legacy projects, checkpoints, and transfer packets",
@@ -721,9 +718,9 @@
       },
       "apiKey": {
         "title": "API Key Storage",
-        "desc": "Keys are stored in a separate local file (cosmgrid-keys.json), kept out of the database. Note: this file is plaintext — avoid using on shared or untrusted machines."
+        "desc": "API keys are stored in your operating system's secure credential store and are not written to the project database. Linux requires Secret Service, such as GNOME Keyring or KWallet."
       },
-      "encrypted": "Local file"
+      "encrypted": "System keychain"
     },
     "about": {
       "title": "About CosmGrid",
@@ -893,7 +890,7 @@
       "titleRequired": "Title and content are both required",
       "saveFailed": "Save failed",
       "titleLabel": "Title *",
-      "titlePlaceholder": "e.g. API Keys stored in a separate plaintext file, not in SQLite",
+      "titlePlaceholder": "e.g. API Keys stored in the system keychain, not in SQLite",
       "contentLabel": "Content *",
       "contentPlaceholder": "What this memory covers / why the decision / future project use",
       "tagsLabel": "Tags (optional, comma-separated)",

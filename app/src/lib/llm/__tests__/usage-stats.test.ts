@@ -9,7 +9,7 @@ function ev(over: Partial<UsageEventRow> = {}): UsageEventRow {
   return {
     id: "evt-default", providerId: "provider-1", apiCredentialId: "cred-1", modelId: "m-1", projectId: null, conversationId: null, role: "standard", roleKind: null, inputTokens: 100, outputTokens: 50,
     cacheCreationTokens: 0, cacheHitTokens: 0,
-    cost: 0.01, pricingKnown: true, priceVersion: null, priceSource: null, success: true, createdAt: NOW.toISOString(), ...over,
+    cost: 0.01, pricingKnown: true, priceVersion: null, priceSource: null, priceCatalogId: null, success: true, createdAt: NOW.toISOString(), ...over,
   };
 }
 

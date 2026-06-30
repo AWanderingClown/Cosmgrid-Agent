@@ -10,6 +10,7 @@ export const REMOTE_PRICE_CATALOG_SOURCE = "models.dev";
 export const REMOTE_PRICE_CATALOG_URL = "https://models.dev/api.json";
 
 export interface ResolvedModelPrice extends ModelPrice {
+  catalogId: string | null;
   version: string;
   source: "builtin" | "remote" | "manual";
   sourceUrl: string | null;
@@ -28,6 +29,7 @@ function normalize(value: string): string {
 
 function entryToResolvedPrice(entry: ModelPriceCatalogEntry): ResolvedModelPrice {
   return {
+    catalogId: entry.id,
     input: entry.inputPer1m,
     output: entry.outputPer1m,
     cacheRead: entry.cacheReadPer1m ?? undefined,
@@ -41,6 +43,7 @@ function entryToResolvedPrice(entry: ModelPriceCatalogEntry): ResolvedModelPrice
 
 function builtinPriceToResolvedPrice(modelName: string, price: ModelPrice): ResolvedModelPrice {
   return {
+    catalogId: null,
     ...price,
     contextWindow: price.contextWindow,
     version: BUILTIN_PRICE_CATALOG_VERSION,
@@ -59,7 +62,21 @@ export async function lookupPriceFromCatalog(
   }
 
   const builtin = MODEL_PRICES[modelName] ?? MODEL_PRICES[Object.keys(MODEL_PRICES).find((key) => normalize(key) === normalize(modelName)) ?? ""];
-  return builtin ? builtinPriceToResolvedPrice(modelName, builtin) : null;
+  if (!builtin) return null;
+
+  const seeded = await modelPriceCatalog.create({
+    modelName,
+    providerType: null,
+    inputPer1m: builtin.input,
+    outputPer1m: builtin.output,
+    cacheReadPer1m: builtin.cacheRead ?? null,
+    cacheWritePer1m: builtin.cacheWrite ?? null,
+    contextWindow: builtin.contextWindow || null,
+    source: "builtin",
+    sourceUrl: `builtin:${modelName}`,
+    version: BUILTIN_PRICE_CATALOG_VERSION,
+  }).catch(() => null);
+  return seeded ? entryToResolvedPrice(seeded) : builtinPriceToResolvedPrice(modelName, builtin);
 }
 
 interface ModelsDevProviderMeta {
@@ -171,10 +188,7 @@ export async function syncModelPrices(): Promise<SyncModelPricesResult> {
         throw new Error("remote catalog returned no priced models");
       }
 
-      await modelPriceCatalog.disableSource("remote");
-      for (const entry of entries) {
-        await modelPriceCatalog.create(entry);
-      }
+      await modelPriceCatalog.replaceSourceEntries("remote", entries);
 
       await priceSyncStatus.upsert({
         source: REMOTE_PRICE_CATALOG_SOURCE,

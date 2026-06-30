@@ -18,6 +18,7 @@ vi.mock("../cost-calculator", () => ({
   estimateCostWithCatalog: vi.fn(() => ({
     cost: 0.001,
     pricingKnown: true,
+    priceCatalogId: "price-actual",
     priceVersion: "test-version",
     priceSource: "builtin",
     priceSourceUrl: "builtin:test",
@@ -30,10 +31,12 @@ vi.mock("../model-performance-stats", () => ({
 }));
 
 import { recordUsageEvent, flushPendingWrites } from "../usage-tracker";
+import { estimateCostWithCatalog } from "../cost-calculator";
 
 const baseParams = {
   modelId: "m-1",
   modelName: "test-model",
+  providerType: "openai",
   providerId: "prov-1",
   apiCredentialId: "cred-1",
   usage: { inputTokens: 100, outputTokens: 50 },
@@ -75,8 +78,18 @@ describe("recordUsageEvent — role 落盘", () => {
       outputTokens: 50,
       cost: 0.001,
       pricingKnown: true,
+      priceCatalogId: "price-actual",
       success: true,
     });
+  });
+
+  it("查价时传 providerType，避免同名模型跨 provider 错价", async () => {
+    await recordUsageEvent({ ...baseParams, providerType: "openai-compatible" }, { awaitWrite: true });
+    expect(estimateCostWithCatalog).toHaveBeenCalledWith(
+      "test-model",
+      { inputTokens: 100, outputTokens: 50 },
+      "openai-compatible",
+    );
   });
 
   it("finishReason=end_turn 也算正常调用，避免 CLI 正常结束被误判为不稳定", async () => {

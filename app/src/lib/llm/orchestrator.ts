@@ -25,7 +25,7 @@ import type { LanguageModel } from "./provider-factory";
 import { resolveMaxOutputTokens } from "./model-limits";
 import type { ScorableModel } from "./model-capabilities";
 import { detectModelTier } from "./model-capabilities";
-import { pickBestModelWithPerformance } from "./model-performance-scoring";
+import { pickBestModelWithRolePerformance, type RolePerformanceScores } from "./model-performance-scoring";
 import type { WorkRole } from "../api";
 
 /** 8 个团队角色（阶段 C 引入）。
@@ -381,8 +381,13 @@ export function resolveOrchestration(
   models: AssignableModel[],
   prevState?: OrchestrationState | null,
   roleBindings?: Map<RoleId, string>,
-  now: () => string = () => new Date().toISOString(),
+  rolePerformanceScoresOrNow?: RolePerformanceScores | (() => string),
+  nowArg?: () => string,
 ): OrchestrationState {
+  const rolePerformanceScores = typeof rolePerformanceScoresOrNow === "function" ? undefined : rolePerformanceScoresOrNow;
+  const now = typeof rolePerformanceScoresOrNow === "function"
+    ? rolePerformanceScoresOrNow
+    : nowArg ?? (() => new Date().toISOString());
   // 旧节点按 role 分组（同 role 可能多个，逐个消费，先到先继承）
   const prevByRole = new Map<RoleId, OrchestrationNode[]>();
   for (const n of prevState?.nodes ?? []) {
@@ -411,7 +416,7 @@ export function resolveOrchestration(
     }
 
     // L3: 都没命中 → fallback 按角色自动选最合适的（继承旧 modelId 兜底）
-    const picked = pickBestModelWithPerformance(ROLE_TO_WORK_ROLE[pn.role], models);
+    const picked = pickBestModelWithRolePerformance(ROLE_TO_WORK_ROLE[pn.role], pn.role, models, rolePerformanceScores);
     const modelId = picked?.id ?? inherited?.modelId ?? null;
     return { id, role: pn.role, title: pn.title, status: pn.status, modelId, pinned };
   });

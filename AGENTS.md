@@ -54,10 +54,11 @@
   - ✅ 4a 只读工具：read / glob / grep / git-read（+ `path-safety` 路径白名单）
   - ✅ 4b 写工具：write / edit / bash（+ `command-safety` 命令白名单 + 用户确认 + git 单文件快照回滚 + diagnostics 写后诊断）
   - ✅ CLI 引擎：Rust `spawn_cli_stream` spawn 本机 Codex/codex，受控 env 隔离（抹掉 `ANTHROPIC_*`/`Codex` 等污染前缀），实测吃订阅 5 小时额度；abort → `kill_cli` 真 SIGKILL 子进程
-- ✅ v0.8 多模型对弈（`debate-engine`/`debate-runner`：出方案 / 反驳 / 裁判同台 + DebatePage + `debate-suggester` 在 ChatPage 检测复杂问题建议升级对弈）
+- ✅ v0.8 多模型对弈（`debate-engine`/`debate-runner`：出方案 / 反驳 / 裁判同台 + ChatPage 对话内触发 + `debate-suggester` 检测复杂问题建议升级对弈）
 - ✅ v0.9 智能省 token
   - ✅ SmartRouter v2：按真实表现评分路由 + 决策日志（评分门槛已从 30 样本死锁修为 1 + 贝叶斯收缩，见记忆 [[v0.9-stage7-smartrouter-spec]]）
-  - ✅ 语义缓存（`semantic-cache`，关键词哈希 embedding 占位，transformers.js 真 embedding 留 v0.9.1）+ 抽取式上下文压缩（`context-compressor`，零 LLM 成本）
+  - ✅ 语义缓存（`semantic-cache`，默认关键词哈希 embedding，保持零成本热路径）+ 抽取式上下文压缩（`context-compressor`，零 LLM 成本）
+  - ✅ 项目记忆检索支持可选真实 embedding：设置页可选 OpenAI / OpenAI-compatible embedding 凭据，手动同步索引；聊天热路径不自动批量远程补索引
   - ✅ StatsPage 用量统计 + 隐式反馈学习 Step B（用户换更强模型 → 给上个模型记 `switched_up` 负反馈喂回评分）
 - ✅ v0.7.5 Stable UI 美化（当前 About 页版本号）
 - ✅ 2026-06-28/29 大改收尾
@@ -72,10 +73,10 @@
 v0.7-v0.9 主线和 2026-06-28/29 大改都已落地。下一步以 `项目文档/Cosmgrid-Agent-当前状态与后续路线.md` 为准：
 - **第一梯队**：真实安装试用 + 截图复核；左侧步骤卡展开详情从 JSON 改成人能看懂的简要结果。
 - **第二梯队**：价格表版本管理；再决定是否实现可追溯“省钱统计”。
-- **第三梯队**：真 embedding spike；包体积 / 动态导入优化。
+- **第三梯队**：真 embedding 已先以“项目记忆可选远程向量 + 手动索引同步”落地；后续只剩包体积 / 动态导入优化与实际模型效果调参。
 - **明确不做**：可编辑 IDE、bash terminal 混入代码 tab、技能市场、未实现公式却宣传“省钱”。
-- **已知安全债（2026-06-24 代码实测复核，前一轮文档已过期）**：
-  - ✅ ① API Key 仍是 [keystore.ts](app/src/lib/keystore.ts) 的 `cosmgrid-keys.json` 明文 JSON（非系统 keychain，文件本身明文）——但 Settings UI Badge 文案已改诚实为「本地明文文件」/「Local file」，i18n 残留的「keychain 插件」placeholder 也已改诚实。**真接 keychain 得换 `keyring` crate，留作可选增强，非阻塞。**
+- **已知安全债（2026-06-30 代码实测复核）**：
+  - ✅ ① API Key 已从 `cosmgrid-keys.json` 明文 JSON 迁到系统凭据库（Rust `keyring`：macOS Keychain / Windows Credential Manager / Linux Secret Service）。[keystore.ts](app/src/lib/keystore.ts) 保留旧文件只读迁移逻辑：写入 keychain 并校验成功后删除旧条目。
   - ✅ ② [App.tsx](app/src/App.tsx) `dbError` 故障页已正常渲染（`if (dbError)` 出图标+错误详情+reload 按钮），不再被吞
   - ✅ ③ SettingsPage「管理数据库」按钮已整个移除，`manageDb` i18n key 成孤儿（定义了无人引用），按钮债不存在
   - ✅ ④ 根目录 `vite_ssr_*.mjs` 调试垃圾已清空
@@ -88,12 +89,12 @@ v0.1/v0.2 用的「Prisma + 内嵌 Hono(Node) server」有**打包死局**：Pri
 返工方案（已用 `spike-tauri-sql/` 实测打包成 4.8MB dmg 并读写落盘通过）：
 - 数据库：Prisma → **`tauri-plugin-sql`**（底层 Rust sqlx，前端纯 TS，不写 Rust 业务逻辑）
 - 架构：去掉 Hono server（3001 端口），前端经插件直连 SQLite
-- API Key：明文传 + 假加密 → **`@tauri-apps/plugin-store` 独立 JSON 文件**（不入 SQLite 明文）。⚠️ **当初计划的"系统 keychain"并未落地**：实际是 [keystore.ts](app/src/lib/keystore.ts) 写 `cosmgrid-keys.json`，文件本身仍是明文（落 OS app-data 目录）。要真 keychain 得换 `keyring` crate——见上方「已知安全债」。
+- API Key：明文传 + 假加密 → **系统凭据库**（Rust `keyring`，不入 SQLite 明文；旧 `cosmgrid-keys.json` 只作为升级迁移来源，迁移成功后逐条删除）。
 - 完成后**必须真跑 `pnpm tauri build` 验证产物可用**，不能只验 dev
 
 ### v0.3 验收标准
 - `tauri build` 产出可双击运行的桌面 App，数据库读写落盘
-- API Key 不入 SQLite 明文（走 `plugin-store` 独立文件；⚠️ 非系统 keychain，文件仍明文，UI 文案需同步纠正）
+- API Key 不入 SQLite 明文（走系统凭据库；旧 `plugin-store` 文件只读迁移）
 - tsc 通过、pnpm test 通过、覆盖率 ≥ 80%（✅ 2026-06-27 已达标：vitest **747 测试全过**（55 文件 / 13.9s），行 89% / 语句 87% / 分支 77% / 函数 87%，四阈值全过。db.ts 补了 node:sqlite 真跑集成测试 [db.integration.test.ts](app/src/lib/__tests__/db.integration.test.ts)，从 34% 提到 88%）
 
 ## 技术栈（v0.1 必须用）
@@ -103,7 +104,7 @@ v0.1/v0.2 用的「Prisma + 内嵌 Hono(Node) server」有**打包死局**：Pri
 - **UI 库**：shadcn/ui + Tailwind
 - **数据库**：SQLite（本地）
 - **DB 访问**：`tauri-plugin-sql`（⚠️ 不用 Prisma，会打包死局；也不用 rusqlite 手写）
-- **API Key**：`@tauri-apps/plugin-store` 独立 JSON 文件（不入 SQLite 明文）。⚠️ **不是系统 keychain**——store 文件本身明文，安全债已记录，勿再写"keychain"
+- **API Key**：系统凭据库（Rust `keyring`，macOS Keychain / Windows Credential Manager / Linux Secret Service），不入 SQLite 明文；`@tauri-apps/plugin-store` 只保留用于旧 `cosmgrid-keys.json` 迁移读取。
 - **包管理**：pnpm（注意：pnpm 11 的 build 批准在 `pnpm-workspace.yaml` 的 `allowBuilds: esbuild: true`，否则 `tauri build` 卡在依赖检查）
 
 **package.json 起步**：直接抄 CC Switch 的依赖列表（路径 `/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/技术参考/cc-switch-main/package.json`）

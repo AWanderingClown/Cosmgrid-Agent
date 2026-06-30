@@ -63,6 +63,7 @@ export const realRunRole: RunRole = async ({ systemPrompt, userPrompt, config, s
   void recordUsageEvent({
     modelId: config.modelId,
     modelName: config.modelName,
+    providerType: config.providerType,
     providerId: config.providerId,
     apiCredentialId: config.apiCredentialId,
     role: `debate_${config.role}`,

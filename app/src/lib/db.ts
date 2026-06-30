@@ -383,6 +383,7 @@ export async function initSchema(): Promise<void> {
       pricing_known INTEGER NOT NULL DEFAULT 1,
       price_version TEXT,
       price_source TEXT,
+      price_catalog_id TEXT,
       success INTEGER NOT NULL DEFAULT 1,
       interrupted INTEGER NOT NULL DEFAULT 0,
       outcome TEXT,
@@ -404,6 +405,7 @@ export async function initSchema(): Promise<void> {
   await addColumnIfMissing(db, "usage_events", "pricing_known", "INTEGER NOT NULL DEFAULT 1");
   await addColumnIfMissing(db, "usage_events", "price_version", "TEXT");
   await addColumnIfMissing(db, "usage_events", "price_source", "TEXT");
+  await addColumnIfMissing(db, "usage_events", "price_catalog_id", "TEXT");
 
   // 索引：① setOutcomeForLatest 按 model_id + outcome IS NULL 取最近一条（隐式反馈热路径）；
   //        ② usageEvents.list 按 created_at 过滤/排序（统计 + SmartRouter 数据源）；
@@ -416,6 +418,9 @@ export async function initSchema(): Promise<void> {
   );
   await db.execute(
     "CREATE INDEX IF NOT EXISTS idx_usage_events_role_kind_model ON usage_events(role_kind, model_id, created_at DESC)"
+  );
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_usage_events_price_catalog ON usage_events(price_catalog_id, created_at DESC)"
   );
 
   // v0.6 项目级长期记忆（4.11 记忆分层 + 5.6 RAG）
@@ -555,12 +560,20 @@ export async function initSchema(): Promise<void> {
       currency TEXT NOT NULL DEFAULT 'USD',
       formula_version TEXT NOT NULL,
       explain_json TEXT NOT NULL,
+      actual_price_catalog_id TEXT,
+      baseline_price_catalog_id TEXT,
       created_at TEXT NOT NULL
     )
   `);
+  await addColumnIfMissing(db, "savings_events", "actual_price_catalog_id", "TEXT");
+  await addColumnIfMissing(db, "savings_events", "baseline_price_catalog_id", "TEXT");
   await db.execute(`
     CREATE INDEX IF NOT EXISTS idx_savings_events_created
     ON savings_events(created_at DESC)
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_savings_events_usage_kind
+    ON savings_events(usage_event_id, kind)
   `);
 
   await db.execute(`
@@ -994,8 +1007,11 @@ export const apiCredentials = {
   async getById(id: string): Promise<ApiCredential | null> {
     const db = await getDb();
     const rows = await db.select<CredentialRow[]>(
-      "SELECT * FROM api_credentials WHERE id = $1",
-      [id]
+      `SELECT c.*, p.name AS provider_name, p.type AS provider_type
+       FROM api_credentials c
+       LEFT JOIN providers p ON c.provider_id = p.id
+       WHERE c.id = $1`,
+      [id],
     );
     return rows[0] ? rowToCredential(rows[0]) : null;
   },
@@ -1312,6 +1328,58 @@ export const modelPriceCatalog = {
       [modelName, providerType ?? null],
     );
   },
+
+  async replaceSourceEntries(
+    source: "builtin" | "remote" | "manual",
+    entries: Array<{
+      modelName: string;
+      providerType?: string | null;
+      inputPer1m: number;
+      outputPer1m: number;
+      cacheReadPer1m?: number | null;
+      cacheWritePer1m?: number | null;
+      contextWindow?: number | null;
+      source: "builtin" | "remote" | "manual";
+      sourceUrl?: string | null;
+      version: string;
+      enabled?: boolean;
+    }>,
+  ): Promise<void> {
+    const db = await getDb();
+    const ts = now();
+    await db.execute("BEGIN TRANSACTION");
+    try {
+      await db.execute("UPDATE model_price_catalog SET enabled = 0 WHERE source = $1", [source]);
+      for (const entry of entries) {
+        await db.execute(
+          `INSERT INTO model_price_catalog
+            (id, model_name, provider_type, input_per_1m, output_per_1m,
+             cache_read_per_1m, cache_write_per_1m, context_window,
+             source, source_url, version, enabled, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          [
+            newId(),
+            entry.modelName,
+            entry.providerType ?? null,
+            entry.inputPer1m,
+            entry.outputPer1m,
+            entry.cacheReadPer1m ?? null,
+            entry.cacheWritePer1m ?? null,
+            entry.contextWindow ?? null,
+            entry.source,
+            entry.sourceUrl ?? null,
+            entry.version,
+            boolToInt(entry.enabled ?? true),
+            ts,
+          ],
+        );
+      }
+      await db.execute("COMMIT");
+    } catch (error) {
+      await db.execute("ROLLBACK").catch(() => {});
+      throw error;
+    }
+  },
 };
 
 // ============ price_sync_status CRUD ============
@@ -1410,6 +1478,8 @@ export interface SavingsEventRow {
   currency: string;
   formulaVersion: string;
   explainJson: string;
+  actualPriceCatalogId: string | null;
+  baselinePriceCatalogId: string | null;
   createdAt: string;
 }
 
@@ -1427,6 +1497,8 @@ interface SavingsEventDbRow {
   currency: string;
   formula_version: string;
   explain_json: string;
+  actual_price_catalog_id: string | null;
+  baseline_price_catalog_id: string | null;
   created_at: string;
 }
 
@@ -1445,6 +1517,8 @@ function rowToSavingsEvent(r: SavingsEventDbRow): SavingsEventRow {
     currency: r.currency,
     formulaVersion: r.formula_version,
     explainJson: r.explain_json,
+    actualPriceCatalogId: r.actual_price_catalog_id ?? null,
+    baselinePriceCatalogId: r.baseline_price_catalog_id ?? null,
     createdAt: r.created_at,
   };
 }
@@ -1463,6 +1537,8 @@ export const savingsEvents = {
     currency?: string;
     formulaVersion: string;
     explainJson: string;
+    actualPriceCatalogId?: string | null;
+    baselinePriceCatalogId?: string | null;
   }): Promise<string> {
     const db = await getDb();
     const id = newId();
@@ -1470,8 +1546,9 @@ export const savingsEvents = {
     await db.execute(
       `INSERT INTO savings_events
         (id, usage_event_id, conversation_id, project_id, kind, baseline_model_id, actual_model_id,
-         baseline_cost, actual_cost, saved_cost, currency, formula_version, explain_json, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+         baseline_cost, actual_cost, saved_cost, currency, formula_version, explain_json,
+         actual_price_catalog_id, baseline_price_catalog_id, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [
         id,
         input.usageEventId ?? null,
@@ -1486,6 +1563,8 @@ export const savingsEvents = {
         input.currency ?? "USD",
         input.formulaVersion,
         input.explainJson,
+        input.actualPriceCatalogId ?? null,
+        input.baselinePriceCatalogId ?? null,
         ts,
       ],
     );
@@ -3196,6 +3275,7 @@ export const usageEvents = {
     pricingKnown?: boolean;
     priceVersion?: string | null;
     priceSource?: string | null;
+    priceCatalogId?: string | null;
     success?: boolean;
     interrupted?: boolean;
   }): Promise<string> {
@@ -3206,8 +3286,8 @@ export const usageEvents = {
       `INSERT INTO usage_events
         (id, provider_id, api_credential_id, model_id, project_id, conversation_id, role, role_kind,
          input_tokens, output_tokens, cache_creation_tokens, cache_hit_tokens,
-         cost, pricing_known, price_version, price_source, success, interrupted, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+         cost, pricing_known, price_version, price_source, price_catalog_id, success, interrupted, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
       [
         id,
         input.providerId ?? null,
@@ -3226,6 +3306,7 @@ export const usageEvents = {
         boolToInt(input.pricingKnown ?? true),
         input.priceVersion ?? null,
         input.priceSource ?? null,
+        input.priceCatalogId ?? null,
         boolToInt(input.success ?? true),
         boolToInt(input.interrupted ?? false),
         ts,
@@ -3258,11 +3339,11 @@ export const usageEvents = {
     const db = await getDb();
     const rows = sinceTs
       ? await db.select<any[]>(
-          "SELECT id, provider_id, api_credential_id, model_id, project_id, conversation_id, role, role_kind, input_tokens, output_tokens, cache_creation_tokens, cache_hit_tokens, cost, pricing_known, price_version, price_source, success, created_at FROM usage_events WHERE created_at >= $1 ORDER BY created_at ASC",
+          "SELECT id, provider_id, api_credential_id, model_id, project_id, conversation_id, role, role_kind, input_tokens, output_tokens, cache_creation_tokens, cache_hit_tokens, cost, pricing_known, price_version, price_source, price_catalog_id, success, created_at FROM usage_events WHERE created_at >= $1 ORDER BY created_at ASC",
           [sinceTs],
         )
       : await db.select<any[]>(
-          "SELECT id, provider_id, api_credential_id, model_id, project_id, conversation_id, role, role_kind, input_tokens, output_tokens, cache_creation_tokens, cache_hit_tokens, cost, pricing_known, price_version, price_source, success, created_at FROM usage_events ORDER BY created_at ASC",
+          "SELECT id, provider_id, api_credential_id, model_id, project_id, conversation_id, role, role_kind, input_tokens, output_tokens, cache_creation_tokens, cache_hit_tokens, cost, pricing_known, price_version, price_source, price_catalog_id, success, created_at FROM usage_events ORDER BY created_at ASC",
         );
     return rows.map((r) => ({
       id: r.id,
@@ -3282,6 +3363,7 @@ export const usageEvents = {
       pricingKnown: r.pricing_known !== 0,
       priceVersion: r.price_version ?? null,
       priceSource: r.price_source ?? null,
+      priceCatalogId: r.price_catalog_id ?? null,
       success: !!r.success,
       createdAt: r.created_at,
     }));
@@ -3306,6 +3388,7 @@ export interface UsageEventRow {
   pricingKnown: boolean;
   priceVersion: string | null;
   priceSource: string | null;
+  priceCatalogId: string | null;
   success: boolean;
   createdAt: string;
 }

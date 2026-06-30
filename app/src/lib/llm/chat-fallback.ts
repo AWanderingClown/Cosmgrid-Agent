@@ -213,6 +213,7 @@ export async function streamWithFallback(
     routingDecision?: {
       baselineModelId: string;
       baselineModelName: string;
+      baselineProviderType?: string | null;
       actualModelId: string;
     } | null;
     compressionStats?: {
@@ -457,6 +458,7 @@ export async function streamWithFallback(
     const params: RecordUsageParams = {
       modelId: args.target.modelId,
       modelName: args.target.modelName,
+      providerType: args.target.providerType,
       providerId: args.target.providerId,
       apiCredentialId: args.target.apiCredentialId,
       usage: {

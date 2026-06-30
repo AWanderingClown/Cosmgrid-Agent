@@ -1,14 +1,17 @@
 // SettingsPage - 设置页 (v0.7.5: 移除缺失的 RadioGroup 依赖，采用自定义稳定实现)
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap, FolderKanban } from "lucide-react";
+import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap, FolderKanban, Brain } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useTheme, type Theme } from "@/lib/theme";
-import { useSmartRoutingSetting } from "@/lib/app-settings";
+import { useMemoryEmbeddingSetting, useSmartRoutingSetting } from "@/lib/app-settings";
+import { apiCredentials, type ApiCredential } from "@/lib/db";
+import { backfillProjectMemoryVectors } from "@/lib/memory/retrieval";
 import { SUPPORTED_LANGUAGES, LANGUAGE_LABELS, type SupportedLanguage } from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +23,10 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
   const [smartRouting, setSmartRouting] = useSmartRoutingSetting();
+  const [memoryEmbedding, setMemoryEmbedding] = useMemoryEmbeddingSetting();
+  const [embeddingCredentials, setEmbeddingCredentials] = useState<ApiCredential[]>([]);
+  const [syncingMemoryIndex, setSyncingMemoryIndex] = useState(false);
+  const [memoryIndexMessage, setMemoryIndexMessage] = useState<string | null>(null);
   const [language, setLanguageState] = useState<SupportedLanguage>(
     (SUPPORTED_LANGUAGES as readonly string[]).includes(i18n.language)
       ? (i18n.language as SupportedLanguage)
@@ -31,6 +38,28 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
     { id: "dark", label: t("settings.appearance.themes.dark"), icon: Moon },
     { id: "system", label: t("settings.appearance.themes.system"), icon: Monitor },
   ];
+  const remoteEmbeddingCredentials = embeddingCredentials.filter((cred) => (
+    cred.enabled && ["openai", "openai-compatible"].includes(cred.provider?.type ?? "")
+  ));
+
+  useEffect(() => {
+    void apiCredentials.list()
+      .then(setEmbeddingCredentials)
+      .catch(() => setEmbeddingCredentials([]));
+  }, []);
+
+  async function handleSyncMemoryIndex() {
+    setSyncingMemoryIndex(true);
+    setMemoryIndexMessage(null);
+    try {
+      const count = await backfillProjectMemoryVectors({ limit: 200, allowRemote: true });
+      setMemoryIndexMessage(t("settings.memoryEmbedding.syncDone", { count }));
+    } catch {
+      setMemoryIndexMessage(t("settings.memoryEmbedding.syncFailed"));
+    } finally {
+      setSyncingMemoryIndex(false);
+    }
+  }
 
   function handleLanguageChange(value: string) {
     if (!(SUPPORTED_LANGUAGES as readonly string[]).includes(value)) return;
@@ -110,6 +139,88 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+          </Card>
+
+          {/* 项目记忆检索 */}
+          <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-8 shadow-xl">
+            <div className="flex items-center gap-3 pb-4 border-b border-white/10">
+              <Brain className="w-5 h-5 text-primary" />
+              <h2 className="text-xl font-bold dark:text-white">{t("settings.memoryEmbedding.title")}</h2>
+            </div>
+            <div className="space-y-5">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-5 bg-white/5 rounded-2xl border border-white/5">
+                <div className="space-y-1">
+                  <div className="text-sm font-bold">{t("settings.memoryEmbedding.modeTitle")}</div>
+                  <p className="text-xs text-muted-foreground max-w-xl leading-relaxed">{t("settings.memoryEmbedding.modeDesc")}</p>
+                </div>
+                <Select
+                  value={memoryEmbedding.mode}
+                  onValueChange={(mode) => {
+                    if (mode !== "local" && mode !== "remote") return;
+                    setMemoryEmbedding({ ...memoryEmbedding, mode });
+                  }}
+                >
+                  <SelectTrigger className="w-full lg:w-64 rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm font-bold dark:text-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="glass border-white/10 rounded-xl">
+                    <SelectItem value="local">{t("settings.memoryEmbedding.local")}</SelectItem>
+                    <SelectItem value="remote">{t("settings.memoryEmbedding.remote")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {memoryEmbedding.mode === "remote" && (
+                <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto] p-5 bg-white/5 rounded-2xl border border-white/5">
+                  <div className="space-y-2">
+                    <Label className="text-xs font-bold opacity-60">{t("settings.memoryEmbedding.credential")}</Label>
+                    <Select
+                      value={memoryEmbedding.credentialId ?? ""}
+                      onValueChange={(credentialId) => setMemoryEmbedding({ ...memoryEmbedding, credentialId })}
+                      disabled={remoteEmbeddingCredentials.length === 0}
+                    >
+                      <SelectTrigger className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm dark:text-white">
+                        <SelectValue placeholder={t("settings.memoryEmbedding.credentialPlaceholder")} />
+                      </SelectTrigger>
+                      <SelectContent className="glass border-white/10 rounded-xl">
+                        {remoteEmbeddingCredentials.map((cred) => (
+                          <SelectItem key={cred.id} value={cred.id}>
+                            {cred.name} · {cred.provider?.name ?? cred.providerId}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs font-bold opacity-60">{t("settings.memoryEmbedding.model")}</Label>
+                    <Input
+                      value={memoryEmbedding.modelName}
+                      onChange={(event) => setMemoryEmbedding({ ...memoryEmbedding, modelName: event.target.value })}
+                      placeholder="text-embedding-3-small"
+                      className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm dark:text-white"
+                    />
+                  </div>
+                  <div className="flex flex-col justify-end gap-2">
+                    <Button
+                      type="button"
+                      onClick={handleSyncMemoryIndex}
+                      disabled={syncingMemoryIndex || !memoryEmbedding.credentialId}
+                      className="rounded-xl whitespace-nowrap"
+                    >
+                      {syncingMemoryIndex ? t("settings.memoryEmbedding.syncing") : t("settings.memoryEmbedding.sync")}
+                    </Button>
+                  </div>
+                  <p className="lg:col-span-3 text-xs text-muted-foreground leading-relaxed">
+                    {remoteEmbeddingCredentials.length === 0
+                      ? t("settings.memoryEmbedding.noCredential")
+                      : t("settings.memoryEmbedding.remoteHint")}
+                  </p>
+                  {memoryIndexMessage && (
+                    <p className="lg:col-span-3 text-xs text-primary font-bold">{memoryIndexMessage}</p>
+                  )}
+                </div>
+              )}
             </div>
           </Card>
 
