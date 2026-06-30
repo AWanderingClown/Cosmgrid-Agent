@@ -269,6 +269,77 @@ async fn git_read(
     })
 }
 
+/// 按语言构建 macOS 原生菜单（中/英）。原生菜单不归前端 i18n 管，必须在 Rust 侧建。
+/// 只在 macOS 编译/生效；其它平台保留 Tauri 默认菜单。
+#[cfg(target_os = "macos")]
+fn build_localized_menu<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    lang: &str,
+) -> tauri::Result<tauri::menu::Menu<R>> {
+    use tauri::menu::{AboutMetadata, MenuBuilder, PredefinedMenuItem, SubmenuBuilder};
+
+    let zh = lang.starts_with("zh");
+    // 小助手：按语言二选一
+    let l = |z: &'static str, e: &'static str| if zh { z } else { e };
+
+    let app_menu = SubmenuBuilder::new(app, "Cosmgrid Agent")
+        .item(&PredefinedMenuItem::about(
+            app,
+            Some(l("关于 Cosmgrid Agent", "About Cosmgrid Agent")),
+            Some(AboutMetadata::default()),
+        )?)
+        .separator()
+        .item(&PredefinedMenuItem::services(app, Some(l("服务", "Services")))?)
+        .separator()
+        .item(&PredefinedMenuItem::hide(app, Some(l("隐藏 Cosmgrid Agent", "Hide Cosmgrid Agent")))?)
+        .item(&PredefinedMenuItem::hide_others(app, Some(l("隐藏其他", "Hide Others")))?)
+        .item(&PredefinedMenuItem::show_all(app, Some(l("全部显示", "Show All")))?)
+        .separator()
+        .item(&PredefinedMenuItem::quit(app, Some(l("退出 Cosmgrid Agent", "Quit Cosmgrid Agent")))?)
+        .build()?;
+
+    let edit_menu = SubmenuBuilder::new(app, l("编辑", "Edit"))
+        .item(&PredefinedMenuItem::undo(app, Some(l("撤销", "Undo")))?)
+        .item(&PredefinedMenuItem::redo(app, Some(l("重做", "Redo")))?)
+        .separator()
+        .item(&PredefinedMenuItem::cut(app, Some(l("剪切", "Cut")))?)
+        .item(&PredefinedMenuItem::copy(app, Some(l("复制", "Copy")))?)
+        .item(&PredefinedMenuItem::paste(app, Some(l("粘贴", "Paste")))?)
+        .item(&PredefinedMenuItem::select_all(app, Some(l("全选", "Select All")))?)
+        .build()?;
+
+    let view_menu = SubmenuBuilder::new(app, l("视图", "View"))
+        .item(&PredefinedMenuItem::fullscreen(app, Some(l("切换全屏", "Toggle Full Screen")))?)
+        .build()?;
+
+    let window_menu = SubmenuBuilder::new(app, l("窗口", "Window"))
+        .item(&PredefinedMenuItem::minimize(app, Some(l("最小化", "Minimize")))?)
+        .item(&PredefinedMenuItem::maximize(app, Some(l("缩放", "Zoom")))?)
+        .separator()
+        .item(&PredefinedMenuItem::close_window(app, Some(l("关闭窗口", "Close Window")))?)
+        .build()?;
+
+    MenuBuilder::new(app)
+        .items(&[&app_menu, &edit_menu, &view_menu, &window_menu])
+        .build()
+}
+
+/// 前端在 i18n 初始化和切换语言时调用，按 app 选定语言重建原生菜单。
+/// 非 macOS 为 no-op（保留默认菜单）。
+#[tauri::command]
+fn set_menu_language(app: tauri::AppHandle, lang: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let menu = build_localized_menu(&app, &lang).map_err(|e| e.to_string())?;
+        app.set_menu(menu).map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (&app, &lang); // 避免未使用告警
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -279,13 +350,23 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(CliChildren::default())
+        .setup(|_app| {
+            // 设初始原生菜单（macOS）。默认 zh，前端 i18n 就绪后会按真实语言重设。
+            #[cfg(target_os = "macos")]
+            {
+                let menu = build_localized_menu(_app.handle(), "zh-CN")?;
+                _app.set_menu(menu)?;
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             spawn_cli_stream,
             kill_cli,
             resolve_cli_program,
             run_shell_command,
             git_commit_file,
-            git_read
+            git_read,
+            set_menu_language
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -13,6 +13,7 @@
 import i18next from "i18next";
 import { initReactI18next } from "react-i18next";
 import LanguageDetector from "i18next-browser-languagedetector";
+import { invoke } from "@tauri-apps/api/core";
 
 import * as zhCNModule from "./locales/zh-CN.json";
 import * as enUSModule from "./locales/en-US.json";
@@ -50,6 +51,12 @@ export const LANGUAGE_LABELS: Record<SupportedLanguage, string> = {
  * ReactDOM.createRoot(...).render(<App/>);
  * ```
  */
+/** 把当前语言同步给 Rust，重建 macOS 原生菜单栏（File/Edit/Help/关于/退出…）。
+ *  非 Tauri 环境（浏览器/测试）invoke 会 reject，静默忽略。 */
+function syncNativeMenuLanguage(lang: string): void {
+  void invoke("set_menu_language", { lang }).catch(() => {});
+}
+
 export async function initI18n(): Promise<void> {
   // eslint-disable-next-line no-console
   console.log(
@@ -85,6 +92,10 @@ export async function initI18n(): Promise<void> {
       // （永远 fallback），t() 直接返回 key 字符串。关掉走 legacy 模式。
       react: { useSuspense: false },
     });
+
+  // 原生菜单栏跟随 app 语言：启动按当前语言设一次，之后每次切语言自动重建。
+  syncNativeMenuLanguage(i18n.language);
+  i18n.on("languageChanged", syncNativeMenuLanguage);
 
   // eslint-disable-next-line no-console
   console.log(
