@@ -1,6 +1,5 @@
 import type { ModelListItem } from "@/lib/api";
 import {
-  ROLE_IDS,
   deriveChainProgress,
   type OrchestrationState,
   type RoleId,
@@ -154,8 +153,4 @@ export function deriveChainNodeGraph(args: {
 
   const nodes = virtualDebateNode ? [leaderNode, ...views, virtualDebateNode].sort(byStableRoleOrder) : [leaderNode, ...views];
   return { nodes };
-}
-
-export function isKnownRole(role: string): role is RoleId {
-  return (ROLE_IDS as readonly string[]).includes(role);
 }

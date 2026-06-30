@@ -56,7 +56,7 @@ export type RoleId = (typeof ROLE_IDS)[number];
  */
 /**
  * 阶段 F2：8 角色 × Tailwind 文字/背景配色（单一来源）。
- *  - 跨 StatsPage 卡片 + ChainProgressBar 共享——用户在 chat 看到角色跑完的颜色，stats 里也能对上
+ *  - 跨 StatsPage 卡片 + ChainNodeGraph 共享——用户在 chat 看到角色跑完的颜色，stats 里也能对上
  *  - vibe coder 不用记颜色含义，光看色块大小就知道"哪个角色花得多"
  *  - stage 单独给（STAGE_COLOR）、NULL 单独给（UNKNOWN_COLOR），不在 8 角色映射里
  */
@@ -191,7 +191,7 @@ export function withChainPlan(state: OrchestrationState, chainPlan: RoleId[]): O
 //
 // 数据流：chainPlan（来自 state.chainPlan，E1）+ executedRoles（E2a runChain 返回的已完成角色）
 //        + skippedRoles（无模型可用）+ abortedRole（中止停在的角色）
-// 派生 8 角色各自状态 → ChainProgressBar 渲染。**不另存 state**。
+// 派生 8 角色各自状态 → ChainNodeGraph 渲染。**不另存 state**。
 //
 // 状态机：
 //   "start"     → leader 永远（特殊图标，不参与 chainPlan）

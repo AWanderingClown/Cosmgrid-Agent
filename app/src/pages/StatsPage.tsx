@@ -1,7 +1,7 @@
 // StatsPage - v0.9 阶段7：用量明细（成本趋势 / 按模型 / 缓存 / 模型表现）
 // 阶段 F2：在 byModel 卡片内加 drill-down 展开"按角色 × 模型"拆分（采纳 frontend-ui-expert review）
 //  - byModel 是主页（不动），点 modelId 行 → 展开该 model 的角色拆分
-//  - 角色卡片用 ROLE_COLOR_MAP 配色（orchestrator.ts 单一来源；本文件 0 处复用——ChainProgressBar 后续迭代时考虑统一）
+//  - 角色卡片用 ROLE_COLOR_MAP 配色（orchestrator.ts 单一来源；本文件 0 处复用——ChainNodeGraph 后续迭代时考虑统一）
 //  - 角色排序：totalCost DESC（贵的在前；review M2）
 //  - 零额外 SQL：复用 useEffect 已拿到的 rows，调 aggregateUsageByActorRoleFromRows（review H1）
 //  - 测试覆盖：阶段 I 补 aggregateUsageByActorRoleFromRows 单测 8 个（铁律 1 修）；StatsPage 组件测试项目无 jsdom 跳过

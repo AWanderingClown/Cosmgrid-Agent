@@ -106,7 +106,7 @@ interface ChatMessage {
   /** 阶段 E2b：哪个角色产出（chain 接力消息设此字段；leader / 普通 assistant 留空）。
    *  - 渲染时由 messageRenderer 用 i18n 角色标签生成前缀（▶ 角色），不再烤进 content
    *  - optional 向后兼容：旧消息没此字段 → render 走旧路
-   *  - 进度条 ChainProgressBar 用此字段 + chainPlan + executedRoles 派生状态（单一来源） */
+   *  - 进度条 ChainNodeGraph 用此字段 + chainPlan + executedRoles 派生状态（单一来源） */
   roleId?: RoleId;
   /** 阶段 E2b：chain 接力时的跳序号（1-based，从 onRoleStart 拿 idx+1）— 渲染前缀「1/3」「2/3」用 */
   chainStep?: { index: number; total: number };

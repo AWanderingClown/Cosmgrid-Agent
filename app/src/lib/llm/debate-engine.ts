@@ -11,8 +11,6 @@
 //   3. Judge 看 topic + 方案 + 批评，裁决出最终方案
 // 与方案文档的细节偏差：让 Critic 看到 Solver 方案（而非只看 topic），这样批评针对性更强、更有用。
 
-export type DebateRole = "solver" | "critic" | "judge";
-
 /** 一个角色用哪个模型（端点信息，复用 provider-factory 调用） */
 export interface DebateRoleConfig {
   role: string;
@@ -44,16 +42,6 @@ export interface RunRoleParams {
 
 /** 注入的 LLM 执行器：production 用 getLanguageModel + generateText；测试用假实现 */
 export type RunRole = (p: RunRoleParams) => Promise<{ content: string; inputTokens: number; outputTokens: number }>;
-
-export interface DebateInput {
-  topic: string;
-  solver: DebateRoleConfig;
-  critic: DebateRoleConfig;
-  judge: DebateRoleConfig;
-  /** 快速模式：跳过 Critic，只 Solver + Judge（省 ~1/3 token） */
-  quickMode?: boolean;
-  signal?: AbortSignal;
-}
 
 export interface DynamicDebateInput {
   topic: string;
@@ -96,21 +84,6 @@ export function judgeSystemPrompt(): string {
   ].join("\n");
 }
 
-function solverUserPrompt(topic: string): string {
-  return `话题：${topic}\n\n请给出你的方案。`;
-}
-
-function criticUserPrompt(topic: string, solution: string): string {
-  return `话题：${topic}\n\n待审查的方案：\n${solution}\n\n请给出关键缺陷。`;
-}
-
-function judgeUserPrompt(topic: string, solution: string, critique: string | null): string {
-  const parts = [`话题：${topic}`, `\nSolver 方案：\n${solution}`];
-  if (critique) parts.push(`\nCritic 批评：\n${critique}`);
-  parts.push("\n请产出最终方案。");
-  return parts.join("\n");
-}
-
 function dynamicProposalUserPrompt(topic: string): string {
   return `任务/方案上下文：\n${topic}\n\n请先给出你认为最稳妥、可执行的方案。`;
 }
@@ -151,54 +124,6 @@ function abortError(): Error {
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw abortError();
-}
-
-/**
- * 跑一场对弈。runRole 注入，引擎只负责编排与上下文传递。
- * 任一角色抛错则整场抛错（调用方决定是否重试/降级）。
- */
-export async function runDebate(input: DebateInput, runRole: RunRole): Promise<DebateResult> {
-  const rounds: RoleOutput[] = [];
-
-  // 1. Solver
-  throwIfAborted(input.signal);
-  const solver = await runRole({
-    systemPrompt: solverSystemPrompt(),
-    userPrompt: solverUserPrompt(input.topic),
-    config: input.solver,
-    signal: input.signal,
-  });
-  rounds.push({ role: "solver", modelId: input.solver.modelId, ...solver });
-
-  // 2. Critic（quickMode 跳过）
-  let critique: string | null = null;
-  if (!input.quickMode) {
-    throwIfAborted(input.signal);
-    const critic = await runRole({
-      systemPrompt: criticSystemPrompt(),
-      userPrompt: criticUserPrompt(input.topic, solver.content),
-      config: input.critic,
-      signal: input.signal,
-    });
-    critique = critic.content;
-    rounds.push({ role: "critic", modelId: input.critic.modelId, ...critic });
-  }
-
-  // 3. Judge
-  throwIfAborted(input.signal);
-  const judge = await runRole({
-    systemPrompt: judgeSystemPrompt(),
-    userPrompt: judgeUserPrompt(input.topic, solver.content, critique),
-    config: input.judge,
-    signal: input.signal,
-  });
-  rounds.push({ role: "judge", modelId: input.judge.modelId, ...judge });
-
-  return {
-    topic: input.topic,
-    rounds,
-    finalSolution: judge.content,
-  };
 }
 
 /**
