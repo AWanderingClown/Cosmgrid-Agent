@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Code2, FileText, Loader2 } from "lucide-react";
+import { ChevronDown, Code2, FileText, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { ResizeHandle, usePanelResize } from "@/components/ui/resize-handle";
@@ -50,6 +50,7 @@ export function WorkPanelIde({ resetKey, workspacePath, artifacts, activeLabel, 
   const { t } = useTranslation();
   const [tabs, setTabs] = useState<FileTab[]>([]);
   const [activePath, setActivePath] = useState<string | undefined>();
+  const [collapsed, setCollapsed] = useState(false);
   const streamedArtifactIdsRef = useRef(new Set<string>());
   const timersRef = useRef(new Map<string, number>());
   const fileTreePanel = usePanelResize({ initial: 176, min: 112, max: 320, edge: "right" });
@@ -165,7 +166,28 @@ export function WorkPanelIde({ resetKey, workspacePath, artifacts, activeLabel, 
   }, []);
 
   return (
-    <section className="glass flex min-h-[420px] flex-1 overflow-hidden rounded-2xl border border-white/5" aria-label={t("chat.workPanel.ideTitle")}>
+    <section
+      className={cn(
+        "glass flex flex-col overflow-hidden rounded-2xl border border-white/5",
+        // 固定高度（不再 flex-1 随内容无限拉长）→ 内部文件树 / 代码区各自滚动，外层面板滚动条也变短。
+        !collapsed && "h-[440px]",
+      )}
+      aria-label={t("chat.workPanel.ideTitle")}
+    >
+      {/* 可向上折叠收纳：收起后只留这条标题栏，省空间 */}
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        aria-expanded={!collapsed}
+        className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-border px-3 text-[10px] font-black uppercase tracking-[0.16em] text-muted-foreground/55 hover:text-foreground transition-colors"
+      >
+        <span className="flex items-center gap-1.5">
+          <Code2 className="w-3 h-3" />
+          {t("chat.workPanel.ideTitle")}
+        </span>
+        <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", collapsed && "-rotate-90")} />
+      </button>
+      <div className={cn("flex min-h-0 flex-1 overflow-hidden", collapsed && "hidden")}>
       {workspacePath && (
         <div className="hidden shrink-0 md:flex">
           <div
@@ -176,7 +198,7 @@ export function WorkPanelIde({ resetKey, workspacePath, artifacts, activeLabel, 
               <FileText className="w-3 h-3" />
               {t("chat.workPanel.files")}
             </div>
-            <div className="min-h-0 flex-1">
+            <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
               <FileTree rootPath={workspacePath} activePath={activePath} onOpenFile={(path) => void openFile(path, { preferDisk: true })} />
             </div>
           </div>
@@ -223,6 +245,7 @@ export function WorkPanelIde({ resetKey, workspacePath, artifacts, activeLabel, 
             </>
           )}
         </div>
+      </div>
       </div>
     </section>
   );

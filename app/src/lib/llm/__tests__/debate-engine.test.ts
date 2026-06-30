@@ -191,3 +191,56 @@ describe("prompt 构造", () => {
     expect(prompt).toContain("禁止客套");
   });
 });
+
+describe("runDynamicDebate 降级（单参与者失败不全挂）", () => {
+  it("proposer 失败 → 换下一个参与者顶上出方案", async () => {
+    const calls: string[] = [];
+    const run: RunRole = vi.fn(async ({ config }) => {
+      calls.push(`${config.modelId}:${config.role}`);
+      if (config.modelId === "m-a" && config.role === "solver") {
+        throw new Error("模型「m-a-name」（solver）调用失败：Load failed");
+      }
+      return { content: `${config.modelId}-${config.role}`, inputTokens: 1, outputTokens: 2 };
+    });
+    const r = await runDynamicDebate(
+      { topic: "T", participants: [cfg("p1", "m-a"), cfg("p2", "m-b"), cfg("p3", "m-c")] },
+      run,
+    );
+    // m-a 出方案失败 → m-b 顶上当 solver，最终能产出
+    expect(r.rounds.find((x) => x.role === "solver")?.modelId).toBe("m-b");
+    expect(r.finalSolution).toContain("失败");
+  });
+
+  it("critic 失败 → 跳过它，judge 仍产出最终方案", async () => {
+    const run: RunRole = vi.fn(async ({ config }) => {
+      if (config.role === "critic") throw new Error("模型「x」（critic）调用失败：boom");
+      return { content: `${config.modelId}-${config.role}`, inputTokens: 1, outputTokens: 2 };
+    });
+    const r = await runDynamicDebate(
+      { topic: "T", participants: [cfg("p1", "m-a"), cfg("p2", "m-b"), cfg("p3", "m-c")] },
+      run,
+    );
+    expect(r.rounds.some((x) => x.role === "judge")).toBe(true);
+    expect(r.finalSolution).toContain("失败");
+  });
+
+  it("全部参与者出方案都失败 → 抛清晰聚合错误", async () => {
+    const run: RunRole = vi.fn(async ({ config }) => {
+      throw new Error(`模型「${config.modelName}」失败：Load failed`);
+    });
+    await expect(
+      runDynamicDebate({ topic: "T", participants: [cfg("p1", "m-a"), cfg("p2", "m-b")] }, run),
+    ).rejects.toThrow("所有参与模型都无法出方案");
+  });
+
+  it("中止信号在降级路径里仍然原样抛 AbortError", async () => {
+    const run: RunRole = vi.fn(async () => {
+      const e = new Error("AbortError");
+      e.name = "AbortError";
+      throw e;
+    });
+    await expect(
+      runDynamicDebate({ topic: "T", participants: [cfg("p1", "m-a"), cfg("p2", "m-b")] }, run),
+    ).rejects.toThrow("AbortError");
+  });
+});

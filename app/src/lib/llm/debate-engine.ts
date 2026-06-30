@@ -207,6 +207,14 @@ export async function runDebate(input: DebateInput, runRole: RunRole): Promise<D
  * - 2 个模型：A 出方案，B 反驳，A 汇总裁决。
  * - 3+ 模型：第 1 个出方案，中间模型反驳，最后一个裁决；默认最多 4 个参与，避免成本失控。
  */
+function isAbort(err: unknown): boolean {
+  return (err as { name?: string })?.name === "AbortError";
+}
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 export async function runDynamicDebate(input: DynamicDebateInput, runRole: RunRole): Promise<DebateResult> {
   const participants = input.participants.slice(0, Math.max(1, input.maxParticipants ?? 4));
   if (participants.length === 0) {
@@ -214,6 +222,9 @@ export async function runDynamicDebate(input: DynamicDebateInput, runRole: RunRo
   }
 
   const rounds: RoleOutput[] = [];
+  // 降级关键：单个参与者失败不再让整场崩。proposer 失败→换下一个顶上；critic 失败→跳过；
+  // judge 失败→用原方案兜底。失败原因收集起来附到最终产物，用户/我们能看清是哪个模型挂了。
+  const failures: string[] = [];
 
   if (participants.length === 1) {
     const soloConfig = withRole(participants[0]!, "solo_review");
@@ -231,43 +242,84 @@ export async function runDynamicDebate(input: DynamicDebateInput, runRole: RunRo
     return { topic: input.topic, rounds, finalSolution: solo.content };
   }
 
-  const proposerConfig = withRole(participants[0]!, "solver");
-  throwIfAborted(input.signal);
-  const proposal = await runRole({
-    systemPrompt: solverSystemPrompt(),
-    userPrompt: dynamicProposalUserPrompt(input.topic),
-    config: proposerConfig,
-    signal: input.signal,
-  });
-  rounds.push({ role: proposerConfig.role, modelId: proposerConfig.modelId, ...proposal });
+  // 1) proposer：找第一个能成功出方案的参与者（前面的失败就跳过、记下来）
+  let proposal: RoleOutput | null = null;
+  let proposerIdx = -1;
+  for (let i = 0; i < participants.length; i++) {
+    throwIfAborted(input.signal);
+    const config = withRole(participants[i]!, "solver");
+    try {
+      const result = await runRole({
+        systemPrompt: solverSystemPrompt(),
+        userPrompt: dynamicProposalUserPrompt(input.topic),
+        config,
+        signal: input.signal,
+      });
+      proposal = { role: config.role, modelId: config.modelId, ...result };
+      proposerIdx = i;
+      break;
+    } catch (err) {
+      if (isAbort(err)) throw err;
+      failures.push(errMessage(err));
+    }
+  }
+  if (!proposal) {
+    throw new Error(`所有参与模型都无法出方案：\n${failures.join("\n")}`);
+  }
+  rounds.push(proposal);
 
-  const judgeConfig = withRole(participants.length >= 3 ? participants[participants.length - 1]! : participants[0]!, "judge");
-  const criticConfigs = participants.length >= 3
-    ? participants.slice(1, -1).map((p, index) => withRole(p, index === 0 ? "critic" : `critic_${index + 1}`))
-    : [withRole(participants[1]!, "critic")];
+  // 2) 剩余参与者（排除已当 proposer 的那个）当 critic / judge
+  // 角色分配沿用原语义：≥3 个参与者→judge 是最后一个、critics 是中间的；
+  // 正好 2 个→proposer 兼任 judge、另一个当 critic。（rest 已排除 proposer，故用 rest.length>=2 判定）
+  const rest = participants.filter((_, i) => i !== proposerIdx);
+  const judgeSource = rest.length >= 2 ? rest[rest.length - 1]! : participants[proposerIdx]!;
+  const judgeConfig = withRole(judgeSource, "judge");
+  const criticSources = rest.length >= 2 ? rest.slice(0, -1) : rest;
+  const criticConfigs = criticSources.map((p, index) =>
+    withRole(p, index === 0 ? "critic" : `critic_${index + 1}`),
+  );
 
+  // 3) critics：逐个跑，失败的跳过、记下来，不阻断
   const critiques: RoleOutput[] = [];
   for (const criticConfig of criticConfigs) {
     throwIfAborted(input.signal);
-    const critique = await runRole({
-      systemPrompt: criticSystemPrompt(),
-      userPrompt: dynamicCritiqueUserPrompt(input.topic, proposal.content),
-      config: criticConfig,
-      signal: input.signal,
-    });
-    const output = { role: criticConfig.role, modelId: criticConfig.modelId, ...critique };
-    critiques.push(output);
-    rounds.push(output);
+    try {
+      const critique = await runRole({
+        systemPrompt: criticSystemPrompt(),
+        userPrompt: dynamicCritiqueUserPrompt(input.topic, proposal.content),
+        config: criticConfig,
+        signal: input.signal,
+      });
+      const output = { role: criticConfig.role, modelId: criticConfig.modelId, ...critique };
+      critiques.push(output);
+      rounds.push(output);
+    } catch (err) {
+      if (isAbort(err)) throw err;
+      failures.push(errMessage(err));
+    }
   }
 
+  // 4) judge：失败则用原方案兜底（不让整场崩）
   throwIfAborted(input.signal);
-  const judge = await runRole({
-    systemPrompt: judgeSystemPrompt(),
-    userPrompt: dynamicJudgeUserPrompt(input.topic, proposal.content, critiques),
-    config: judgeConfig,
-    signal: input.signal,
-  });
-  rounds.push({ role: judgeConfig.role, modelId: judgeConfig.modelId, ...judge });
+  let finalSolution = proposal.content;
+  try {
+    const judge = await runRole({
+      systemPrompt: judgeSystemPrompt(),
+      userPrompt: dynamicJudgeUserPrompt(input.topic, proposal.content, critiques),
+      config: judgeConfig,
+      signal: input.signal,
+    });
+    rounds.push({ role: judgeConfig.role, modelId: judgeConfig.modelId, ...judge });
+    finalSolution = judge.content;
+  } catch (err) {
+    if (isAbort(err)) throw err;
+    failures.push(errMessage(err));
+    finalSolution = `${proposal.content}\n\n（注：裁判模型调用失败，以上为原始方案，未经裁决汇总。）`;
+  }
 
-  return { topic: input.topic, rounds, finalSolution: judge.content };
+  if (failures.length > 0) {
+    finalSolution += `\n\n---\n⚠️ 本场博弈有 ${failures.length} 个模型调用失败（已跳过）：\n${failures.map((f) => `- ${f}`).join("\n")}`;
+  }
+
+  return { topic: input.topic, rounds, finalSolution };
 }

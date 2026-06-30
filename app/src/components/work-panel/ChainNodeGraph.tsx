@@ -62,12 +62,9 @@ export function ChainNodeGraph({ nodes, availableModels, disabled, onMainModelCh
 
   return (
     <section className="glass shrink-0 overflow-hidden rounded-2xl border border-white/5" aria-label={t("chat.workPanel.chainGraph")}>
-      <div className="px-4 pt-3 pb-2 flex items-center justify-between gap-3">
+      <div className="px-4 pt-3 pb-2">
         <div className="text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50">
           {t("chat.workPanel.chainGraph")}
-        </div>
-        <div className="text-[9px] text-muted-foreground/45 truncate">
-          {t("chat.workPanel.chainGraphHint")}
         </div>
       </div>
       <div className="px-4 pb-3 overflow-x-auto custom-scrollbar bg-foreground/[0.025]">

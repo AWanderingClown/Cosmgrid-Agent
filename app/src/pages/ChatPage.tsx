@@ -1438,6 +1438,44 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         !!turnWorkflowSnapshot?.intent.debateRequested &&
         workflowAdvancedThisTurn);
     if (shouldRunDebateTurn) {
+      // 协作链面板从 workflowSnapshot 派生「模型博弈」卡片。用户在没有 run 的对话里直接喊"开始博弈"时
+      // turnWorkflowSnapshot 为 null → 派生不出博弈节点 → 卡片不出来。这里临时建一个 run 并标到 debate 节点，
+      // 让面板渲染博弈卡片，同时让后面的完成/落库逻辑（需要 runId）一致工作。
+      if (!turnWorkflowSnapshot && convId) {
+        try {
+          const currentConversation = conversationList.find((c) => c.id === convId) ?? null;
+          const adHocRunId = crypto.randomUUID();
+          const base = createCodeTaskWorkflowSnapshot({
+            runId: adHocRunId,
+            conversationId: convId,
+            projectId: currentConversation?.projectId ?? null,
+            workspacePath: folderAtt?.path ?? workspacePath,
+            objective: text,
+          });
+          const debateSnapshot = applyTurnIntentDecision({
+            snapshot: base,
+            decision: {
+              action: "continue_run",
+              targetRunId: adHocRunId,
+              confidence: 1,
+              reason: "用户明确要求开始博弈",
+              evidenceTurnIds: [],
+              patch: { debateRequested: true },
+            },
+          });
+          await workflowRuns.create({
+            conversationId: convId,
+            projectId: currentConversation?.projectId ?? null,
+            snapshot: debateSnapshot,
+          });
+          turnWorkflowSnapshot = debateSnapshot;
+          turnWorkflowRunId = adHocRunId;
+          applyWorkflowSnapshot(debateSnapshot);
+        } catch {
+          // 建临时 run 失败不阻断博弈本身（只是协作链可能不出卡片）。
+        }
+      }
+
       const assistantId = crypto.randomUUID();
       const debateMsg: ChatMessage = {
         id: assistantId,
@@ -1519,11 +1557,12 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
             prev.map((m) => (m.id === assistantId ? { ...m, content: stoppedMessage } : m)),
           );
           if (convId && turnWorkflowSnapshot && turnWorkflowRunId) {
+            const snap = turnWorkflowSnapshot;
             const cancelledWorkflow: WorkflowSnapshot = {
-              ...turnWorkflowSnapshot,
+              ...snap,
               status: "cancelled",
-              nodes: turnWorkflowSnapshot.nodes.map((n) =>
-                n.id === turnWorkflowSnapshot.currentNodeId ? { ...n, status: "skipped" } : n,
+              nodes: snap.nodes.map((n) =>
+                n.id === snap.currentNodeId ? { ...n, status: "skipped" } : n,
               ),
             };
             await workflowRuns.saveSnapshot({
@@ -1543,11 +1582,12 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         persistAssistant(message, null);
         setStreamError(message);
         if (convId && turnWorkflowSnapshot && turnWorkflowRunId) {
+          const snap = turnWorkflowSnapshot;
           const failedWorkflow: WorkflowSnapshot = {
-            ...turnWorkflowSnapshot,
+            ...snap,
             status: "failed",
-            nodes: turnWorkflowSnapshot.nodes.map((n) =>
-              n.id === turnWorkflowSnapshot.currentNodeId ? { ...n, status: "failed" } : n,
+            nodes: snap.nodes.map((n) =>
+              n.id === snap.currentNodeId ? { ...n, status: "failed" } : n,
             ),
           };
           await workflowRuns.saveSnapshot({
@@ -2928,7 +2968,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
               <X className="w-4 h-4" />
             </Button>
           </div>
-          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 space-y-3">
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 space-y-2">
             <ChainNodeGraph
               nodes={chainNodeGraph.nodes}
               availableModels={availableModels}
@@ -2955,14 +2995,16 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
                 }
               />
             </Suspense>
-            <details className="group">
-              <summary className="cursor-pointer list-none px-4 py-3 text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50 hover:text-foreground">
-                {t("chat.workPanel.artifacts")}
-              </summary>
-              <div>
-                <WorkArtifacts artifacts={artifacts} />
-              </div>
-            </details>
+            {artifacts.length > 0 && (
+              <details className="group">
+                <summary className="cursor-pointer list-none px-4 py-3 text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50 hover:text-foreground">
+                  {t("chat.workPanel.artifacts")}
+                </summary>
+                <div>
+                  <WorkArtifacts artifacts={artifacts} />
+                </div>
+              </details>
+            )}
             {(() => {
               const turns = messages.filter((m) => m.role === "assistant" && (m.modelLabel || m.usage));
               if (turns.length === 0) {
@@ -2974,10 +3016,48 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
               }
               const totalIn = turns.reduce((s, m) => s + (m.usage?.inputTokens ?? 0), 0);
               const totalOut = turns.reduce((s, m) => s + (m.usage?.outputTokens ?? 0), 0);
+              // 倒序：最新一轮（轮次最高）在最前。先编号再 reverse，保证「第 N 轮」是真实轮次。
+              const ordered = turns.map((m, i) => ({ m, n: i + 1 })).reverse();
+              const recent = ordered.slice(0, 3);
+              const older = ordered.slice(3);
+              const renderTurnCard = ({ m, n }: { m: typeof turns[number]; n: number }) => (
+                <div key={m.id} className="glass rounded-xl px-3 py-2 border border-white/5 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-black uppercase tracking-widest text-muted-foreground/40">
+                      {t("chat.workPanel.turnLabel", { n })}
+                    </span>
+                    {m.switched ? (
+                      <span className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase bg-accent/15 text-accent border border-accent/20 flex items-center gap-1">
+                        <Zap className="w-2.5 h-2.5" /> {t("chat.workPanel.fallback")}
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase bg-primary/10 text-primary border border-primary/20">
+                        {t("chat.workPanel.primary")}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 text-xs font-bold">
+                    <Cpu className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                    <span className="truncate">{m.modelLabel ?? "—"}</span>
+                  </div>
+                  {m.switched && (
+                    <div className="text-[10px] text-accent/80">{t("chat.workPanel.switchedNote")}</div>
+                  )}
+                  {m.usage && (
+                    <div className="flex gap-3 font-mono text-[10px] text-muted-foreground/60">
+                      <span>{t("chat.workPanel.inTokens")} {m.usage.inputTokens}</span>
+                      <span>{t("chat.workPanel.outTokens")} {m.usage.outputTokens}</span>
+                    </div>
+                  )}
+                </div>
+              );
               return (
-                <>
-                  <div className="glass rounded-2xl p-4 border border-white/5">
-                    <div className="text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50 mb-2">
+                <div className="space-y-1.5">
+                  <div className="px-1 text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50">
+                    {t("chat.workPanel.tokenUsage")}
+                  </div>
+                  <div className="glass rounded-xl px-3 py-2.5 border border-white/5">
+                    <div className="text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50 mb-1.5">
                       {t("chat.workPanel.sessionTotal")}
                     </div>
                     <div className="flex gap-4 font-mono text-xs">
@@ -2985,38 +3065,18 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
                       <span className="text-orange-400">{t("chat.workPanel.outTokens")} {totalOut.toLocaleString()}</span>
                     </div>
                   </div>
-                  {turns.map((m, i) => (
-                    <div key={m.id} className="glass rounded-2xl p-4 border border-white/5 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[9px] font-black uppercase tracking-widest text-muted-foreground/40">
-                          {t("chat.workPanel.turnLabel", { n: i + 1 })}
-                        </span>
-                        {m.switched ? (
-                          <span className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase bg-accent/15 text-accent border border-accent/20 flex items-center gap-1">
-                            <Zap className="w-2.5 h-2.5" /> {t("chat.workPanel.fallback")}
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase bg-primary/10 text-primary border border-primary/20">
-                            {t("chat.workPanel.primary")}
-                          </span>
-                        )}
+                  {recent.map(renderTurnCard)}
+                  {older.length > 0 && (
+                    <details className="group">
+                      <summary className="cursor-pointer list-none px-1 py-1.5 text-[10px] font-bold text-muted-foreground/50 hover:text-foreground">
+                        {t("chat.workPanel.showMoreTurns", { count: older.length })}
+                      </summary>
+                      <div className="space-y-1.5 mt-1.5">
+                        {older.map(renderTurnCard)}
                       </div>
-                      <div className="flex items-center gap-2 text-xs font-bold">
-                        <Cpu className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                        <span className="truncate">{m.modelLabel ?? "—"}</span>
-                      </div>
-                      {m.switched && (
-                        <div className="text-[10px] text-accent/80">{t("chat.workPanel.switchedNote")}</div>
-                      )}
-                      {m.usage && (
-                        <div className="flex gap-3 font-mono text-[10px] text-muted-foreground/60">
-                          <span>{t("chat.workPanel.inTokens")} {m.usage.inputTokens}</span>
-                          <span>{t("chat.workPanel.outTokens")} {m.usage.outputTokens}</span>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </>
+                    </details>
+                  )}
+                </div>
               );
             })()}
           </div>
