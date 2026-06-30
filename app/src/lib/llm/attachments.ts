@@ -54,6 +54,17 @@ function extOf(name: string): string {
   return i < 0 ? "" : name.slice(i + 1).toLowerCase();
 }
 
+/** 嗅探字节是不是文本：前 8KB 有无 NUL 字节（二进制几乎必有、纯文本几乎必无，git 同款启发式）。
+ *  让任意配置/脚本文件（.properties / .command / Makefile / 无扩展名等）都能当文本读，不靠扩展名白名单。 */
+const TEXT_SNIFF_MAX_BYTES = 8 * 1024 * 1024; // 超过 8MB 的未知文件不嗅探，按二进制（避免把大 zip/视频读进内存）
+function looksLikeText(bytes: Uint8Array): boolean {
+  const n = Math.min(bytes.length, 8192);
+  for (let i = 0; i < n; i++) {
+    if (bytes[i] === 0) return false;
+  }
+  return true;
+}
+
 /** 分类文件：图片 / 文本文件 / 不支持（PDF/zip/二进制等）。纯函数，可单测。 */
 export function classifyFile(file: { name: string; type: string }): "image" | "text-file" | "unsupported" {
   const ext = extOf(file.name);
@@ -130,10 +141,31 @@ export async function ingestFile(file: File): Promise<Attachment | { error: "uns
     return ingestDocumentBytes(bytes, file.name, ext);
   }
   const kind = classifyFile(file);
-  if (kind === "unsupported") {
-    return { error: "unsupported" };
-  }
   const id = crypto.randomUUID();
+
+  // 未知扩展名：读内容嗅探，是文本就收（与 ingestPath 一致，不靠白名单当门卫）。
+  if (kind === "unsupported") {
+    if (file.size > TEXT_SNIFF_MAX_BYTES) return { error: "unsupported" };
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(await file.arrayBuffer());
+    } catch {
+      return { error: "unsupported" };
+    }
+    if (!looksLikeText(bytes)) return { error: "unsupported" };
+    const tooLargeSniffed = bytes.byteLength > TEXT_FILE_MAX_BYTES;
+    const sniffedText = tooLargeSniffed ? "" : new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    return {
+      id,
+      kind: "text-file",
+      name: file.name,
+      mediaType: file.type || "text/plain",
+      size: file.size,
+      text: sniffedText,
+      ...(tooLargeSniffed ? { tooLarge: true } : {}),
+    };
+  }
+
   if (kind === "image") {
     if (file.size > IMAGE_MAX_BYTES) {
       return { error: "image-too-large" };
@@ -246,10 +278,10 @@ export async function ingestPath(
     }
     return ingestDocumentBytes(bytes, name, ext);
   }
-  const kind = classifyFile({ name, type: "" });
-  if (kind === "unsupported") return { error: "unsupported" };
-
   const id = crypto.randomUUID();
+  const kind = classifyFile({ name, type: "" });
+  const size = typeof info.size === "number" ? info.size : 0;
+
   if (kind === "image") {
     let bytes: Uint8Array;
     try {
@@ -263,8 +295,31 @@ export async function ingestPath(
     return { id, kind: "image", name, mediaType, dataUrl };
   }
 
-  // text-file
-  const size = typeof info.size === "number" ? info.size : 0;
+  // 未知扩展名（.properties / .command / Makefile / 无扩展名脚本等）：不靠白名单当门卫，
+  // 读内容嗅探——是文本就当 text-file 收，真二进制（zip/exe/未支持图等）才拒。
+  if (kind === "unsupported") {
+    if (size > TEXT_SNIFF_MAX_BYTES) return { error: "unsupported" };
+    let bytes: Uint8Array;
+    try {
+      bytes = await readFile(path);
+    } catch {
+      return { error: "read-failed" };
+    }
+    if (!looksLikeText(bytes)) return { error: "unsupported" };
+    const tooLargeSniffed = bytes.byteLength > TEXT_FILE_MAX_BYTES;
+    const sniffedText = tooLargeSniffed ? "" : new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    return {
+      id,
+      kind: "text-file",
+      name,
+      mediaType: "text/plain",
+      size: bytes.byteLength,
+      text: sniffedText,
+      ...(tooLargeSniffed ? { tooLarge: true } : {}),
+    };
+  }
+
+  // text-file（已知文本扩展名）
   const tooLarge = size > TEXT_FILE_MAX_BYTES;
   let text = "";
   if (!tooLarge) {

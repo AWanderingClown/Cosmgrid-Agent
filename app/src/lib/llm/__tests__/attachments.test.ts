@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyFile, toUserCoreMessage, type Attachment } from "../attachments";
+import { classifyFile, ingestFile, toUserCoreMessage, type Attachment } from "../attachments";
 
 describe("classifyFile", () => {
   it("图片按扩展名/type 识别", () => {
@@ -86,5 +86,35 @@ describe("toUserCoreMessage", () => {
     expect(parts[0]!.text).toContain("```c.ts");
     expect(parts[1]).toMatchObject({ type: "image", image: "d1" });
     expect(parts[2]).toMatchObject({ type: "image", image: "d2" });
+  });
+});
+
+describe("ingestFile 内容嗅探（不靠扩展名白名单）", () => {
+  it("未知扩展名的文本文件（.properties）→ 当 text-file 收，正文读出来", async () => {
+    const file = new File(["distributionUrl=https\\://services.gradle.org/x.zip\n"], "gradle-wrapper.properties", { type: "" });
+    const r = await ingestFile(file);
+    expect("kind" in r && r.kind).toBe("text-file");
+    if ("kind" in r && r.kind === "text-file") {
+      expect(r.text).toContain("distributionUrl");
+    }
+  });
+
+  it("无扩展名的脚本（.command 内容是文本）→ text-file", async () => {
+    const file = new File(["#!/bin/bash\necho hi\n"], "启动Boss投递.command", { type: "" });
+    const r = await ingestFile(file);
+    expect("kind" in r && r.kind).toBe("text-file");
+  });
+
+  it("无扩展名文件（Makefile）→ text-file", async () => {
+    const file = new File(["build:\n\tgo build ./...\n"], "Makefile", { type: "" });
+    const r = await ingestFile(file);
+    expect("kind" in r && r.kind).toBe("text-file");
+  });
+
+  it("含 NUL 字节的二进制 → 仍判 unsupported", async () => {
+    const bin = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x00, 0x01, 0x02]); // NUL 在内
+    const file = new File([bin], "weird.dat", { type: "" });
+    const r = await ingestFile(file);
+    expect("error" in r && r.error).toBe("unsupported");
   });
 });
