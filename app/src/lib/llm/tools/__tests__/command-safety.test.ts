@@ -1,6 +1,6 @@
 // command-safety 红队测试（v0.7 阶段4b：bash 安全核心，安全关键）
 import { describe, it, expect } from "vitest";
-import { checkCommand, firstProgram } from "../command-safety";
+import { checkCommand, firstProgram, isReadOnlyCommand } from "../command-safety";
 
 describe("firstProgram", () => {
   it("取首个程序名", () => {
@@ -10,6 +10,41 @@ describe("firstProgram", () => {
   it("跳过前导环境变量赋值", () => {
     expect(firstProgram("NODE_ENV=test pnpm test")).toBe("pnpm");
     expect(firstProgram("FOO=1 BAR=2 node x.js")).toBe("node");
+  });
+});
+
+describe("isReadOnlyCommand（只读免确认判定）", () => {
+  it.each([
+    "git log --oneline -10",
+    "git status",
+    "git diff --stat",
+    "git show HEAD",
+    "ls -la src",
+    "cat package.json",
+    "head -20 README.md",
+    "grep -rn TODO src",
+    "find . -name '*.ts'",
+    "pwd",
+    "git log | head -5",            // 串联：两段都只读
+    "NODE_ENV=dev git log",        // 带 env 前缀
+  ])("只读命令放行：%s", (cmd) => {
+    expect(isReadOnlyCommand(cmd)).toBe(true);
+  });
+
+  it.each([
+    "git commit -m x",             // git 写子命令
+    "git add .",
+    "git checkout main",
+    "git push",
+    "npm install",                 // 装依赖有副作用
+    "pnpm test",                   // 跑测试可能写快照
+    "node script.js",             // 跑脚本不可控
+    "python build.py",
+    "echo hi > file.txt",          // 写重定向（echo 在白名单但整体有副作用）
+    "git log && rm x",            // 串联里有非只读段
+    "cat $(whoami)",              // 命令替换 → 保守非只读
+  ])("写/有副作用命令仍需确认：%s", (cmd) => {
+    expect(isReadOnlyCommand(cmd)).toBe(false);
   });
 });
 

@@ -6,6 +6,7 @@ import Database from "@tauri-apps/plugin-sql";
 import { BUILT_IN_TEMPLATES, RETIRED_BUILT_IN_TEMPLATE_NAMES } from "./templates";
 import { ROLE_IDS, type RoleId } from "./llm/orchestrator";
 import { inferModelCapabilities } from "./llm/model-capabilities";
+import type { WorkflowRunStatus, WorkflowSnapshot } from "./workflow/types";
 
 // ============ 单例 ============
 
@@ -628,6 +629,42 @@ export async function initSchema(): Promise<void> {
       blocked_commands TEXT NOT NULL DEFAULT '[]',
       updated_at TEXT NOT NULL
     )
+  `);
+
+  // v0.10：任务工作流状态。区别于 conversations.orchestration（角色链 UI），这里保存“任务做到哪一步”。
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      project_id TEXT,
+      status TEXT NOT NULL,
+      current_phase TEXT,
+      snapshot_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    )
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_workflow_runs_conversation_status
+    ON workflow_runs(conversation_id, status, updated_at)
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS workflow_events (
+      id TEXT PRIMARY KEY,
+      workflow_run_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    )
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_workflow_events_run_created
+    ON workflow_events(workflow_run_id, created_at)
   `);
 
   await repairCliPresetModels(db);
@@ -1713,6 +1750,186 @@ export const conversations = {
   async setWorkspacePath(id: string, path: string | null): Promise<void> {
     const db = await getDb();
     await db.execute("UPDATE conversations SET workspace_path = $1 WHERE id = $2", [path, id]);
+  },
+};
+
+// ============ workflowRuns CRUD（v0.10：持久任务工作流） ============
+
+export interface WorkflowRunRow {
+  id: string;
+  conversation_id: string;
+  project_id: string | null;
+  status: WorkflowRunStatus;
+  current_phase: string | null;
+  snapshot_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkflowRun {
+  id: string;
+  conversationId: string;
+  projectId: string | null;
+  status: WorkflowRunStatus;
+  currentPhase: string | null;
+  snapshotJson: string;
+  snapshot: WorkflowSnapshot;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowEventRow {
+  id: string;
+  workflow_run_id: string;
+  conversation_id: string;
+  event_type: string;
+  payload_json: string;
+  created_at: string;
+}
+
+export interface WorkflowEvent {
+  id: string;
+  workflowRunId: string;
+  conversationId: string;
+  eventType: string;
+  payloadJson: string;
+  createdAt: string;
+}
+
+function currentPhaseOf(snapshot: WorkflowSnapshot): string | null {
+  const node = snapshot.nodes.find((n) => n.id === snapshot.currentNodeId);
+  return node?.phase ?? null;
+}
+
+function mapWorkflowRunRow(r: WorkflowRunRow): WorkflowRun {
+  const snapshot = JSON.parse(r.snapshot_json) as WorkflowSnapshot;
+  return {
+    id: r.id,
+    conversationId: r.conversation_id,
+    projectId: r.project_id,
+    status: r.status,
+    currentPhase: r.current_phase,
+    snapshotJson: r.snapshot_json,
+    snapshot,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+function mapWorkflowEventRow(r: WorkflowEventRow): WorkflowEvent {
+  return {
+    id: r.id,
+    workflowRunId: r.workflow_run_id,
+    conversationId: r.conversation_id,
+    eventType: r.event_type,
+    payloadJson: r.payload_json,
+    createdAt: r.created_at,
+  };
+}
+
+export const workflowRuns = {
+  async create(input: {
+    conversationId: string;
+    projectId?: string | null;
+    snapshot: WorkflowSnapshot;
+  }): Promise<WorkflowRun> {
+    const db = await getDb();
+    const ts = now();
+    const snapshotJson = JSON.stringify(input.snapshot);
+    const currentPhase = currentPhaseOf(input.snapshot);
+    await db.execute(
+      `INSERT INTO workflow_runs
+        (id, conversation_id, project_id, status, current_phase, snapshot_json, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        input.snapshot.runId,
+        input.conversationId,
+        input.projectId ?? input.snapshot.projectId ?? null,
+        input.snapshot.status,
+        currentPhase,
+        snapshotJson,
+        ts,
+        ts,
+      ],
+    );
+    await this.appendEvent({
+      workflowRunId: input.snapshot.runId,
+      conversationId: input.conversationId,
+      eventType: "workflow.created",
+      payload: { status: input.snapshot.status, currentPhase },
+    });
+    const rows = await db.select<WorkflowRunRow[]>("SELECT * FROM workflow_runs WHERE id = $1", [input.snapshot.runId]);
+    return mapWorkflowRunRow(rows[0]!);
+  },
+
+  async getById(id: string): Promise<WorkflowRun | null> {
+    const db = await getDb();
+    const rows = await db.select<WorkflowRunRow[]>("SELECT * FROM workflow_runs WHERE id = $1 LIMIT 1", [id]);
+    return rows[0] ? mapWorkflowRunRow(rows[0]) : null;
+  },
+
+  async getActiveByConversation(conversationId: string): Promise<WorkflowRun | null> {
+    const db = await getDb();
+    const rows = await db.select<WorkflowRunRow[]>(
+      `SELECT * FROM workflow_runs
+       WHERE conversation_id = $1 AND status IN ('running', 'waiting_user', 'paused')
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+      [conversationId],
+    );
+    return rows[0] ? mapWorkflowRunRow(rows[0]) : null;
+  },
+
+  async saveSnapshot(input: {
+    runId: string;
+    snapshot: WorkflowSnapshot;
+    eventType?: string;
+    eventPayload?: unknown;
+  }): Promise<void> {
+    const db = await getDb();
+    const snapshotJson = JSON.stringify(input.snapshot);
+    const currentPhase = currentPhaseOf(input.snapshot);
+    const ts = now();
+    await db.execute(
+      `UPDATE workflow_runs
+       SET status = $1, current_phase = $2, snapshot_json = $3, updated_at = $4
+       WHERE id = $5`,
+      [input.snapshot.status, currentPhase, snapshotJson, ts, input.runId],
+    );
+    if (input.eventType) {
+      await this.appendEvent({
+        workflowRunId: input.runId,
+        conversationId: input.snapshot.conversationId,
+        eventType: input.eventType,
+        payload: input.eventPayload ?? { status: input.snapshot.status, currentPhase },
+      });
+    }
+  },
+
+  async appendEvent(input: {
+    workflowRunId: string;
+    conversationId: string;
+    eventType: string;
+    payload: unknown;
+  }): Promise<string> {
+    const db = await getDb();
+    const id = newId();
+    await db.execute(
+      `INSERT INTO workflow_events
+        (id, workflow_run_id, conversation_id, event_type, payload_json, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [id, input.workflowRunId, input.conversationId, input.eventType, JSON.stringify(input.payload), now()],
+    );
+    return id;
+  },
+
+  async listEvents(workflowRunId: string): Promise<WorkflowEvent[]> {
+    const db = await getDb();
+    const rows = await db.select<WorkflowEventRow[]>(
+      "SELECT * FROM workflow_events WHERE workflow_run_id = $1 ORDER BY created_at ASC",
+      [workflowRunId],
+    );
+    return rows.map(mapWorkflowEventRow);
   },
 };
 
@@ -3039,6 +3256,12 @@ export const semanticCache = {
     await db.execute("DELETE FROM semantic_cache WHERE expires_at <= $1", [now()]);
   },
 
+  /** 清空全部缓存（用户在用量页手动重置，或旧脏缓存一键清掉） */
+  async deleteAll(): Promise<void> {
+    const db = await getDb();
+    await db.execute("DELETE FROM semantic_cache");
+  },
+
   /** 缓存统计：条目数 + 累计命中次数（StatsPage 用） */
   async stats(): Promise<{ entries: number; totalHits: number }> {
     const db = await getDb();
@@ -3053,7 +3276,7 @@ export const semanticCache = {
 // ============ debateSessions CRUD（v0.8 阶段5：多角色对弈） ============
 
 export interface DebateRoundData {
-  role: "solver" | "critic" | "judge";
+  role: string;
   modelId: string;
   content: string;
   inputTokens: number;

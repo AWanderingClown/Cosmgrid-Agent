@@ -118,16 +118,6 @@ export function classifyLlmError(
   // 没传 t 时用中文（向后兼容）；传了 t 时用 t() 翻译，缺失 fallback 到 key
   const msg = (zh: string, key: string) => (t ? (t(key) || zh) : zh);
 
-  if (/401|invalid authentication credentials|failed to authenticate|authentication_failed/i.test(rawMessage)) {
-    return {
-      category: "auth_invalid",
-      httpStatus: 401,
-      userMessage: msg("登录凭据无效或已过期，请重新登录对应 CLI / API 账号", "errorClassifier.auth_invalid"),
-      technicalMessage: sanitized,
-      shouldFallback: false,
-    };
-  }
-
   // 按 HTTP 状态码优先分类
   if (statusCode === 401) {
     return {
@@ -136,6 +126,16 @@ export function classifyLlmError(
       userMessage: msg("API Key 无效或已过期，请在 API 接入页检查", "errorClassifier.auth_invalid"),
       technicalMessage: sanitized,
       shouldFallback: true,
+    };
+  }
+
+  if (/401|invalid authentication credentials|failed to authenticate|authentication_failed/i.test(rawMessage)) {
+    return {
+      category: "auth_invalid",
+      httpStatus: 401,
+      userMessage: msg("登录凭据无效或已过期，请重新登录对应 CLI / API 账号", "errorClassifier.auth_invalid"),
+      technicalMessage: sanitized,
+      shouldFallback: false,
     };
   }
   if (statusCode === 403) {

@@ -81,11 +81,14 @@ export function buildPromptFromMessages(messages: readonly CliMessage[]): string
   return parts.join("\n\n");
 }
 
-/** 构造 spawn 用的参数（不含 program 本身） */
+/** 构造 spawn 用的参数（不含 program 本身）。
+ *  systemPrompt：CosmGrid 核心规则，经 claude 的 --append-system-prompt 正式注入——
+ *  因为 --setting-sources "" 屏蔽了本机 CLAUDE.md，必须我们显式塞，CLI 才受同一套约束。 */
 export function buildCliArgs(
   providerType: CliProviderType,
   modelName: string,
   prompt: string,
+  systemPrompt?: string,
 ): string[] {
   if (providerType === "claude-cli") {
     // --output-format stream-json 需要配合 --verbose；--setting-sources "" 隔离被污染的本地配置
@@ -98,10 +101,11 @@ export function buildCliArgs(
       "--setting-sources",
       "",
     ];
+    if (systemPrompt?.trim()) args.push("--append-system-prompt", systemPrompt);
     if (modelName.trim()) args.push("--model", modelName);
     return args;
   }
-  // codex-cli：codex exec --json 输出 JSONL
+  // codex-cli：codex exec --json 输出 JSONL（codex 无 --append-system-prompt，规则随 prompt 文本带过去）
   const args = ["exec", prompt, "--json"];
   if (modelName.trim()) args.push("--model", modelName);
   return args;
@@ -112,6 +116,7 @@ export function buildCliResumeArgs(
   modelName: string,
   officialSessionId: string,
   prompt: string,
+  systemPrompt?: string,
 ): string[] {
   if (providerType === "claude-cli") {
     const args = [
@@ -125,6 +130,7 @@ export function buildCliResumeArgs(
       "--setting-sources",
       "",
     ];
+    if (systemPrompt?.trim()) args.push("--append-system-prompt", systemPrompt);
     if (modelName.trim()) args.push("--model", modelName);
     return args;
   }
@@ -143,6 +149,7 @@ export type CliResumeCapability =
 export type CliStreamEvent =
   | { kind: "delta"; text: string }
   | { kind: "status"; text: string }
+  | { kind: "model"; modelName: string }
   | { kind: "usage"; inputTokens: number; outputTokens: number }
   | { kind: "rate_limit"; resetsAt: number | null; limitType: string | null }
   | { kind: "session"; sessionId: string }
@@ -172,6 +179,9 @@ export function parseClaudeStreamLine(line: string): CliStreamEvent[] {
 
   if (type === "system" && obj["subtype"] === "init" && typeof obj["session_id"] === "string") {
     events.push({ kind: "session", sessionId: obj["session_id"] });
+    if (typeof obj["model"] === "string" && obj["model"]) {
+      events.push({ kind: "model", modelName: obj["model"] });
+    }
     return events;
   }
 

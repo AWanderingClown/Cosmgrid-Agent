@@ -24,7 +24,7 @@ import {
   type ActorRoleUsage,
   type ActorRoleModelUsage,
 } from "@/lib/llm/usage-stats";
-import { cleanupExpiredCache } from "@/lib/llm/semantic-cache";
+import { cleanupExpiredCache, clearAllCache } from "@/lib/llm/semantic-cache";
 import { cn, formatCost as fmtCost } from "@/lib/utils";
 import {
   ROLE_IDS, ROLE_COLOR, STAGE_COLOR, UNKNOWN_COLOR,
@@ -53,40 +53,54 @@ export function StatsPage() {
   // 阶段 F2：rows 状态保留（用于派生 byActorRole，不另起 SQL）
   const [rows, setRows] = useState<UsageEventRow[]>([]);
 
+  async function loadStats() {
+    try {
+      void cleanupExpiredCache();
+      const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
+      const [rowsRes, cacheStats, perfRows, execs, modelRows, savingsRows] = await Promise.all([
+        usageEvents.list(since),
+        semanticCache.stats(),
+        modelPerformanceStats.list(),
+        toolExecutions.list(30),
+        dbModels.list(),
+        savingsEvents.list(since),
+      ]);
+      setSummary(aggregateUsage(rowsRes));
+      setRows(rowsRes);  // ★ 保留 rows 给 F2 byActorRole 派生（零额外 SQL）
+      setCache(cacheStats);
+      setPerf(perfRows);
+      setModelList(modelRows);
+      setToolExecs(execs);
+      setSavings(savingsRows);
+    } catch (err) {
+      // 阶段 I 修（铁律 4：静默吞错）：原 `} catch {` 没打日志，失败用户完全无感
+      // 加 console.error 让 dev/QA 能看到；用户也至少在 devtools 看到 [StatsPage] 前缀
+      // eslint-disable-next-line no-console
+      console.error("[StatsPage] load failed:", err);
+      setSummary(aggregateUsage([]));
+      setRows([]);
+      setModelList([]);
+      setSavings([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    (async () => {
-      try {
-        void cleanupExpiredCache();
-        const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
-        const [rowsRes, cacheStats, perfRows, execs, modelRows, savingsRows] = await Promise.all([
-          usageEvents.list(since),
-          semanticCache.stats(),
-          modelPerformanceStats.list(),
-          toolExecutions.list(30),
-          dbModels.list(),
-          savingsEvents.list(since),
-        ]);
-        setSummary(aggregateUsage(rowsRes));
-        setRows(rowsRes);  // ★ 保留 rows 给 F2 byActorRole 派生（零额外 SQL）
-        setCache(cacheStats);
-        setPerf(perfRows);
-        setModelList(modelRows);
-        setToolExecs(execs);
-        setSavings(savingsRows);
-      } catch (err) {
-        // 阶段 I 修（铁律 4：静默吞错）：原 `} catch {` 没打日志，失败用户完全无感
-        // 加 console.error 让 dev/QA 能看到；用户也至少在 devtools 看到 [StatsPage] 前缀
-        // eslint-disable-next-line no-console
-        console.error("[StatsPage] load failed:", err);
-        setSummary(aggregateUsage([]));
-        setRows([]);
-        setModelList([]);
-        setSavings([]);
-      } finally {
-        setLoading(false);
-      }
-    })();
+    void loadStats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 清空全部语义缓存：旧脏缓存一键清掉，清完刷新统计
+  async function handleClearCache() {
+    try {
+      await clearAllCache();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[StatsPage] clear cache failed:", err);
+    }
+    await loadStats();
+  }
 
   // 阶段 F2：从同一份 rows 派生 byActorRole（review H1：零额外 SQL）
   // 排序由聚合函数内负责（NULL 最后 + 字母序 + 同 roleKind 内 cost DESC，review F1-9）
@@ -135,6 +149,21 @@ export function StatsPage() {
               <StatCard icon={<Activity className="w-4 h-4" />} label={t("stats.last7d")} value={fmtCost(summary!.last7dCost)} />
               <StatCard icon={<Activity className="w-4 h-4" />} label={t("stats.last30d")} value={fmtCost(summary!.last30dCost)} />
               <StatCard icon={<Sparkles className="w-4 h-4 text-emerald-500" />} label={t("stats.cacheHits")} value={String(cache.totalHits)} />
+            </div>
+
+            {/* 缓存条目数 + 一键清空（旧脏缓存 / 不想再命中时手动重置） */}
+            <div className="flex items-center justify-between gap-3 px-1 -mt-2">
+              <span className="text-xs text-muted-foreground">
+                {t("stats.cacheEntries", { count: cache.entries })}
+              </span>
+              <button
+                type="button"
+                onClick={handleClearCache}
+                disabled={cache.entries === 0}
+                className="text-xs font-medium px-3 py-1.5 rounded-full border border-white/15 hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {t("stats.clearCache")}
+              </button>
             </div>
 
             <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 shadow-xl">

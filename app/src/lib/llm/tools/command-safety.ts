@@ -37,6 +37,12 @@ const ALLOWED_PROGRAMS = new Set([
   "pnpm", "npm", "yarn", "node", "npx",
   "git", "ls", "cat", "echo", "pwd", "head", "tail", "wc", "grep", "rg", "find",
   "tsc", "vitest", "jest", "eslint", "prettier", "python", "python3", "pip", "cargo", "go",
+  // 常用 shell 工具：切目录 + 文本处理 + 文件/路径工具。无网络、无提权、无破坏性；
+  // 危险用法（rm -rf / sudo / 重定向裸设备 / curl|sh 等）仍由上方黑名单拦截。
+  "cd", "which", "type", "date", "env", "printenv",
+  "sort", "uniq", "cut", "tr", "column", "comm", "paste", "seq", "nl",
+  "diff", "cmp", "file", "stat", "tree", "du", "basename", "dirname", "realpath", "readlink",
+  "sed", "awk", "mkdir", "touch", "cp", "mv", "jq",
 ]);
 
 /** 取命令的第一个程序名（去掉前导环境变量赋值 FOO=bar cmd） */
@@ -82,4 +88,53 @@ export function checkCommand(command: string, extraBlocked: string[] = []): Comm
   }
 
   return { verdict: "allow", reason: "白名单命令" };
+}
+
+// 100% 只读的程序（只看不改，跑了不产生副作用）
+const READONLY_PROGRAMS = new Set([
+  "ls", "cat", "head", "tail", "wc", "pwd", "echo", "find", "grep", "rg",
+  // 只看不改的 shell 工具（cd 只切目录、其余纯输出）→ 免确认。
+  // sed/awk/mkdir/touch/cp/mv/jq 能写文件，不在此列（仍走确认）。
+  "cd", "which", "type", "date", "env", "printenv",
+  "sort", "uniq", "cut", "tr", "column", "comm", "paste", "seq", "nl",
+  "diff", "cmp", "file", "stat", "tree", "du", "basename", "dirname", "realpath", "readlink",
+]);
+
+// git 的只读子命令（其余 add/commit/checkout/reset/push/pull/merge/stash/clean 等都算写）
+const GIT_READONLY_SUBCOMMANDS = new Set([
+  "log", "status", "diff", "show", "branch", "remote", "ls-files", "rev-parse",
+  "describe", "blame", "shortlog",
+]);
+
+/** 去掉前导环境变量赋值（FOO=bar cmd），返回剩余 token */
+function stripEnvPrefix(tokens: string[]): string[] {
+  let i = 0;
+  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]!)) i++;
+  return tokens.slice(i);
+}
+
+/**
+ * 命令是否「纯只读」——只看不改、跑了没副作用，可免用户确认。
+ * 保守：含命令替换 $()/反引号一律当非只读；逐段都必须只读才算只读。
+ * git 看子命令（log/status/diff 只读，commit/add/checkout 算写）。
+ */
+export function isReadOnlyCommand(command: string): boolean {
+  const cmd = command.trim();
+  if (!cmd) return false;
+  if (/\$\(|`/.test(cmd)) return false; // 命令替换无法静态判断 → 保守当非只读
+  if (/>/.test(cmd)) return false;       // 含 > 重定向（哪怕 echo/cat 也会写文件）→ 非只读
+
+  const segments = cmd.split(/\s*(?:&&|\|\||;|\|)\s*/).filter(Boolean);
+  if (segments.length === 0) return false;
+
+  return segments.every((seg) => {
+    const tokens = stripEnvPrefix(seg.trim().split(/\s+/));
+    const prog = tokens[0] ?? "";
+    if (READONLY_PROGRAMS.has(prog)) return true;
+    if (prog === "git") {
+      const sub = tokens.slice(1).find((tk) => tk && !tk.startsWith("-"));
+      return sub ? GIT_READONLY_SUBCOMMANDS.has(sub) : false;
+    }
+    return false;
+  });
 }

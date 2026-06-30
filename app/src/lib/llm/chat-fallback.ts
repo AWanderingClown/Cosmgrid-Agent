@@ -82,6 +82,8 @@ export interface ModelEndpoint {
   providerType: string;
   apiKey: string;
   baseUrl?: string;
+  /** CLI provider 的工作目录：绑定工作文件夹时传入，避免 CLI 读到应用开发目录 */
+  workingDirectory?: string | null;
   /** 给 UI 显示的标签（如 "Opus 4.8"），仅做展示 */
   displayLabel?: string;
   /** 对应 ApiCredential 的 id（用于 recordUsageEvent 落库关联） */
@@ -132,6 +134,8 @@ export interface StreamCallbacks {
   onRecovered?: (mode: "native_resume" | "context_replay" | "fallback_handoff") => void;
   /** CLI/agent 中间状态，不计入最终回答正文 */
   onStatus?: (status: string) => void;
+  /** CLI 官方输出的实际模型名，例如 sonnet 别名会解析成 claude-sonnet-4-6 */
+  onResolvedModel?: (modelName: string, target: ModelEndpoint) => void;
   /**
    * streamText 全部 step 跑完后，把累积的所有 toolCalls 一次交给 caller。
    * 不传=noop，零侵入。Abort 中断时不调。
@@ -279,12 +283,14 @@ export async function streamWithFallback(
         inputTokens: number;
         outputTokens: number;
         officialSessionId: string | null;
+        actualModelName: string | null;
       }> => {
         const cliResult = await streamViaCli(
           {
             providerType: target.providerType as "claude-cli" | "codex-cli",
             modelName: target.modelName,
             ...(target.baseUrl ? { program: target.baseUrl } : {}),
+            ...(target.workingDirectory ? { workingDirectory: target.workingDirectory } : {}),
           },
           cliMessages,
           {
@@ -297,6 +303,7 @@ export async function streamWithFallback(
               persistCliSession(sessionId, "active");
             },
             onStatus: callbacks.onStatus,
+            onModel: (modelName) => callbacks.onResolvedModel?.(modelName, target),
           },
           {
             ...(options.signal ? { signal: options.signal } : {}),
@@ -317,6 +324,7 @@ export async function streamWithFallback(
           inputTokens: cliResult.inputTokens,
           outputTokens: cliResult.outputTokens,
           officialSessionId,
+          actualModelName: cliResult.actualModelName,
         };
       };
       try {

@@ -610,6 +610,17 @@ describe("watch 图 + computeChain（零 LLM，纯逻辑，已用于真实接力
     expect(computeChain(p)).toEqual(["frontend"]);
   });
 
+  it("已完成角色不再进入接力链，避免同一节点重复产出", () => {
+    const p = plan({
+      nodes: [
+        { role: "leader", title: "对话", status: "done" },
+        { role: "architect", title: "已给出方案", status: "done" },
+      ],
+      currentNodeRole: "architect",
+    });
+    expect(computeChain(p)).toEqual([]);
+  });
+
   it("复杂任务 [leader, architect, frontend, backend, runner, tester, reviewer] → chain 封顶 3（你重点核①③）", () => {
     const p = plan({
       nodes: [

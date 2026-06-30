@@ -34,6 +34,7 @@ vi.mock("@tauri-apps/plugin-sql", () => ({
 
 const db = await import("../db");
 const retrieval = await import("../memory/retrieval");
+const workflowTemplate = await import("../workflow/code-task-template");
 
 beforeAll(async () => {
   await db.initSchema();
@@ -60,6 +61,8 @@ describe("initSchema", () => {
       "workspace_configs",
       "project_memories",
       "project_memory_vectors",
+      "workflow_runs",
+      "workflow_events",
     ]) {
       expect(tables).toContain(t);
     }
@@ -72,6 +75,55 @@ describe("initSchema", () => {
       )
     ).map((r) => r.name);
     expect(tables).not.toContain("conversation_model_snapshots");
+  });
+});
+
+describe("workflowRuns", () => {
+  it("create / getActiveByConversation / saveSnapshot / events", async () => {
+    const conv = await db.conversations.create({ title: "workflow conv", projectId: null });
+    const runId = crypto.randomUUID();
+    const snapshot = workflowTemplate.createCodeTaskWorkflowSnapshot({
+      runId,
+      conversationId: conv.id,
+      objective: "看项目并制定方案",
+      workspacePath: "/tmp/demo",
+    });
+
+    const created = await db.workflowRuns.create({ conversationId: conv.id, snapshot });
+    expect(created.id).toBe(runId);
+    expect(created.status).toBe("running");
+    expect(created.currentPhase).toBe("read_project");
+    expect(created.snapshot.context.workspacePath).toBe("/tmp/demo");
+
+    const active = await db.workflowRuns.getActiveByConversation(conv.id);
+    expect(active?.id).toBe(runId);
+
+    const next = {
+      ...snapshot,
+      status: "waiting_user" as const,
+      currentNodeId: "plan",
+      nodes: snapshot.nodes.map((n) =>
+        n.id === "read_project" ? { ...n, status: "done" as const }
+          : n.id === "plan" ? { ...n, status: "waiting_user" as const }
+          : n,
+      ),
+    };
+    await db.workflowRuns.saveSnapshot({
+      runId,
+      snapshot: next,
+      eventType: "workflow.node_waiting_user",
+      eventPayload: { nodeId: "plan" },
+    });
+
+    const updated = await db.workflowRuns.getById(runId);
+    expect(updated?.status).toBe("waiting_user");
+    expect(updated?.currentPhase).toBe("plan");
+
+    const events = await db.workflowRuns.listEvents(runId);
+    expect(events.map((e) => e.eventType)).toEqual([
+      "workflow.created",
+      "workflow.node_waiting_user",
+    ]);
   });
 });
 

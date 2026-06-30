@@ -74,7 +74,7 @@ export function ChainNodeGraph({ nodes, availableModels, disabled, onMainModelCh
         <div className="flex items-stretch gap-2 min-w-max">
           {nodes.map((node, index) => {
             const Icon = STATUS_ICON[node.status];
-            const canChangeModel = availableModels.length > 0;
+            const canChangeModel = availableModels.length > 0 && !node.locked;
             const stepLabel = t(`chat.workPanel.chainSteps.${node.role}`, { defaultValue: node.stepName });
             const handleChange = (modelId: string) => {
               if (node.id === "main-chat") onMainModelChange(modelId);
@@ -117,7 +117,7 @@ export function ChainNodeGraph({ nodes, availableModels, disabled, onMainModelCh
                     </Select>
                   ) : (
                     <div className="mt-1 h-6 flex items-center rounded-md bg-foreground/[0.06] px-2 text-[10px] font-mono text-muted-foreground truncate">
-                      {node.modelId ? node.modelName : t("chat.orchestrator.receiptNoModel")}
+                      {node.locked ? t("chat.workPanel.dynamicModelPool") : node.modelId ? node.modelName : t("chat.orchestrator.receiptNoModel")}
                     </div>
                   )}
                 </div>

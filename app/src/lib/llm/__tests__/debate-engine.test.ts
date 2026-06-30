@@ -2,6 +2,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   runDebate,
+  runDynamicDebate,
   solverSystemPrompt,
   criticSystemPrompt,
   judgeSystemPrompt,
@@ -99,10 +100,59 @@ describe("runDebate — 错误传播", () => {
   });
 });
 
+describe("runDynamicDebate — 动态参与模型", () => {
+  it("只有 1 个模型时做单模型自审，不伪装成 PK", async () => {
+    const { run, calls } = makeRunRole();
+    const r = await runDynamicDebate({
+      topic: "方案是否可行",
+      participants: [cfg("solver", "m-only")],
+    }, run);
+
+    expect(r.rounds.map((x) => x.role)).toEqual(["solo_review"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.systemPrompt).toContain("不能伪装成多模型 PK");
+  });
+
+  it("2 个模型时 A 出方案、B 反驳、A 汇总", async () => {
+    const { run, calls } = makeRunRole();
+    const r = await runDynamicDebate({
+      topic: "比较两个实现方案",
+      participants: [cfg("solver", "m-a"), cfg("critic", "m-b")],
+    }, run);
+
+    expect(r.rounds.map((x) => x.role)).toEqual(["solver", "critic", "judge"]);
+    expect(r.rounds.map((x) => x.modelId)).toEqual(["m-a", "m-b", "m-a"]);
+    expect(calls.map((c) => c.role)).toEqual(["solver", "critic", "judge"]);
+  });
+
+  it("3 个及以上模型时最后一个做裁决，中间模型反驳", async () => {
+    const { run } = makeRunRole();
+    const r = await runDynamicDebate({
+      topic: "多模型 PK",
+      participants: [
+        cfg("solver", "m-a"),
+        cfg("critic", "m-b"),
+        cfg("critic", "m-c"),
+        cfg("judge", "m-d"),
+      ],
+    }, run);
+
+    expect(r.rounds.map((x) => x.role)).toEqual(["solver", "critic", "critic_2", "judge"]);
+    expect(r.rounds.map((x) => x.modelId)).toEqual(["m-a", "m-b", "m-c", "m-d"]);
+  });
+});
+
 describe("prompt 构造", () => {
   it("三个 system prompt 各有角色特征词", () => {
     expect(solverSystemPrompt()).toContain("Solver");
-    expect(criticSystemPrompt()).toContain("Critic");
+    expect(criticSystemPrompt()).toContain("Red Team");
     expect(judgeSystemPrompt()).toContain("Judge");
+  });
+
+  it("critic prompt 是红队反方，不是温和补充建议", () => {
+    const prompt = criticSystemPrompt();
+    expect(prompt).toContain("完全对立面");
+    expect(prompt).toContain("攻击方案");
+    expect(prompt).toContain("禁止客套");
   });
 });

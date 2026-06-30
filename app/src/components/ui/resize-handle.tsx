@@ -3,7 +3,7 @@
 // 1. 拖动时只在 window 上临时挂 mousemove/mouseup，松手立即移除——绝不留全屏遮罩，
 //    所以永远不会拦截其他元素的点击（这是上一版库实现的坑）。
 // 2. 像素宽度 + min/max 夹紧，调用方用 style={{ width }} 控制相邻面板宽度。
-// 3. 视觉 = 一条灰线（hover 高亮主色），命中区比视觉宽一点，好抓。
+// 3. 命中区比视觉宽一点，好抓；默认不画分割线，避免破坏主界面留白。
 import { useCallback, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
@@ -59,9 +59,7 @@ interface ResizeHandleProps {
   className?: string;
 }
 
-/** 可拖拽的竖向分隔条：默认就有可见细线（浅色浅灰/深色白），hover 加深并显示中央把手圆点。
- *  浅色 = zinc-300（≈ oklch 12% 黑），深色 = white/15（≈ oklch 12% 白）—— 符合 UI 文档 §5 "边框保持 10% 极低可见度"。
- */
+/** 可拖拽的竖向分隔条：默认透明，只在 hover 时显示中央把手，拖动能力保留。 */
 export function ResizeHandle({ onMouseDown, className }: ResizeHandleProps) {
   return (
     <div
@@ -73,10 +71,8 @@ export function ResizeHandle({ onMouseDown, className }: ResizeHandleProps) {
         className,
       )}
     >
-      {/* 默认可见细线：浅色 zinc-300 浅灰、深色 white/15；hover 加深 */}
-      <div className="absolute inset-y-0 w-px bg-zinc-300 dark:bg-white/15 group-hover:bg-zinc-400 dark:group-hover:bg-white/30 transition-colors" />
       {/* hover 时中央显示的把手圆点（明确告诉用户"这里能拖"） */}
-      <div className="relative w-1 h-12 rounded-full bg-zinc-500 dark:bg-white/50 opacity-0 group-hover:opacity-100 transition-opacity" />
+      <div className="relative w-1 h-12 rounded-full bg-zinc-400/70 dark:bg-white/40 opacity-0 group-hover:opacity-100 transition-opacity" />
     </div>
   );
 }

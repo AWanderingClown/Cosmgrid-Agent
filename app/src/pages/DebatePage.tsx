@@ -178,7 +178,7 @@ export function DebatePage({ initialTopic }: DebatePageProps = {}) {
         {rounds.length > 0 && (
           <div className="grid gap-4">
             {rounds.map((r, i) => {
-              const meta = ROLE_META[r.role];
+              const meta = ROLE_META[r.role as DebateRole] ?? ROLE_META.judge;
               const Icon = meta.icon;
               return (
                 <details key={i} className="glass border border-white/10 rounded-2xl overflow-hidden">

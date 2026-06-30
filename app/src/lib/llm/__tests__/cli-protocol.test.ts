@@ -120,6 +120,12 @@ describe("buildCliArgs", () => {
     const args = buildCliArgs("claude-cli", "", "hi");
     expect(args).not.toContain("--model");
   });
+  it("claude：显式追加 CosmGrid 系统规则", () => {
+    const args = buildCliArgs("claude-cli", "claude-sonnet-4-6", "hi", "核心规则");
+    const idx = args.indexOf("--append-system-prompt");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe("核心规则");
+  });
   it("codex：exec + json", () => {
     const args = buildCliArgs("codex-cli", "gpt-5-codex", "hi");
     expect(args[0]).toBe("exec");
@@ -127,6 +133,7 @@ describe("buildCliArgs", () => {
     expect(args).toContain("--json");
     expect(args).toContain("--model");
     expect(args).toContain("gpt-5-codex");
+    expect(args).not.toContain("--append-system-prompt");
   });
   it("claude resume：用官方 session id 续跑", () => {
     const args = buildCliResumeArgs("claude-cli", "claude-sonnet-4-6", "sess-1", "continue");
@@ -134,6 +141,12 @@ describe("buildCliArgs", () => {
     expect(args).toContain("sess-1");
     expect(args).toContain("-p");
     expect(args).toContain("continue");
+  });
+  it("claude resume：续跑也追加 CosmGrid 系统规则", () => {
+    const args = buildCliResumeArgs("claude-cli", "claude-sonnet-4-6", "sess-1", "continue", "核心规则");
+    const idx = args.indexOf("--append-system-prompt");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe("核心规则");
   });
   it("codex resume：走 exec resume <id> <prompt> --json", () => {
     const args = buildCliResumeArgs("codex-cli", "gpt-5", "thread-1", "continue");
@@ -214,9 +227,12 @@ describe("parseClaudeStreamLine", () => {
     ]);
   });
 
-  it("system/init 行被忽略", () => {
-    const line = JSON.stringify({ type: "system", subtype: "init", model: "claude-opus-4-8" });
-    expect(parseClaudeStreamLine(line)).toEqual([]);
+  it("system/init 行暴露 session 和实际模型名", () => {
+    const line = JSON.stringify({ type: "system", subtype: "init", session_id: "sess-1", model: "claude-sonnet-4-6" });
+    expect(parseClaudeStreamLine(line)).toEqual([
+      { kind: "session", sessionId: "sess-1" },
+      { kind: "model", modelName: "claude-sonnet-4-6" },
+    ]);
   });
 
   it("非 JSON 行容错返回空（CLI 偶尔混日志行）", () => {

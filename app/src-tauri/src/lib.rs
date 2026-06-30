@@ -104,6 +104,7 @@ async fn spawn_cli_stream(
     program: String,
     args: Vec<String>,
     extra_env: HashMap<String, String>,
+    working_directory: Option<String>,
     on_event: Channel<CliStreamEvent>,
 ) -> Result<(), String> {
     // 受控环境：继承父环境，删掉污染变量，再叠加前端 override
@@ -114,12 +115,15 @@ async fn spawn_cli_stream(
         env.insert(k, v);
     }
 
-    let command = app
+    let mut command = app
         .shell()
         .command(&program)
         .args(args)
         .env_clear()
         .envs(env);
+    if let Some(cwd) = working_directory.filter(|p| !p.trim().is_empty()) {
+        command = command.current_dir(cwd);
+    }
 
     let (mut rx, child) = command.spawn().map_err(|e| e.to_string())?;
 

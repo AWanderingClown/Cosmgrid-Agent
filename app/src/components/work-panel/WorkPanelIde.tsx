@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Code2, FileText, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
+import { ResizeHandle, usePanelResize } from "@/components/ui/resize-handle";
 import type { WorkArtifact } from "@/lib/work-artifacts";
-import { CodeEditor } from "./CodeEditor";
 import { FileTree } from "./FileTree";
 import { loadFileContent, resolveWorkspaceFilePath } from "./file-source";
 import { TabBar } from "./TabBar";
 import { detectLanguage, type FileTab } from "./types";
+
+const CodeEditor = lazy(() => import("./CodeEditor").then((m) => ({ default: m.CodeEditor })));
 
 function isFileArtifact(artifact: WorkArtifact): boolean {
   return artifact.kind === "file" || artifact.kind === "html";
@@ -50,6 +52,7 @@ export function WorkPanelIde({ resetKey, workspacePath, artifacts, activeLabel, 
   const [activePath, setActivePath] = useState<string | undefined>();
   const streamedArtifactIdsRef = useRef(new Set<string>());
   const timersRef = useRef(new Map<string, number>());
+  const fileTreePanel = usePanelResize({ initial: 176, min: 112, max: 320, edge: "right" });
   const activeTab = tabs.find((tab) => tab.filePath === activePath);
 
   const latestFileArtifact = useMemo(() => {
@@ -164,21 +167,35 @@ export function WorkPanelIde({ resetKey, workspacePath, artifacts, activeLabel, 
   return (
     <section className="glass flex min-h-[420px] flex-1 overflow-hidden rounded-2xl border border-white/5" aria-label={t("chat.workPanel.ideTitle")}>
       {workspacePath && (
-        <div className="hidden w-44 shrink-0 border-r border-border bg-foreground/[0.035] md:flex md:flex-col">
-          <div className="flex h-9 items-center gap-1.5 border-b border-border px-3 text-[10px] font-black uppercase tracking-[0.16em] text-muted-foreground/55">
-            <FileText className="w-3 h-3" />
-            {t("chat.workPanel.files")}
+        <div className="hidden shrink-0 md:flex">
+          <div
+            className="min-w-0 shrink-0 bg-foreground/[0.035] flex flex-col"
+            style={{ width: fileTreePanel.width }}
+          >
+            <div className="flex h-9 items-center gap-1.5 border-b border-border px-3 text-[10px] font-black uppercase tracking-[0.16em] text-muted-foreground/55">
+              <FileText className="w-3 h-3" />
+              {t("chat.workPanel.files")}
+            </div>
+            <div className="min-h-0 flex-1">
+              <FileTree rootPath={workspacePath} activePath={activePath} onOpenFile={(path) => void openFile(path, { preferDisk: true })} />
+            </div>
           </div>
-          <div className="min-h-0 flex-1">
-            <FileTree rootPath={workspacePath} activePath={activePath} onOpenFile={(path) => void openFile(path, { preferDisk: true })} />
-          </div>
+          <ResizeHandle onMouseDown={fileTreePanel.onMouseDown} className="border-r border-border bg-foreground/[0.025]" />
         </div>
       )}
       <div className="flex min-w-0 flex-1 flex-col">
         <TabBar tabs={tabs} activePath={activePath} onSelect={setActivePath} onClose={closeTab} />
         <div className="min-h-0 flex-1">
           {activeTab ? (
-            <CodeEditor key={activeTab.filePath} tab={activeTab} />
+            <Suspense
+              fallback={
+                <div className="flex h-full items-center justify-center text-[11px] font-bold uppercase tracking-widest text-muted-foreground/50">
+                  {t("common.loading")}
+                </div>
+              }
+            >
+              <CodeEditor key={activeTab.filePath} tab={activeTab} />
+            </Suspense>
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center text-muted-foreground">
               <Code2 className="w-8 h-8 text-primary/50" />

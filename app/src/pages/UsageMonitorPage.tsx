@@ -1,14 +1,24 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Activity, Gauge, RefreshCw, DatabaseZap, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { TokenPlansPage } from "@/pages/TokenPlansPage";
-import { StatsPage } from "@/pages/StatsPage";
 import { cn } from "@/lib/utils";
 import { priceSyncStatus, type PriceSyncStatus } from "@/lib/db";
 import { syncModelPrices } from "@/lib/llm/price-catalog";
 
 type UsageTab = "plans" | "details";
+
+const TokenPlansPage = lazy(() => import("@/pages/TokenPlansPage").then((m) => ({ default: m.TokenPlansPage })));
+const StatsPage = lazy(() => import("@/pages/StatsPage").then((m) => ({ default: m.StatsPage })));
+
+function UsageTabLoading() {
+  const { t } = useTranslation();
+  return (
+    <div className="h-full w-full flex items-center justify-center text-xs font-bold uppercase tracking-widest text-muted-foreground">
+      {t("common.loading")}
+    </div>
+  );
+}
 
 export function UsageMonitorPage() {
   const { t } = useTranslation();
@@ -78,12 +88,9 @@ export function UsageMonitorPage() {
       </div>
 
       <div className="flex-1 min-h-0">
-        <div className="h-full w-full" style={{ display: tab === "details" ? "block" : "none" }}>
-          <StatsPage />
-        </div>
-        <div className="h-full w-full" style={{ display: tab === "plans" ? "block" : "none" }}>
-          <TokenPlansPage />
-        </div>
+        <Suspense fallback={<UsageTabLoading />}>
+          {tab === "details" ? <StatsPage /> : <TokenPlansPage />}
+        </Suspense>
       </div>
     </div>
   );

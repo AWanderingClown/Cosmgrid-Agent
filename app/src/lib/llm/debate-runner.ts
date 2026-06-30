@@ -24,6 +24,7 @@ export const realRunRole: RunRole = async ({ systemPrompt, userPrompt, config })
         providerType: config.providerType,
         modelName: config.modelName,
         ...(config.baseUrl ? { program: config.baseUrl } : {}),
+        ...(config.workingDirectory ? { workingDirectory: config.workingDirectory } : {}),
       },
       [
         { role: "system", content: systemPrompt },

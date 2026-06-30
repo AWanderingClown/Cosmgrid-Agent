@@ -95,6 +95,36 @@ function splitToolJson(text: string): ContentSegment[] {
   return segs;
 }
 
+function mergeAdjacentCollapsedSegments(segments: ContentSegment[]): ContentSegment[] {
+  const merged: ContentSegment[] = [];
+  let pendingWhitespace: ContentSegment | null = null;
+
+  for (const seg of segments) {
+    if (seg.type === "text" && seg.content.trim() === "") {
+      pendingWhitespace = seg;
+      continue;
+    }
+
+    const last = merged[merged.length - 1];
+    if (last?.type === "think" && seg.type === "think") {
+      const gap = pendingWhitespace?.content ?? "";
+      last.content = `${last.content}${gap}${seg.content}`;
+      last.closed = last.closed && seg.closed;
+      pendingWhitespace = null;
+      continue;
+    }
+
+    if (pendingWhitespace) {
+      merged.push(pendingWhitespace);
+      pendingWhitespace = null;
+    }
+    merged.push(seg);
+  }
+
+  if (pendingWhitespace) merged.push(pendingWhitespace);
+  return merged;
+}
+
 export function parseThinking(text: string): ContentSegment[] {
   // 先按标签切粗段，再把 text 粗段里的裸 JSON 工具调用切出来
   const raw = splitByThinkingTags(text);
@@ -106,5 +136,5 @@ export function parseThinking(text: string): ContentSegment[] {
       out.push(seg);
     }
   }
-  return out;
+  return mergeAdjacentCollapsedSegments(out);
 }

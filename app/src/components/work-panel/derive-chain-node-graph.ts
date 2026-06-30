@@ -5,25 +5,28 @@ import {
   type OrchestrationState,
   type RoleId,
 } from "@/lib/llm/orchestrator";
+import type { WorkflowNode, WorkflowSnapshot } from "@/lib/workflow/types";
 
 export type ChainNodeVisualStatus = "planned" | "active" | "running" | "done" | "skipped" | "aborted";
+export type ChainNodeRole = RoleId | "debate";
 
 export interface ChainNodeView {
   id: string;
-  role: RoleId;
+  role: ChainNodeRole;
   stepName: string;
   title: string;
   modelId: string | null;
   modelName: string;
   status: ChainNodeVisualStatus;
   pinned: boolean;
+  locked?: boolean;
 }
 
 export interface ChainNodeGraphView {
   nodes: ChainNodeView[];
 }
 
-const ROLE_STEP_NAME: Record<RoleId, string> = {
+const ROLE_STEP_NAME: Record<ChainNodeRole, string> = {
   leader: "主对话",
   architect: "计划方案",
   frontend: "前端工程师执行",
@@ -32,11 +35,13 @@ const ROLE_STEP_NAME: Record<RoleId, string> = {
   tester: "测试",
   reviewer: "最终审查",
   security: "安全审查",
+  debate: "模型博弈",
 };
 
-const CHAIN_ROLE_ORDER: RoleId[] = [
+const CHAIN_ROLE_ORDER: ChainNodeRole[] = [
   "leader",
   "architect",
+  "debate",
   "backend",
   "frontend",
   "runner",
@@ -55,8 +60,40 @@ function byStableRoleOrder(a: ChainNodeView, b: ChainNodeView): number {
   return CHAIN_ROLE_ORDER.indexOf(a.role) - CHAIN_ROLE_ORDER.indexOf(b.role);
 }
 
+function debateNodeStatus(snapshot: WorkflowSnapshot, node: WorkflowNode): ChainNodeVisualStatus {
+  if (node.status === "done") return "done";
+  if (node.status === "failed") return "aborted";
+  if (node.status === "skipped") return "skipped";
+  if (snapshot.currentNodeId === node.id || node.status === "ready" || node.status === "running") return "active";
+  return "planned";
+}
+
+function deriveDebateNode(snapshot: WorkflowSnapshot | null): ChainNodeView | null {
+  if (!snapshot) return null;
+  const node = snapshot.nodes.find((n) => n.phase === "debate") ?? null;
+  if (!node) return null;
+  const shouldShow =
+    snapshot.intent.debateRequested ||
+    snapshot.currentNodeId === node.id ||
+    node.status !== "pending";
+  if (!shouldShow) return null;
+
+  return {
+    id: "workflow-debate",
+    role: "debate",
+    stepName: ROLE_STEP_NAME.debate,
+    title: node.title,
+    modelId: null,
+    modelName: "dynamic",
+    status: debateNodeStatus(snapshot, node),
+    pinned: false,
+    locked: true,
+  };
+}
+
 export function deriveChainNodeGraph(args: {
   orchestration: OrchestrationState | null;
+  workflowSnapshot?: WorkflowSnapshot | null;
   selectedModelId: string;
   selectedModelName: string;
   availableModels: ModelListItem[];
@@ -75,9 +112,10 @@ export function deriveChainNodeGraph(args: {
     status: args.orchestration?.currentNodeId ? "done" : args.chainRunning ? "running" : "active",
     pinned: false,
   };
+  const virtualDebateNode = deriveDebateNode(args.workflowSnapshot ?? null);
 
   if (!args.orchestration || args.orchestration.nodes.length === 0) {
-    return { nodes: [leaderNode] };
+    return { nodes: virtualDebateNode ? [leaderNode, virtualDebateNode] : [leaderNode] };
   }
 
   const executed = new Set(args.chainExecutedRoles);
@@ -114,7 +152,8 @@ export function deriveChainNodeGraph(args: {
     })
     .sort(byStableRoleOrder);
 
-  return { nodes: [leaderNode, ...views] };
+  const nodes = virtualDebateNode ? [leaderNode, ...views, virtualDebateNode].sort(byStableRoleOrder) : [leaderNode, ...views];
+  return { nodes };
 }
 
 export function isKnownRole(role: string): role is RoleId {

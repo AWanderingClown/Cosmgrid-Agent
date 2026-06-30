@@ -103,6 +103,22 @@ describe("parseThinking", () => {
     ]);
   });
 
+  it("连续思考块合并成一个折叠块", () => {
+    const segs = parseThinking("<think>第一段</think>\n<thinking>第二段</thinking>");
+    expect(segs).toEqual([
+      { type: "think", content: "第一段\n第二段", closed: true },
+    ]);
+  });
+
+  it("中间有正文的思考块不合并，避免吞掉答案", () => {
+    const segs = parseThinking("<think>先想</think>这是正文<think>再想</think>");
+    expect(segs).toEqual([
+      { type: "think", content: "先想", closed: true },
+      { type: "text", content: "这是正文", closed: true },
+      { type: "think", content: "再想", closed: true },
+    ]);
+  });
+
   it("嵌套 think（按外层成对处理，不被内层提前关闭）", () => {
     const segs = parseThinking("<think>外<think>内</think>still</think>tail");
     expect(segs).toEqual([

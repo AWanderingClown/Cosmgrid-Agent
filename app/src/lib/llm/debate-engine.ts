@@ -15,7 +15,7 @@ export type DebateRole = "solver" | "critic" | "judge";
 
 /** 一个角色用哪个模型（端点信息，复用 provider-factory 调用） */
 export interface DebateRoleConfig {
-  role: DebateRole;
+  role: string;
   modelId: string;
   modelName: string;
   providerType: string;
@@ -23,11 +23,12 @@ export interface DebateRoleConfig {
   apiCredentialId: string;
   apiKey: string;
   baseUrl?: string;
+  workingDirectory?: string | null;
 }
 
 /** 一轮产物 */
 export interface RoleOutput {
-  role: DebateRole;
+  role: string;
   modelId: string;
   content: string;
   inputTokens: number;
@@ -52,6 +53,13 @@ export interface DebateInput {
   quickMode?: boolean;
 }
 
+export interface DynamicDebateInput {
+  topic: string;
+  participants: DebateRoleConfig[];
+  /** 最多使用多少个参与模型，默认 4。防止模型太多时成本和等待时间失控。 */
+  maxParticipants?: number;
+}
+
 export interface DebateResult {
   topic: string;
   rounds: RoleOutput[];
@@ -70,9 +78,10 @@ export function solverSystemPrompt(): string {
 
 export function criticSystemPrompt(): string {
   return [
-    "你是对抗式审查者（Critic）。下面给你一个话题和某方案，你的任务是找出方案的关键缺陷。",
-    "要求：列出至多 3 条最关键的缺陷，每条标注严重性（1-5）。",
-    "对每条自问：如果这条不成立，会不会推翻整个方案？只保留真正要害的，不要凑数、不要客套。",
+    "你是红队反方（Critic / Red Team）。你的任务不是补充建议，而是从完全对立面攻击方案。",
+    "默认立场：方案可能是错的、不完整的、不可执行的、风险被低估的。你要找能推翻它的关键缺陷。",
+    "要求：列出至多 3 条最关键攻击点，每条标注严重性（1-5）和「如果成立会造成什么后果」。",
+    "禁止客套、禁止中立折中、禁止为了显得全面而凑小问题；只保留真正能改变决策的漏洞。",
   ].join("\n");
 }
 
@@ -97,6 +106,38 @@ function judgeUserPrompt(topic: string, solution: string, critique: string | nul
   if (critique) parts.push(`\nCritic 批评：\n${critique}`);
   parts.push("\n请产出最终方案。");
   return parts.join("\n");
+}
+
+function dynamicProposalUserPrompt(topic: string): string {
+  return `任务/方案上下文：\n${topic}\n\n请先给出你认为最稳妥、可执行的方案。`;
+}
+
+function dynamicCritiqueUserPrompt(topic: string, solution: string): string {
+  return [
+    `任务/方案上下文：\n${topic}`,
+    `\n待 PK 的方案：\n${solution}`,
+    "\n请作为红队反方进行攻击：假设这个方案会失败，找出最可能导致失败的关键漏洞、错误假设、遗漏风险和执行断点。",
+    "你的输出应该像红蓝对抗里的红队报告，而不是站在同一阵营的温和评审。",
+  ].join("\n");
+}
+
+function dynamicJudgeUserPrompt(topic: string, solution: string, critiques: RoleOutput[]): string {
+  const parts = [
+    `任务/方案上下文：\n${topic}`,
+    `\n原方案：\n${solution}`,
+  ];
+  if (critiques.length > 0) {
+    parts.push("\n反驳 / PK 意见：");
+    for (const critique of critiques) {
+      parts.push(`\n## ${critique.modelId}\n${critique.content}`);
+    }
+  }
+  parts.push("\n请综合上面的方案和反驳，给出最终判断：采纳什么、推翻什么、下一步应该怎么做。");
+  return parts.join("\n");
+}
+
+function withRole(config: DebateRoleConfig, role: string): DebateRoleConfig {
+  return { ...config, role };
 }
 
 /**
@@ -139,4 +180,67 @@ export async function runDebate(input: DebateInput, runRole: RunRole): Promise<D
     rounds,
     finalSolution: judge.content,
   };
+}
+
+/**
+ * 动态模型博弈：不再固定 3 个模型。
+ * - 1 个模型：只能做单模型自审，明确不是 PK。
+ * - 2 个模型：A 出方案，B 反驳，A 汇总裁决。
+ * - 3+ 模型：第 1 个出方案，中间模型反驳，最后一个裁决；默认最多 4 个参与，避免成本失控。
+ */
+export async function runDynamicDebate(input: DynamicDebateInput, runRole: RunRole): Promise<DebateResult> {
+  const participants = input.participants.slice(0, Math.max(1, input.maxParticipants ?? 4));
+  if (participants.length === 0) {
+    throw new Error("runDynamicDebate: participants cannot be empty");
+  }
+
+  const rounds: RoleOutput[] = [];
+
+  if (participants.length === 1) {
+    const soloConfig = withRole(participants[0]!, "solo_review");
+    const solo = await runRole({
+      systemPrompt: [
+        "你是单模型自审者。当前只有一个可用模型，不能伪装成多模型 PK。",
+        "请直接说明无法进行真正多模型博弈，然后对方案做严格自审，给出可执行修正。",
+      ].join("\n"),
+      userPrompt: dynamicProposalUserPrompt(input.topic),
+      config: soloConfig,
+    });
+    rounds.push({ role: soloConfig.role, modelId: soloConfig.modelId, ...solo });
+    return { topic: input.topic, rounds, finalSolution: solo.content };
+  }
+
+  const proposerConfig = withRole(participants[0]!, "solver");
+  const proposal = await runRole({
+    systemPrompt: solverSystemPrompt(),
+    userPrompt: dynamicProposalUserPrompt(input.topic),
+    config: proposerConfig,
+  });
+  rounds.push({ role: proposerConfig.role, modelId: proposerConfig.modelId, ...proposal });
+
+  const judgeConfig = withRole(participants.length >= 3 ? participants[participants.length - 1]! : participants[0]!, "judge");
+  const criticConfigs = participants.length >= 3
+    ? participants.slice(1, -1).map((p, index) => withRole(p, index === 0 ? "critic" : `critic_${index + 1}`))
+    : [withRole(participants[1]!, "critic")];
+
+  const critiques: RoleOutput[] = [];
+  for (const criticConfig of criticConfigs) {
+    const critique = await runRole({
+      systemPrompt: criticSystemPrompt(),
+      userPrompt: dynamicCritiqueUserPrompt(input.topic, proposal.content),
+      config: criticConfig,
+    });
+    const output = { role: criticConfig.role, modelId: criticConfig.modelId, ...critique };
+    critiques.push(output);
+    rounds.push(output);
+  }
+
+  const judge = await runRole({
+    systemPrompt: judgeSystemPrompt(),
+    userPrompt: dynamicJudgeUserPrompt(input.topic, proposal.content, critiques),
+    config: judgeConfig,
+  });
+  rounds.push({ role: judgeConfig.role, modelId: judgeConfig.modelId, ...judge });
+
+  return { topic: input.topic, rounds, finalSolution: judge.content };
 }

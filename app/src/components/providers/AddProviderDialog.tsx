@@ -29,7 +29,6 @@ import { lookupPriceFromCatalog, saveManualModelPrice } from "@/lib/llm/price-ca
 import { ApiKeyInput } from "./ApiKeyInput";
 import { ProviderTypeSelect, type ProviderTypeValue } from "./ProviderTypeSelect";
 import { BasicFormFields } from "./BasicFormFields";
-import { WorkRoleSelector } from "./WorkRoleSelector";
 import { ModelConfigFields } from "./ModelConfigFields";
 import { TestConnectionButton } from "./TestConnectionButton";
 import {
@@ -180,11 +179,6 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
   function handleModelNameChange(name: string) {
     applyModelName(name);
     void applyKnownModelMetadata(name);
-  }
-
-  function handleWorkRolesChange(roles: WorkRole[]) {
-    setRolesEditedManually(true);
-    setWorkRoles(roles);
   }
 
   const isCli = isCliType(providerType);
@@ -464,7 +458,9 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
             helperText={isCli ? t("addProvider.cliPricingHint") : t("addProvider.modelMetadataHint")}
           />
 
-          <WorkRoleSelector value={workRoles} onChange={handleWorkRolesChange} />
+          <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            {t("addProvider.autoRolesHint")}
+          </div>
 
           {!isCli && (
             <TestConnectionButton

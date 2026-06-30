@@ -35,7 +35,9 @@
       "tokenPlans": "用量监控",
       "debate": "多模型对弈",
       "stats": "用量明细",
-      "settings": "设置"
+      "settings": "设置",
+      "collapse": "收起侧边栏",
+      "expand": "展开侧边栏"
     },
     "alerts": {
       "goToHandle": "前往处理"
@@ -76,19 +78,23 @@
       "confirm": "确认写",
       "auto": "自动",
       "readHint": "只读：AI 只能读文件、搜索、看 git，不改任何东西",
-      "confirmHint": "确认写：AI 写文件或跑命令前只弹出确认 / 取消，详细内容在工作面板里看",
+      "confirmHint": "确认写：只读操作（看文件 / git log 等）直接放行不打扰；只有写文件、装依赖等会改动东西的操作才弹确认 / 取消，详细步骤在对话里看",
       "autoHint": "自动：AI 写文件/跑命令不再逐个弹窗（信任的活才用）"
     },
     "tools": {
       "confirmTitle": "AI 请求一个操作，请确认",
       "approve": "确认执行",
       "reject": "取消",
-      "confirmHint": "详细内容将在工作面板中展示。"
+      "confirmHint": "这是个会改动东西的操作，确认后才执行。"
     },
     "working": {
       "idle": "空闲，等你发话",
       "working": "正在工作",
+      "done": "执行完毕",
       "awaitingApproval": "等待你确认"
+    },
+    "steps": {
+      "processed": "已处理 {{count}} 步"
     },
     "toolSteps": {
       "read": "读取 {{file}}",
@@ -123,7 +129,13 @@
     "inputPlaceholderFallback": "输入消息...",
     "suggestDebate": "这个问题有多种方案，适合让 3 个模型对弈（出方案 / 反驳 / 裁判）",
     "suggestDebateBtn": "开对弈",
-    "footer": "安全连接 • {{version}} • 由 CosmGrid 驱动",
+    "debate": {
+      "running": "模型博弈进行中…",
+      "completed": "已用 {{count}} 个可用模型完成博弈。",
+      "singleModelNotice": "当前只有 1 个可用模型，无法进行真正的多模型 PK；下面是单模型自审结果。",
+      "noParticipants": "当前没有可用于博弈的模型，请先检查模型和 API Key 配置。",
+      "failed": "模型博弈失败，请检查模型配置后重试。"
+    },
     "attachments": {
       "dropHere": "拖入文件或图片",
       "dragOver": "松开以添加附件",
@@ -151,8 +163,9 @@
       "currentActivity": "当前活动",
       "idle": "空闲，等你发话",
       "chainGraph": "多 AI 协作链",
-      "chainGraphHint": "从左到右依次执行，每步模型可单独更换",
+      "chainGraphHint": "按当前意图动态出现，每步模型可单独更换",
       "changeNodeModel": "更换 {{step}} 的模型",
+      "dynamicModelPool": "动态分配",
       "chainSteps": {
         "leader": "主对话",
         "architect": "计划方案",
@@ -161,7 +174,8 @@
         "runner": "运行检查",
         "tester": "测试",
         "reviewer": "最终审查",
-        "security": "安全审查"
+        "security": "安全审查",
+        "debate": "模型博弈"
       },
       "ideTitle": "IDE 视图",
       "noFileOpen": "还没有打开文件",
@@ -185,6 +199,36 @@
       "htmlTooLarge": "HTML 工件过大（{{size}} 字节）— 降级显示源码而非沙箱预览",
       "diffNoChange": "无变化",
       "diffTooLarge": "共 {{total}} 行，仅显示前 {{shown}} 行"
+    },
+    "workflow": {
+      "title": "任务进度",
+      "optional": "可选",
+      "current": "当前阶段：{{phase}}",
+      "phase": {
+        "read_project": "读项目",
+        "plan": "出方案",
+        "review": "评审方案",
+        "debate": "多模型博弈",
+        "execute": "执行方案",
+        "verify": "验证结果"
+      },
+      "status": {
+        "running": "进行中",
+        "waiting_user": "等你确认",
+        "paused": "已暂停",
+        "completed": "已完成",
+        "failed": "失败",
+        "cancelled": "已取消"
+      },
+      "nextActions": {
+        "title": "下一步",
+        "recommended": "推荐",
+        "makePlan": "生成完善方案",
+        "reviewPlan": "让另一个模型评审",
+        "debateOptions": "开启多模型博弈",
+        "executePlan": "直接执行方案",
+        "verifyChanges": "运行检查"
+      }
     },
     "handoff": {
       "inProgress": "正在转交给 {{role}}…",
@@ -235,9 +279,9 @@
       "chainRoleSkipped": "已跳过",
       "chainRoleAborted": "已中止",
       "chainStopButton": "中止接力",
-      "chainStarted": "▶ 接力开始：{{total}} 跳",
+      "chainStarted": "▶ 开始执行：{{path}}",
       "chainStopped": "⛔ 接力已中止（停在 {{role}}）",
-      "chainCompleted": "✓ 接力完成（{{count}} 跳）"
+      "chainCompleted": "✓ 已完成：{{path}}"
     }
   },
   "providers": {
@@ -347,6 +391,7 @@
     "outputPrice": "输出价（USD / 1M）",
     "workRoles": "工作角色",
     "workRolesHint": "至少选择 1 个工作角色",
+    "autoRolesHint": "模型用途由系统根据模型名自动分配；需要精调时，在「角色模板」里调整每个阶段使用哪个模型。",
     "submitting": "添加中...",
     "submit": "添加",
     "fillRequired": "请填所有必填项",
@@ -584,6 +629,8 @@
     "last7d": "近 7 天",
     "last30d": "近 30 天",
     "cacheHits": "缓存命中",
+    "cacheEntries": "缓存条目：{{count}} 条",
+    "clearCache": "清空缓存",
     "savingsTitle": "已确认省钱",
     "savingsTotal": "累计省下",
     "savingsEmpty": "还没有可解释的省钱记录。出现缓存命中、智能挑模型或上下文压缩后，这里会显示明细。",

@@ -150,6 +150,7 @@ export const MAX_CHAIN_LENGTH = 3;
  */
 export function computeChain(plan: OrchestrationPlan): RoleId[] {
   const roles = plan.nodes
+    .filter((n) => n.status !== "done")
     .map((n) => n.role)
     .filter((r, idx, arr) => r !== "leader" && arr.indexOf(r) === idx);
   const roleSet = new Set<RoleId>(roles);
@@ -325,6 +326,7 @@ ${roleMenu}
 规则：
 - 滚动规划：基于已有角色图增补/推进，不要推翻重来。已经完成（done）的角色保留并标 done。
 - 角色要贴合对话里**真实发生**的活，不要凭空规划用户没提过的阶段。
+- 如果最近一条 assistant 已经完成了某个角色的产出（例如已经给出完整方案、已经完成代码实现、已经跑完检查），该角色必须标 done，不要再标 active/planned 让它重复执行。
 - 【最高优先级·硬规则·防过度规划】角色数量能少则少。下面的判定要严格执行：
 - 【最高优先级·硬规则】leader 必须永远在（每次规划至少含 leader 一个节点），不要漏。
   · 单次问答、闲聊、要个解释、问个概念（"你好"、"啥是 X"、"帮我看下这段代码是干啥的"） → **只给 1 个 leader 节点**，禁止拉起任何其他角色。
@@ -335,6 +337,7 @@ ${roleMenu}
 - **绝不主动加 security 节点**，除非用户明确说"查安全 / 检查密钥 / 防注入 / 支付安全"。
 - **绝不主动加 tester 节点**，除非用户明确说"写测试 / 跑测试 / 加测试"。
 - **绝不主动加 architect 节点**，除非用户明确要求"做架构 / 设计方案 / 拆分模块 / 技术选型"。
+- 用户只是要求"做一份方案/计划/路线图"时：如果 assistant 已经在上一条消息给出了具体方案，leader 和 architect 都应标 done，接下来等待用户确认，不要马上再生成一份方案。
 - 简单的闲聊/答疑就只给一个 leader 节点，不要硬凑出"规划→写码→测试"。
 - 前端活写 frontend，后端活写 backend —— LLM 自己判断，不要统一映射成 backend（前端 UI 改动绝不该归到 backend）。
 - runner 通常跟在写代码角色（frontend/backend）后面，标记 planned；写代码角色是 active 时 runner 也可以同时 active。

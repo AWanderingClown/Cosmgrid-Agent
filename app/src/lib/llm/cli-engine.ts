@@ -14,6 +14,7 @@ import {
   type CliProviderType,
   type CliMessage,
 } from "./cli-protocol";
+import { COSMGRID_RULES } from "./cosmgrid-rules";
 
 /** Rust spawn_cli_stream 通过 Channel 推回的原始事件（与 lib.rs 的 CliStreamEvent 对应） */
 type RustCliEvent =
@@ -28,6 +29,8 @@ export interface CliEndpoint {
   modelName: string;
   /** CLI 可执行文件绝对路径；空则回退到 PATH 查找默认名 */
   program?: string;
+  /** CLI 子进程工作目录；绑定工作文件夹时必须传，避免读到 Cosmgrid-Agent 自身 */
+  workingDirectory?: string | null;
 }
 
 export interface CliStreamCallbacks {
@@ -37,6 +40,7 @@ export interface CliStreamCallbacks {
   /** 订阅额度状态（claude 的 rate_limit_event），用于未来接 Token Plan 显示 */
   onRateLimit?: (info: { resetsAt: number | null; limitType: string | null }) => void;
   onSession?: (officialSessionId: string) => void;
+  onModel?: (modelName: string) => void;
 }
 
 export interface CliStreamResult {
@@ -44,6 +48,7 @@ export interface CliStreamResult {
   outputTokens: number;
   finishReason: string;
   officialSessionId: string | null;
+  actualModelName: string | null;
 }
 
 /** 给本次 spawn 生成唯一 id，Rust 端据此存 child 句柄、abort 时按 id kill。 */
@@ -73,8 +78,9 @@ export async function streamViaCli(
         endpoint.modelName,
         options.resumeSessionId,
         options.resumePrompt ?? prompt,
+        COSMGRID_RULES,
       )
-    : buildCliArgs(endpoint.providerType, endpoint.modelName, prompt);
+    : buildCliArgs(endpoint.providerType, endpoint.modelName, prompt, COSMGRID_RULES);
   const sessionId = newCliSessionId();
 
   let usage = { inputTokens: 0, outputTokens: 0 };
@@ -82,6 +88,7 @@ export async function streamViaCli(
   let errorMsg: string | null = null;
   let stderrBuf = "";
   let officialSessionId: string | null = options.resumeSessionId ?? null;
+  let actualModelName: string | null = null;
 
   return new Promise<CliStreamResult>((resolve, reject) => {
     let settled = false;
@@ -92,7 +99,7 @@ export async function streamViaCli(
         const err = new Error(errorMsg) as Error & { officialSessionId?: string | null };
         err.officialSessionId = officialSessionId;
         reject(err);
-      } else resolve({ ...usage, finishReason, officialSessionId });
+      } else resolve({ ...usage, finishReason, officialSessionId, actualModelName });
     };
 
     const channel = new Channel<RustCliEvent>();
@@ -111,6 +118,9 @@ export async function streamViaCli(
               } else if (e.kind === "session") {
                 officialSessionId = e.sessionId;
                 callbacks.onSession?.(e.sessionId);
+              } else if (e.kind === "model") {
+                actualModelName = e.modelName;
+                callbacks.onModel?.(e.modelName);
               } else if (e.kind === "rate_limit") {
                 callbacks.onRateLimit?.({ resetsAt: e.resetsAt, limitType: e.limitType });
               } else if (e.kind === "error") {
@@ -145,7 +155,7 @@ export async function streamViaCli(
       void invoke("kill_cli", { sessionId }).catch((err: unknown) => {
         console.warn("kill_cli 失败（子进程可能已结束）：", err);
       });
-      resolve({ ...usage, finishReason: "abort", officialSessionId });
+      resolve({ ...usage, finishReason: "abort", officialSessionId, actualModelName });
     });
 
     invoke("spawn_cli_stream", {
@@ -153,6 +163,7 @@ export async function streamViaCli(
       program,
       args,
       extraEnv: {},
+      workingDirectory: endpoint.workingDirectory ?? null,
       onEvent: channel,
     }).catch((err: unknown) => {
       if (settled) return;

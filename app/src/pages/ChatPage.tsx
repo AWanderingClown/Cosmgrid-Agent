@@ -1,12 +1,13 @@
 // ChatPage - 重构为 "Cosmic Cyber" 视觉风格
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Send, Square, User, Zap, Sparkles, Cpu, PanelRight, X, Activity, Swords, Plus, Trash2, MessageSquare, ChevronDown, Pencil, Check, FolderOpen, Lock, ShieldAlert, ShieldCheck, Paperclip, Brain, Terminal, ArrowDown } from "lucide-react";
+import { Suspense, lazy, memo, useEffect, useMemo, useRef, useState } from "react";
+import { Bot, Send, Square, User, Zap, Sparkles, Cpu, PanelRight, X, Activity, Plus, Trash2, MessageSquare, ChevronDown, Pencil, Check, FolderOpen, Lock, ShieldAlert, ShieldCheck, Paperclip, Brain, Terminal, ArrowDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { usePanelResize, ResizeHandle } from "@/components/ui/resize-handle";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { desktopDir } from "@tauri-apps/api/path";
 import { cn } from "@/lib/utils";
 import { parseThinking } from "@/lib/parse-thinking";
 import { deriveArtifacts, type WorkArtifact } from "@/lib/work-artifacts";
@@ -14,31 +15,42 @@ import { deriveToolCallViews, type ToolCallView } from "@/lib/work-artifact-view
 import { WorkArtifacts } from "@/components/work-panel/WorkArtifacts";
 import { ChainNodeGraph } from "@/components/work-panel/ChainNodeGraph";
 import { deriveChainNodeGraph } from "@/components/work-panel/derive-chain-node-graph";
-import { WorkPanelIde } from "@/components/work-panel/WorkPanelIde";
 import { ToolCallCard } from "@/components/chat/ToolCallCard";
 import { WorkingStatusBar } from "@/components/chat/WorkingStatusBar";
 import { ensureModelLimitsLoaded } from "@/lib/llm/model-limits";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
-import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, toolExecutions, getRoleBindingsForConversation, projects as dbProjects, projectMemories as dbProjectMemories, type Conversation, type DbMessage, type ToolExecutionRow } from "@/lib/db";
+import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, toolExecutions, workflowRuns, getRoleBindingsForConversation, projects as dbProjects, projectMemories as dbProjectMemories, type Conversation, type DbMessage, type ToolExecutionRow } from "@/lib/db";
 import { type ToolConfirmRequest } from "@/lib/llm/tools";
 import { prepareWorkspaceToolRuntime, type WorkspaceToolRuntime } from "@/lib/llm/workspace-tool-runtime";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getApiKey } from "@/lib/keystore";
 import { streamWithFallback, toModelEndpoint, type ModelEndpoint, type StreamUsage } from "@/lib/llm/chat-fallback";
+import { runDynamicDebate, type DebateRoleConfig } from "@/lib/llm/debate-engine";
+import { realRunRole } from "@/lib/llm/debate-runner";
 import { pickBestModelForRole, rankFallbackModels, scoreModelForRole } from "@/lib/llm/model-capabilities";
 import { applyOutcomeForLatest } from "@/lib/llm/outcome-tracker";
 import { isCliProviderType } from "@/lib/llm/cli-protocol";
 import { classifyMessageComplexity } from "@/lib/llm/message-router";
-import { shouldRunBackgroundOrchestration } from "@/lib/llm/orchestration-gating";
-import { shouldSuggestDebate } from "@/lib/llm/debate-suggester";
+import { shouldAutoRunChain, shouldRunBackgroundOrchestration } from "@/lib/llm/orchestration-gating";
 import { routeMessage } from "@/lib/llm/smart-router";
 import { isSmartRoutingEnabled, usePermissionModeSetting } from "@/lib/app-settings";
 import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
 import { compressHistory, type ChatMsg } from "@/lib/llm/context-compressor";
 import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble, buildProjectMemoryPreamble } from "@/lib/llm/context-preamble";
+import { buildCorePreamble } from "@/lib/llm/cosmgrid-rules";
+import { buildWorkspacePreamble } from "@/lib/llm/workspace-context";
+import { getFsAdapter } from "@/lib/llm/tools/fs-adapter";
+import { buildMarkdownExportContent, detectDesktopExportIntent, sanitizeExportFileName } from "@/lib/llm/export-intent";
+import { createCodeTaskWorkflowSnapshot } from "@/lib/workflow/code-task-template";
+import { classifyTurnIntent } from "@/lib/workflow/intent-classifier";
+import { applyTurnIntentDecision, completeCurrentWorkflowNode } from "@/lib/workflow/reducer";
+import type { WorkflowSnapshot } from "@/lib/workflow/types";
 import { evaluateHarness, isClean, buildCorrectionPrompt, detectIntentNoToolCall, buildIntentNudgePrompt, type HarnessVerdict } from "@/lib/llm/harness/feedback";
 import { runChain as runChainImpl } from "@/lib/llm/chain-runner";
 import { type RoleId } from "@/lib/llm/orchestrator";
+
+const MarkdownText = lazy(() => import("@/components/chat/MarkdownText").then((m) => ({ default: m.MarkdownText })));
+const WorkPanelIde = lazy(() => import("@/components/work-panel/WorkPanelIde").then((m) => ({ default: m.WorkPanelIde })));
 import type { ReadRecord } from "@/lib/llm/harness/verify-claims";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
 import { ingestFile, ingestPath, toUserCoreMessage, parseAttachments, type Attachment } from "@/lib/llm/attachments";
@@ -57,7 +69,6 @@ import {
   computeChain,
   withChainPlan,
   ROLE_IDS,
-  ROLE_LABELS,
   type OrchestrationState,
   type OrchestrationTurn,
   type OrchestrationChange,
@@ -70,6 +81,8 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /** 消息创建时间（ISO）——把工具动作按时间归属到对应那一轮，对话流逐节点展示 */
+  createdAt?: string;
   /** 工作面板用：这一轮实际用了哪个模型（展示名） */
   modelLabel?: string;
   /** 是否因限额/失败自动切到了备用模型 */
@@ -87,7 +100,7 @@ interface ChatMessage {
   /** Harness 阶段1：回答后的真实性校验结果——模型引用了文件但没真调 read、或吐了伪工具调用文本 */
   harness?: HarnessWarning;
   /** 阶段 E2b：哪个角色产出（chain 接力消息设此字段；leader / 普通 assistant 留空）。
-   *  - 渲染时由 messageRenderer 用 ROLE_LABELS[roleId] 生成前缀（▶ 角色），不再烤进 content
+   *  - 渲染时由 messageRenderer 用 i18n 角色标签生成前缀（▶ 角色），不再烤进 content
    *  - optional 向后兼容：旧消息没此字段 → render 走旧路
    *  - 进度条 ChainProgressBar 用此字段 + chainPlan + executedRoles 派生状态（单一来源） */
   roleId?: RoleId;
@@ -142,7 +155,7 @@ function dbMessagesToChat(hist: DbMessage[], models: ModelListItem[]): ChatMessa
   for (const m of hist) {
     if (m.role === "note") {
       const receipt = parseReceipt(m.content);
-      if (receipt) out.push({ id: m.id, role: "assistant", content: "", kind: "receipt", receipt });
+      if (receipt) out.push({ id: m.id, role: "assistant", content: "", createdAt: m.createdAt, kind: "receipt", receipt });
       continue;
     }
     if (m.role !== "user" && m.role !== "assistant") continue;
@@ -150,6 +163,7 @@ function dbMessagesToChat(hist: DbMessage[], models: ModelListItem[]): ChatMessa
       id: m.id,
       role: m.role,
       content: m.content,
+      createdAt: m.createdAt,
       kind: "chat",
       modelLabel: (m.modelId ? models.find((x) => x.id === m.modelId)?.displayName : undefined) ?? undefined,
       usage: m.outputTokens > 0 ? { inputTokens: m.inputTokens, outputTokens: m.outputTokens } : undefined,
@@ -226,6 +240,7 @@ const MessageItem = memo(function MessageItem({
   chainStep,
   chainDone,
   toolCalls,
+  modelLabel,
 }: {
   role: "user" | "assistant";
   text: string;
@@ -240,9 +255,18 @@ const MessageItem = memo(function MessageItem({
   chainStep?: { index: number; total: number };
   chainDone?: boolean;
   toolCalls?: ToolCallView[];
+  modelLabel?: string;
 }) {
   const { t } = useTranslation();
   const isAssistant = role === "assistant";
+  // 步骤卡折叠：执行中（流式这一轮）默认展开看进度，结束后自动折叠成「已处理 N 步」一行（对齐 Atoms）。
+  const [stepsOpen, setStepsOpen] = useState(isStreaming);
+  useEffect(() => { setStepsOpen(isStreaming); }, [isStreaming]);
+  const nodeLabel = isAssistant
+    ? roleId
+      ? t(`chat.workPanel.chainSteps.${roleId}`)
+      : t("chat.workPanel.chainSteps.leader")
+    : t("chat.userLabel");
   // 助手消息：把 <think> 推理切成折叠块，正文照常显示；用户消息不解析
   const segments = isAssistant ? parseThinking(text) : null;
   // 当前可见的正文（剔除思考块后）——决定底部是显示"思考中"还是"回复中"
@@ -279,8 +303,13 @@ const MessageItem = memo(function MessageItem({
               // 助手名要保留大小写 "CosmGrid Ai"，不强制大写；用户标签是中文不受影响
               !isAssistant && "uppercase",
             )}>
-              {isAssistant && roleId ? ROLE_LABELS[roleId] : isAssistant ? t("chat.assistantLabel") : t("chat.userLabel")}
+              {nodeLabel}
             </span>
+            {isAssistant && modelLabel && (
+              <span className="text-[10px] font-medium text-muted-foreground/45">
+                · {modelLabel}
+              </span>
+            )}
             {isAssistant && roleId && chainStep && (
               <span className="text-[9px] font-mono rounded-full border border-primary/15 bg-primary/10 text-primary/80 px-2 py-0.5">
                 {chainDone ? "✓" : "▶"} {chainStep.index}/{chainStep.total}
@@ -304,21 +333,37 @@ const MessageItem = memo(function MessageItem({
           )}
           {isAssistant && toolCalls && toolCalls.length > 0 && (
             <div className="space-y-1">
-              {toolCalls.slice(-8).map((call) => (
-                <ToolCallCard key={call.id} call={call} />
-              ))}
+              <button
+                type="button"
+                onClick={() => setStepsOpen((o) => !o)}
+                className="flex items-center gap-1.5 text-[11px] font-bold text-muted-foreground/70 hover:text-foreground transition-colors"
+              >
+                <Check className="w-3 h-3 text-emerald-500 shrink-0" />
+                <span>{t("chat.steps.processed", { count: toolCalls.length })}</span>
+                <ChevronDown className={cn("w-3 h-3 transition-transform", stepsOpen && "rotate-180")} />
+              </button>
+              {stepsOpen && (
+                <div className="space-y-1">
+                  {toolCalls.slice(-20).map((call) => (
+                    <ToolCallCard key={call.id} call={call} />
+                  ))}
+                </div>
+              )}
             </div>
           )}
           <div
             className={cn(
-              "text-sm leading-relaxed whitespace-pre-wrap break-words",
-              !isAssistant ? "text-foreground font-medium" : "text-foreground/90",
+              "text-sm leading-relaxed break-words",
+              // 助手正文走 Markdown 渲染（自己处理换行）；用户输入纯文本，保留换行
+              !isAssistant ? "text-foreground font-medium whitespace-pre-wrap" : "text-foreground/90",
             )}
           >
             {segments
               ? segments.map((s, i) =>
                   s.type === "text" ? (
-                    <span key={i}>{s.content}</span>
+                    <Suspense key={i} fallback={<span className="whitespace-pre-wrap">{s.content}</span>}>
+                      <MarkdownText content={s.content} />
+                    </Suspense>
                   ) : (
                     <CollapsibleBlock
                       key={i}
@@ -573,13 +618,11 @@ function ConversationSwitcher({
 type PendingSend = { text: string; attachments?: Attachment[] };
 
 interface ChatPageProps {
-  /** 用户在输入框写下"多方案权衡"类问题时，点"开对弈"会带着这条话题跳到对弈页 */
-  onOpenDebate?: (topic: string) => void;
   /** 当前是否停留在聊天页（所有页面常驻挂载，靠这个判断"切回来了"以刷新模型列表） */
   active?: boolean;
 }
 
-export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
+export function ChatPage({ active = true }: ChatPageProps = {}) {
   const { t } = useTranslation();
   const { confirm, alert } = useConfirm();
   const [availableModels, setAvailableModels] = useState<ModelListItem[]>([]);
@@ -602,8 +645,8 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   const [harnessNotice, setHarnessNotice] = useState<string | null>(null);
   const [lastUsage, setLastUsage] = useState<ChatUsage | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // 右侧工作面板默认收起（内容偏重；实时动作已内联在对话流，不靠右侧展示）。
   const [panelOpen, setPanelOpen] = useState(false);
-  const [showDebateHint, setShowDebateHint] = useState(false);
 
   // 工作文件夹 + 工具权限档（产品真北：让主对话能在本地真干活，不只是聊天）。
   // permissionMode：read=只读(读/搜/git-read) | confirm=写操作逐个确认 | auto=写操作不弹窗。
@@ -623,9 +666,16 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   const [chainSkippedRoles, setChainSkippedRoles] = useState<RoleId[]>([]);
   const [chainAbortedRole, setChainAbortedRole] = useState<RoleId | null>(null);
   const [chainRunning, setChainRunning] = useState(false);
+  // 工作流快照是意图识别的当前状态；右侧协作链只读取被激活的动态节点，不展示固定模板。
+  const [workflowSnapshot, setWorkflowSnapshot] = useState<WorkflowSnapshot | null>(null);
+  const workflowSnapshotRef = useRef<WorkflowSnapshot | null>(null);
   function applyOrchestration(next: OrchestrationState | null) {
     orchestrationRef.current = next;
     setOrchestration(next);
+  }
+  function applyWorkflowSnapshot(next: WorkflowSnapshot | null) {
+    workflowSnapshotRef.current = next;
+    setWorkflowSnapshot(next);
   }
 
   function applyToolExecutionRows(rows: ToolExecutionRow[]) {
@@ -636,6 +686,15 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
   function clearToolExecutionViews() {
     setArtifacts([]);
     setToolCallViews([]);
+  }
+
+  async function loadWorkflowForConversation(id: string) {
+    try {
+      const activeRun = await workflowRuns.getActiveByConversation(id);
+      applyWorkflowSnapshot(activeRun?.snapshot ?? null);
+    } catch {
+      applyWorkflowSnapshot(null);
+    }
   }
   // 镜像当前会话 id，供后台编排回调判断"用户是否已切走会话"（避免回执落到错的会话）
   const conversationIdRef = useRef<string | null>(null);
@@ -824,6 +883,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         } catch {
           applyOrchestration(null);
         }
+        await loadWorkflowForConversation(activeConv.id);
         setLoadError(null);
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : t("chat.loadError"));
@@ -904,6 +964,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       setMessages([]);
       clearToolExecutionViews();
       applyOrchestration(null);
+      applyWorkflowSnapshot(null);
       setPendingQueue([]);
       setStreamError(null);
       setSwitchNotice(null);
@@ -941,6 +1002,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     } catch {
       applyOrchestration(null);
     }
+    await loadWorkflowForConversation(id);
   }
 
   async function handleDeleteConversation(id: string) {
@@ -962,6 +1024,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       setArtifacts([]);
       setToolCallViews([]);
       applyOrchestration(null);
+      applyWorkflowSnapshot(null);
       return;
     }
     setConversationList(remaining);
@@ -987,6 +1050,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       } catch {
         applyOrchestration(null);
       }
+      await loadWorkflowForConversation(next.id);
     }
   }
 
@@ -1062,6 +1126,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     // 拖入的文件夹：绑定为 AI 的工作文件夹（本次工具调用直接用这个路径，不靠异步 state）
     const folderAtt = attachments?.find((a) => a.kind === "folder");
     if (folderAtt) setWorkspacePath(folderAtt.path);
+    const effectiveWorkspace = folderAtt?.path ?? workspacePath;
 
     // 主对话落库：确保会话存在，用户消息先写库（关 app/崩溃也不丢）
     let convId = conversationId;
@@ -1100,11 +1165,296 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         .catch(() => {});
     };
 
-    const userMsg: ChatMessage = { id: userId, role: "user", content: text, ...(attachments?.length ? { attachments } : {}) };
-    const assistantId = crypto.randomUUID();
-    const assistantMsg: ChatMessage = { id: assistantId, role: "assistant", content: "", modelLabel: model.displayName ?? model.name };
+    let turnWorkflowSnapshot = workflowSnapshotRef.current;
+    let turnWorkflowRunId: string | null = turnWorkflowSnapshot?.runId ?? null;
+    let shouldCompleteWorkflowNode = false;
+    if (convId) {
+      try {
+        if (!turnWorkflowSnapshot) {
+          const activeRun = await workflowRuns.getActiveByConversation(convId);
+          turnWorkflowSnapshot = activeRun?.snapshot ?? null;
+          if (turnWorkflowSnapshot) applyWorkflowSnapshot(turnWorkflowSnapshot);
+        }
 
+        const decision = classifyTurnIntent({
+          text,
+          activeRun: turnWorkflowSnapshot,
+          recentTurnIds: [userId],
+        });
+
+        if (decision.action === "start_run") {
+          const currentConversation = conversationList.find((c) => c.id === convId) ?? null;
+          const runId = crypto.randomUUID();
+          const snapshot = createCodeTaskWorkflowSnapshot({
+            runId,
+            conversationId: convId,
+            projectId: currentConversation?.projectId ?? null,
+            workspacePath: folderAtt?.path ?? workspacePath,
+            objective: decision.patch?.objective ?? text,
+            executionMode: decision.patch?.executionMode,
+          });
+          await workflowRuns.create({ conversationId: convId, projectId: currentConversation?.projectId ?? null, snapshot });
+          turnWorkflowSnapshot = snapshot;
+          turnWorkflowRunId = runId;
+          shouldCompleteWorkflowNode = true;
+          applyWorkflowSnapshot(snapshot);
+        } else if (turnWorkflowSnapshot && decision.action !== "answer_only") {
+          const nextSnapshot = applyTurnIntentDecision({ snapshot: turnWorkflowSnapshot, decision });
+          await workflowRuns.saveSnapshot({
+            runId: nextSnapshot.runId,
+            snapshot: nextSnapshot,
+            eventType: "workflow.intent_applied",
+            eventPayload: { decision },
+          });
+          turnWorkflowSnapshot = nextSnapshot;
+          turnWorkflowRunId = nextSnapshot.runId;
+          shouldCompleteWorkflowNode = true;
+          applyWorkflowSnapshot(nextSnapshot);
+        } else if (turnWorkflowRunId) {
+          await workflowRuns.appendEvent({
+            workflowRunId: turnWorkflowRunId,
+            conversationId: convId,
+            eventType: "workflow.intent_observed",
+            payload: { decision },
+          });
+        }
+      } catch {
+        // workflow 是辅助状态，失败不能阻断主对话。
+      }
+    }
+
+    const userMsg: ChatMessage = { id: userId, role: "user", content: text, createdAt: new Date().toISOString(), ...(attachments?.length ? { attachments } : {}) };
     const newMessages = [...messages, userMsg];
+    const exportIntent = detectDesktopExportIntent(text);
+    if (exportIntent?.target === "desktop") {
+      const previousAssistant = [...messages]
+        .reverse()
+        .find((m) => m.role === "assistant" && m.kind !== "receipt" && m.content.trim());
+
+      if (previousAssistant) {
+        const currentConversation = convId ? conversationList.find((c) => c.id === convId) : null;
+        const activeWorkspace = folderAtt?.path ?? workspacePath;
+        const workspaceName = activeWorkspace?.split("/").filter(Boolean).pop();
+        const title = workspaceName || currentConversation?.title || "Cosmgrid 导出";
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        const fileName = `${sanitizeExportFileName(title)}-方案-${stamp}.md`;
+        const desktop = (await desktopDir()).replace(/\/+$/, "");
+        const filePath = `${desktop}/${fileName}`;
+        const content = buildMarkdownExportContent({
+          title,
+          userRequest: text,
+          content: previousAssistant.content,
+          createdAt: new Date(),
+        });
+
+        stickToBottomRef.current = true;
+        setMessages(newMessages);
+        setStreamError(null);
+        setSwitchNotice(null);
+        setCacheNotice(null);
+
+        const projectId = currentConversation?.projectId ?? null;
+        const started = Date.now();
+        if (permissionMode === "read") {
+          const deniedText = "当前是只读模式，未保存到桌面。切换到“确认写”或“自动”后再试。";
+          const deniedMsg: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: deniedText };
+          setMessages([...newMessages, deniedMsg]);
+          persistAssistant(deniedText, null);
+          if (convId) {
+            await toolExecutions.create({
+              projectId,
+              conversationId: convId,
+              toolName: "write",
+              input: JSON.stringify({ file_path: filePath, content }),
+              output: deniedText,
+              status: "denied",
+              userConfirmed: false,
+              reversible: false,
+              durationMs: Date.now() - started,
+            }).catch(() => "");
+            applyToolExecutionRows(await toolExecutions.listByConversation(convId).catch(() => []));
+          }
+          return;
+        }
+
+        const approved = permissionMode === "auto"
+          ? true
+          : await requestConfirm({ toolName: "write", summary: `保存到桌面：${fileName}` });
+        if (!approved) {
+          const cancelled = "已取消保存到桌面。";
+          const cancelledMsg: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: cancelled };
+          setMessages([...newMessages, cancelledMsg]);
+          persistAssistant(cancelled, null);
+          if (convId) {
+            await toolExecutions.create({
+              projectId,
+              conversationId: convId,
+              toolName: "write",
+              input: JSON.stringify({ file_path: filePath, content }),
+              output: "用户取消保存。",
+              status: "denied",
+              userConfirmed: false,
+              reversible: false,
+              durationMs: Date.now() - started,
+            }).catch(() => "");
+            applyToolExecutionRows(await toolExecutions.listByConversation(convId).catch(() => []));
+          }
+          return;
+        }
+
+        let assistantText = "";
+        try {
+          const fs = getFsAdapter();
+          await fs.writeTextFile(filePath, content);
+          assistantText = `已保存到桌面：${filePath}`;
+          if (convId) {
+            await toolExecutions.create({
+              projectId,
+              conversationId: convId,
+              toolName: "write",
+              input: JSON.stringify({ file_path: filePath, content }),
+              output: assistantText,
+              status: "success",
+              userConfirmed: permissionMode !== "auto",
+              reversible: false,
+              durationMs: Date.now() - started,
+            }).catch(() => "");
+            applyToolExecutionRows(await toolExecutions.listByConversation(convId).catch(() => []));
+          }
+        } catch (err) {
+          assistantText = `保存失败：${err instanceof Error ? err.message : String(err)}`;
+          if (convId) {
+            await toolExecutions.create({
+              projectId,
+              conversationId: convId,
+              toolName: "write",
+              input: JSON.stringify({ file_path: filePath, content }),
+              output: assistantText,
+              status: "error",
+              userConfirmed: permissionMode !== "auto",
+              reversible: false,
+              durationMs: Date.now() - started,
+            }).catch(() => "");
+            applyToolExecutionRows(await toolExecutions.listByConversation(convId).catch(() => []));
+          }
+        }
+
+        const assistantActionMsg: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: assistantText };
+        setMessages([...newMessages, assistantActionMsg]);
+        persistAssistant(assistantText, null);
+        return;
+      }
+    }
+
+    const currentWorkflowNode = turnWorkflowSnapshot?.nodes.find((n) => n.id === turnWorkflowSnapshot?.currentNodeId) ?? null;
+    const shouldRunDebateTurn = currentWorkflowNode?.phase === "debate" && turnWorkflowSnapshot?.intent.debateRequested;
+    if (shouldRunDebateTurn) {
+      const assistantId = crypto.randomUUID();
+      const debateMsg: ChatMessage = {
+        id: assistantId,
+        role: "assistant",
+        content: t("chat.debate.running"),
+        createdAt: new Date().toISOString(),
+        modelLabel: t("chat.workPanel.dynamicModelPool"),
+      };
+      stickToBottomRef.current = true;
+      setPanelOpen(true);
+      setMessages([...newMessages, debateMsg]);
+      setIsStreaming(true);
+      setStreamError(null);
+      setSwitchNotice(null);
+      setCacheNotice(null);
+
+      try {
+        const participants = await buildDebateParticipants({ primaryModel: model, effectiveWorkspace, maxParticipants: 4 });
+        if (participants.length === 0) {
+          throw new Error(t("chat.debate.noParticipants"));
+        }
+
+        const topic = [...messages.slice(-6), userMsg]
+          .filter((m) => m.kind !== "receipt")
+          .map((m) => `${m.role === "user" ? "用户" : "AI"}：${m.content.slice(0, 1600)}`)
+          .join("\n\n");
+        const result = await runDynamicDebate({ topic, participants, maxParticipants: 4 }, realRunRole);
+        const nameFor = (modelId: string) => {
+          const found = availableModels.find((m) => m.id === modelId);
+          return found?.displayName || found?.name || modelId;
+        };
+        const totalUsage = result.rounds.reduce(
+          (acc, round) => ({
+            inputTokens: acc.inputTokens + round.inputTokens,
+            outputTokens: acc.outputTokens + round.outputTokens,
+          }),
+          { inputTokens: 0, outputTokens: 0 },
+        );
+        const finalContent = [
+          participants.length === 1
+            ? t("chat.debate.singleModelNotice")
+            : t("chat.debate.completed", { count: participants.length }),
+          "",
+          "## 最终判断",
+          result.finalSolution,
+          "",
+          "## 博弈过程",
+          ...result.rounds.map((round, index) => [
+            `### ${index + 1}. ${nameFor(round.modelId)} · ${round.role}`,
+            round.content,
+          ].join("\n")),
+        ].join("\n");
+
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantId ? { ...m, content: finalContent, usage: { ...totalUsage, toolCallCount: 0 } } : m)),
+        );
+        persistAssistant(finalContent, result.rounds.at(-1)?.modelId ?? model.id, totalUsage);
+
+        if (convId && turnWorkflowSnapshot && turnWorkflowRunId) {
+          const nextWorkflow = completeCurrentWorkflowNode({
+            snapshot: turnWorkflowSnapshot,
+            summary: result.finalSolution.slice(0, 1200),
+          });
+          await workflowRuns.saveSnapshot({
+            runId: turnWorkflowRunId,
+            snapshot: nextWorkflow,
+            eventType: "workflow.debate_completed",
+            eventPayload: {
+              participantModelIds: participants.map((p) => p.modelId),
+              rounds: result.rounds.map((r) => ({ role: r.role, modelId: r.modelId })),
+            },
+          });
+          applyWorkflowSnapshot(nextWorkflow);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : t("chat.debate.failed");
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantId ? { ...m, content: message } : m)),
+        );
+        persistAssistant(message, null);
+        setStreamError(message);
+        if (convId && turnWorkflowSnapshot && turnWorkflowRunId) {
+          const failedWorkflow: WorkflowSnapshot = {
+            ...turnWorkflowSnapshot,
+            status: "failed",
+            nodes: turnWorkflowSnapshot.nodes.map((n) =>
+              n.id === turnWorkflowSnapshot.currentNodeId ? { ...n, status: "failed" } : n,
+            ),
+          };
+          await workflowRuns.saveSnapshot({
+            runId: turnWorkflowRunId,
+            snapshot: failedWorkflow,
+            eventType: "workflow.debate_failed",
+            eventPayload: { message },
+          }).catch(() => {});
+          applyWorkflowSnapshot(failedWorkflow);
+        }
+      } finally {
+        setIsStreaming(false);
+      }
+      return;
+    }
+
+    const assistantId = crypto.randomUUID();
+    const assistantMsg: ChatMessage = { id: assistantId, role: "assistant", content: "", createdAt: new Date().toISOString(), modelLabel: model.displayName ?? model.name };
+
     // 用户主动发消息：强制贴底，这一轮回答自动跟随滚动
     stickToBottomRef.current = true;
     setMessages([...newMessages, assistantMsg]);
@@ -1116,8 +1466,16 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     const taskRole = classifyMessageComplexity(text);
     const turnStartedAt = new Date().toISOString();
 
-    // v0.9 阶段7：智能路由开启时先查语义缓存——命中则秒回、0 成本、跳过 LLM
-    if (smart) {
+    // 缓存准入门：只对「没绑工作文件夹 + 纯问答意图」开放。
+    // - 绑了工作文件夹 → 答案依赖该项目的实时文件，跨项目会把 A 的旧答案错给 B；
+    // - 干活类意图（看项目/做方案/执行/验证）→ 必须真跑工具，不能重播上次的叙述文字。
+    // 只有「什么是 X / 为什么 Y」这类纯知识问答才缓存，省 token 又不会乱命中。
+    const cacheWorkspace = folderAtt?.path ?? workspacePath;
+    const cacheIntent = classifyTurnIntent({ text, activeRun: workflowSnapshotRef.current });
+    const cacheEligible = smart && !cacheWorkspace && cacheIntent.action === "answer_only";
+
+    // v0.9 阶段7：纯问答先查语义缓存——命中则秒回、0 成本、跳过 LLM
+    if (cacheEligible) {
       try {
         const hit = await lookupCache(text);
         if (hit) {
@@ -1137,10 +1495,13 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
 
     const controller = new AbortController();
     abortRef.current = controller;
+    // 拖入文件夹时，本次工具调用直接用 folder 路径（不靠异步 setWorkspacePath 更新）。
+    // CLI 子进程也必须用这个 cwd，否则会从 Cosmgrid-Agent 开发目录读取记忆和文件。
 
     let primary;
     try {
       primary = toModelEndpoint(model, cred, apiKey);
+      if (primaryIsCli && effectiveWorkspace) primary.workingDirectory = effectiveWorkspace;
     } catch (err) {
       setStreamError(err instanceof Error ? err.message : t("chat.constructError"));
       setIsStreaming(false);
@@ -1166,33 +1527,37 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         fbKey = k;
       }
       try {
-        chain.push(toModelEndpoint(cand, fbCred, fbKey));
+        const endpoint = toModelEndpoint(cand, fbCred, fbKey);
+        if (fbIsCli && effectiveWorkspace) endpoint.workingDirectory = effectiveWorkspace;
+        chain.push(endpoint);
       } catch {
         // 备用模型缺 provider 类型等 → 跳过它，不影响主流程
       }
     }
 
     // 工作文件夹已绑 + 主模型非 CLI → 给模型挂文件工具（读/搜/git-read，写/bash 视权限档）。
-    // CLI 模型（claude/codex spawn）自带工具，不挂；构造失败则退化为纯聊天，不阻断。
-    // 拖入文件夹时，本次工具调用直接用 folder 路径（不靠异步 setWorkspacePath 更新）
-    const effectiveWorkspace = folderAtt?.path ?? workspacePath;
+    // CLI 模型（claude/codex spawn）自带工具，不挂，但仍必须注入工作文件夹说明 + cwd。
     let tools: WorkspaceToolRuntime["tools"];
     let workspacePreamble: string | null = null;
     let projectMemoryPreamble: string | null = null;
     let crossProjectPreamble: string | null = null;
 
-    if (effectiveWorkspace && !primaryIsCli) {
-      const includeWrite = permissionMode !== "read";
-      const runtime = await prepareWorkspaceToolRuntime({
-        workspacePath: effectiveWorkspace,
-        includeWrite,
-        conversationId: conversationId ?? undefined,
-        // auto 档：写操作不弹窗直接放行；confirm 档：每个写操作走 requestConfirm 等用户按确认。
-        confirm: permissionMode === "auto" ? async () => true : requestConfirm,
-        includePreamble: true,
-      });
-      tools = runtime.tools;
-      workspacePreamble = runtime.workspacePreamble;
+    if (effectiveWorkspace) {
+      if (primaryIsCli) {
+        workspacePreamble = await buildWorkspacePreamble(effectiveWorkspace);
+      } else {
+        const includeWrite = permissionMode !== "read";
+        const runtime = await prepareWorkspaceToolRuntime({
+          workspacePath: effectiveWorkspace,
+          includeWrite,
+          conversationId: conversationId ?? undefined,
+          // auto 档：写操作不弹窗直接放行；confirm 档：每个写操作走 requestConfirm 等用户按确认。
+          confirm: permissionMode === "auto" ? async () => true : requestConfirm,
+          includePreamble: true,
+        });
+        tools = runtime.tools;
+        workspacePreamble = runtime.workspacePreamble;
+      }
     }
 
     const currentProjectId =
@@ -1218,6 +1583,8 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     // 注意：编排者折叠回执（kind==="receipt"）绝不进 prompt——它是给用户看的工作记录，不是对话内容。
     const tooLargeNotice = (name: string) => t("chat.attachments.fileTooLarge", { name });
     let outgoing: ChatMsg[] = [
+      // CosmGrid 核心规则（灵魂）放最前：用户画像 + 输出风格 + 工具纪律 + 环境。所有模型先读这条。
+      { role: "system", content: buildCorePreamble(effectiveWorkspace) },
       { role: "system", content: buildTimePreamble() },
       ...(projectMemoryPreamble ? [{ role: "system" as const, content: projectMemoryPreamble }] : []),
       ...(crossProjectPreamble ? [{ role: "system" as const, content: crossProjectPreamble }] : []),
@@ -1258,6 +1625,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     let lastUsage: ChatUsage | undefined;
     let lastModelId: string | null = model.id;
     let lastResultModelId: string | undefined;
+    let lastResolvedModelLabel: string | undefined;
     // 阶段 H：本轮真实工具调用次数。nudge 触发条件之一（0 + 动手意图 → 催一次）
     let lastToolCallCount = 0;
     // 阶段 H：本轮 finishReason。nudge 触发条件之一（必须是 "stop"，abort/tool-error 不催）
@@ -1294,6 +1662,12 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
             onStatus: (status) => {
               setSwitchNotice(status);
             },
+            onResolvedModel: (actualModelName) => {
+              lastResolvedModelLabel = actualModelName;
+              setMessages((prev) =>
+                prev.map((m) => (m.id === assistantId ? { ...m, modelLabel: actualModelName } : m)),
+              );
+            },
             onUsage: (usage, usedModel, finishReason) => {
               // 不在此落库——闭环可能重答，只落最终版（循环结束后统一 persist）
               lastUsage = {
@@ -1306,7 +1680,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
               lastFinishReason = finishReason;
               setLastUsage(lastUsage ?? null);
               setMessages((prev) =>
-                prev.map((m) => (m.id === assistantId ? { ...m, usage: lastUsage, modelLabel: usedModel.displayLabel ?? usedModel.modelName } : m)),
+                prev.map((m) => (m.id === assistantId ? { ...m, usage: lastUsage, modelLabel: lastResolvedModelLabel ?? usedModel.displayLabel ?? usedModel.modelName } : m)),
               );
             },
           },
@@ -1366,9 +1740,30 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       }
       // 最终答案统一落库（闭环只落最终版，不重复落被纠正掉的首版）
       persistAssistant(fullContent, lastModelId, lastUsage);
+      if (convId && shouldCompleteWorkflowNode && turnWorkflowSnapshot && turnWorkflowRunId && fullContent && !controller.signal.aborted) {
+        try {
+          const nextWorkflow = completeCurrentWorkflowNode({
+            snapshot: turnWorkflowSnapshot,
+            summary: fullContent.slice(0, 1200),
+          });
+          await workflowRuns.saveSnapshot({
+            runId: turnWorkflowRunId,
+            snapshot: nextWorkflow,
+            eventType: "workflow.node_completed",
+            eventPayload: {
+              nodeId: turnWorkflowSnapshot.currentNodeId,
+              summaryPreview: fullContent.slice(0, 240),
+            },
+          });
+          applyWorkflowSnapshot(nextWorkflow);
+        } catch {
+          // workflow 状态更新失败不影响正常回答。
+        }
+      }
       setHarnessNotice(null);
-      // v0.9 阶段7：成功回答写入语义缓存（isCacheable 内部会过滤时间敏感/代码答案）
-      if (smart && fullContent && !controller.signal.aborted) {
+      // v0.9 阶段7：成功回答写入语义缓存。准入门已挡掉绑文件夹/干活类请求，
+      // 这里只会写纯问答；isCacheable 再过滤时间敏感/含代码答案。
+      if (cacheEligible && fullContent && !controller.signal.aborted) {
         void writeCache(text, fullContent, lastResultModelId, taskRole).catch(() => {});
       }
     } catch (err) {
@@ -1382,6 +1777,10 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     } finally {
       setIsStreaming(false);
       abortRef.current = null;
+      // 把本轮真实工具动作（read/write/bash…）刷进「实时动作摄像头」时间线（中断也刷已执行的）
+      if (convId) {
+        void toolExecutions.listByConversation(convId).then(applyToolExecutionRows).catch(() => {});
+      }
     }
 
     // 后台滚动编排：本轮答完后用便宜模型重判节点 + 按节点定模型。非阻塞、失败静默、不进 prompt。
@@ -1395,6 +1794,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       void runBackgroundOrchestration(convId, [...newMessages, { ...assistantMsg, content: fullContent }], {
         onChainPlan: ({ chain, roleBindings: bindings }) => {
           if (chain.length === 0 || controller.signal.aborted) return;
+          if (!shouldAutoRunChain({ text, chain })) return;
           // E2a+E2b：chain 接力执行。每跳新插一条 assistant 消息（roleId/chainStep/chainDone 字段，
           // 前缀▶/✓由渲染层从 roleId 派生，不烤进 content —— E2b 用户要求改）
           // + chain 运行时状态（chainRunning/executedRoles/skippedRoles/abortedRole）驱动进度条
@@ -1552,6 +1952,8 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
       // 每跳 messageId + content 索引（流式 delta 追加用）
       const roleMsgIds: Partial<Record<RoleId, string>> = {};
       const roleMsgContents: Partial<Record<RoleId, string>> = {};
+      const chainStepLabel = (role: RoleId) => t(`chat.workPanel.chainSteps.${role}`);
+      const chainPath = [t("chat.workPanel.chainSteps.leader"), ...args.chain.map(chainStepLabel)].join(" → ");
 
       // E2b：链式接力独立占用一个 abort 引用；主回答结束后 abortRef 会清空，不能再拿它控制 chain。
       chainAbortRef.current = args.controller;
@@ -1575,8 +1977,8 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
             setMessages((prev) => [
               ...prev,
               {
-                id, role: "assistant",
-                content: t("chat.orchestrator.chainStarted", { total }),
+                id, role: "assistant", createdAt: new Date().toISOString(),
+                content: t("chat.orchestrator.chainStarted", { total, path: chainPath }),
                 kind: "receipt",
               },
             ]);
@@ -1589,7 +1991,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
             setMessages((prev) => [
               ...prev,
               {
-                id, role: "assistant",
+                id, role: "assistant", createdAt: new Date().toISOString(),
                 content: "",
                 roleId: role,
                 chainStep: { index: idx + 1, total },
@@ -1663,7 +2065,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         setMessages((prev) => [
           ...prev,
           {
-            id, role: "assistant",
+            id, role: "assistant", createdAt: new Date().toISOString(),
             content: t("chat.orchestrator.chainStopped", { role: result.stoppedAt! }),
             kind: "receipt",
           },
@@ -1673,8 +2075,8 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         setMessages((prev) => [
           ...prev,
           {
-            id, role: "assistant",
-            content: t("chat.orchestrator.chainCompleted", { count: result.executedRoles.length }),
+            id, role: "assistant", createdAt: new Date().toISOString(),
+            content: t("chat.orchestrator.chainCompleted", { count: result.executedRoles.length, path: chainPath }),
             kind: "receipt",
           },
         ]);
@@ -1753,6 +2155,46 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     if (nodeId === state.currentNodeId) setSelectedModelId(modelId);
   }
 
+  async function buildDebateParticipants(args: {
+    primaryModel: ModelListItem;
+    effectiveWorkspace: string | null;
+    maxParticipants?: number;
+  }): Promise<DebateRoleConfig[]> {
+    const limit = args.maxParticipants ?? 4;
+    const ordered = [
+      args.primaryModel,
+      ...rankFallbackModels(args.primaryModel, availableModels, "planning", Math.max(1, limit - 1)),
+    ];
+    const seen = new Set<string>();
+    const participants: DebateRoleConfig[] = [];
+
+    for (const candidate of ordered) {
+      if (seen.has(candidate.id)) continue;
+      seen.add(candidate.id);
+      const cred = credentials.find((c) => c.providerId === candidate.providerId);
+      if (!cred) continue;
+      const providerType = candidate.provider?.type ?? "";
+      if (!providerType) continue;
+      const isCli = isCliProviderType(providerType);
+      const key = isCli ? "" : await getApiKey(cred.id);
+      if (!isCli && !key) continue;
+      participants.push({
+        role: `participant_${participants.length + 1}`,
+        modelId: candidate.id,
+        modelName: candidate.name,
+        providerType,
+        providerId: candidate.providerId,
+        apiCredentialId: cred.id,
+        apiKey: key ?? "",
+        ...(cred.baseUrl ? { baseUrl: cred.baseUrl } : {}),
+        ...(isCli && args.effectiveWorkspace ? { workingDirectory: args.effectiveWorkspace } : {}),
+      });
+      if (participants.length >= limit) break;
+    }
+
+    return participants;
+  }
+
   async function handleSmartPick() {
     const title = t("chat.smartPickResult.title");
     // 没有模型可推荐：明确告知去配置
@@ -1825,7 +2267,6 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     setPendingQueue((q) => [...q, { text, ...(atts.length ? { attachments: atts } : {}) }]);
     setDraftAttachments([]);
     (e.currentTarget as HTMLFormElement).reset();
-    setShowDebateHint(false);
   }
 
   // 拖拽/粘贴 → 附件草稿。图片走多模态，文本文件读内容贴 prompt，其它提示不支持
@@ -1913,8 +2354,32 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
         durationMs: 0,
       }
     : latestToolCalls[latestToolCalls.length - 1];
+
+  // 把工具动作按时间归属到对应那一轮的 assistant 消息：每条消息只显示「它那一轮」干了什么，
+  // 对话流里就成了「一个节点跟着一个节点」——而不是全堆在最后一条上。
+  // 窗口 = [该 assistant 的 createdAt, 其后第一条带时间戳消息的 createdAt)。
+  const toolCallsByMessage = useMemo(() => {
+    const map = new Map<string, ToolCallView[]>();
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      if (m.role !== "assistant" || m.kind === "receipt" || !m.createdAt) continue;
+      const start = m.createdAt;
+      let end: string | null = null;
+      for (let j = i + 1; j < messages.length; j++) {
+        const c = messages[j].createdAt;
+        if (c) { end = c; break; }
+      }
+      map.set(
+        m.id,
+        toolCallViews.filter((tc) => tc.createdAt >= start && (end === null || tc.createdAt < end)),
+      );
+    }
+    return map;
+  }, [messages, toolCallViews]);
+
   const chainNodeGraph = useMemo(() => deriveChainNodeGraph({
     orchestration,
+    workflowSnapshot,
     selectedModelId,
     selectedModelName: selectedModel?.displayName ?? selectedModel?.name ?? selectedModelId,
     availableModels,
@@ -1927,6 +2392,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
     selectedModelId,
     selectedModel?.displayName,
     selectedModel?.name,
+    workflowSnapshot,
     availableModels,
     chainRunning,
     chainExecutedRoles,
@@ -2026,7 +2492,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
             variant="ghost"
             onClick={() => setPanelOpen((v) => !v)}
             title={t("chat.workPanel.title")}
-            className={cn("h-9 w-9 rounded-xl", panelOpen ? "bg-primary/10 text-primary" : "hover:bg-white/10")}
+            className={cn("hidden xl:flex h-9 w-9 rounded-xl", panelOpen ? "bg-primary/10 text-primary" : "hover:bg-white/10")}
           >
             <PanelRight className="w-4 h-4" />
           </Button>
@@ -2090,14 +2556,15 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
              <p className="text-sm font-bold uppercase tracking-[0.4em] text-muted-foreground/30">{t("chat.ready")}</p>
           </div>
         ) : (
-          <div style={{ paddingBottom: inputAreaH + 48 }}>
+          <div style={{ paddingBottom: inputAreaH + 16 }}>
             {messages.map((m) => {
               if (m.kind === "receipt" && m.receipt) {
                 return <ReceiptItem key={m.id} receipt={m.receipt} />;
               }
               const isLastAssistant = m.role === "assistant" && m === messages[messages.length - 1];
               const streamingThis = isLastAssistant && isStreaming;
-              const showToolCalls = isLastAssistant ? latestToolCalls : undefined;
+              // 每条 assistant 显示「它那一轮」归属到的工具动作（逐节点跟着对话流）
+              const showToolCalls = m.role === "assistant" ? toolCallsByMessage.get(m.id) : undefined;
               return (
                 <MessageItem
                   key={m.id}
@@ -2111,6 +2578,7 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
                   chainStep={m.chainStep}
                   chainDone={m.chainDone}
                   toolCalls={showToolCalls}
+                  modelLabel={m.modelLabel}
                 />
               );
             })}
@@ -2163,39 +2631,23 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
           type="button"
           onClick={scrollToBottom}
           title={t("chat.jumpToBottom")}
-          className="absolute bottom-32 left-1/2 -translate-x-1/2 z-30 w-9 h-9 rounded-full glass border border-white/15 shadow-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-white/10 transition-colors animate-in fade-in slide-in-from-bottom-2 duration-300"
+          className="absolute bottom-28 left-1/2 -translate-x-1/2 z-30 w-9 h-9 rounded-full glass border border-white/15 shadow-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-white/10 transition-colors animate-in fade-in slide-in-from-bottom-2 duration-300"
         >
           <ArrowDown className="w-4 h-4" />
         </button>
       )}
 
       {/* 输入框区域 - Floating Command Center */}
-      <div ref={inputAreaRef} className="absolute bottom-8 left-8 right-8 z-20 pointer-events-none">
-        <div className="pointer-events-auto">
-          <WorkingStatusBar activeCall={activeToolCall} running={isStreaming} />
-        </div>
-        {onOpenDebate && showDebateHint && !isStreaming && (
-          <div className="max-w-4xl mx-auto mb-2.5 pointer-events-auto">
-            <div className="glass rounded-2xl border border-primary/30 shadow-lg px-4 py-2.5 flex items-center gap-3">
-              <Swords className="w-4 h-4 text-primary shrink-0" />
-              <span className="text-xs font-medium text-muted-foreground flex-1">{t("chat.suggestDebate")}</span>
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => onOpenDebate(inputRef.current?.value.trim() ?? "")}
-                className="rounded-xl h-8 px-4 text-xs font-bold shrink-0"
-              >
-                {t("chat.suggestDebateBtn")}
-              </Button>
-            </div>
-          </div>
-        )}
+      <div ref={inputAreaRef} className="absolute bottom-3 left-8 right-8 z-20 pointer-events-none">
         <form
           onSubmit={handleFormSubmit}
           onPaste={handlePaste}
           className="max-w-4xl mx-auto glass rounded-[2.5rem] border border-white/20 shadow-2xl p-2.5 flex gap-3 pointer-events-auto group transition-all duration-500 hover:border-primary/30"
         >
           <div className="flex-1 relative flex flex-col">
+            <div className="px-6 pt-2">
+              <WorkingStatusBar activeCall={activeToolCall} running={isStreaming} />
+            </div>
             {/* 工作文件夹（蓝 chip）+ 工具权限三档：就在输入框里、文件夹后面，单一来源不重复 */}
             {workspacePath ? (
               <div className="flex items-center gap-2 flex-wrap px-6 pt-2">
@@ -2281,7 +2733,6 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
               }
               autoComplete="off"
               onChange={(e) => {
-                setShowDebateHint(shouldSuggestDebate(e.target.value));
                 e.target.style.height = "auto";
                 e.target.style.height = Math.min(e.target.scrollHeight, 192) + "px";
               }}
@@ -2316,17 +2767,14 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
             )}
           </div>
         </form>
-        <p className="text-[10px] text-center mt-4 text-muted-foreground/30 font-bold uppercase tracking-[0.3em] select-none">
-          {t("chat.footer", { version: "v0.7.3" })}
-        </p>
       </div>
       </div>
 
       {/* 右侧工作面板：多模型工作可视化（默认收起，不影响现有布局；左侧分隔条可拖拽放大） */}
       {panelOpen && (
         <>
-        <ResizeHandle onMouseDown={workPanel.onMouseDown} />
-        <aside style={{ width: workPanel.width }} className="shrink-0 glass h-full flex flex-col rounded-3xl overflow-hidden">
+        <ResizeHandle onMouseDown={workPanel.onMouseDown} className="hidden xl:block" />
+        <aside style={{ width: workPanel.width }} className="shrink-0 glass h-full hidden xl:flex flex-col rounded-3xl overflow-hidden">
           <div className="px-5 py-4 flex items-center justify-between border-b border-white/10 shrink-0">
             <div className="flex items-center gap-2">
               <Activity className="w-4 h-4 text-primary" />
@@ -2351,17 +2799,25 @@ export function ChatPage({ onOpenDebate, active = true }: ChatPageProps = {}) {
               onMainModelChange={handleModelChange}
               onNodeModelChange={handleNodeModelChange}
             />
-            <WorkPanelIde
-              resetKey={conversationId ?? "new"}
-              workspacePath={workspacePath}
-              artifacts={artifacts}
-              running={isStreaming}
-              activeLabel={
-                isStreaming
-                  ? `${t("chat.replying")} · ${formatElapsed(streamElapsedMs)} · ${selectedModel?.displayName ?? selectedModel?.name ?? "—"}`
-                  : t("chat.workPanel.idle")
+            <Suspense
+              fallback={
+                <div className="glass rounded-2xl border border-white/5 p-4 text-[11px] font-bold uppercase tracking-widest text-muted-foreground/50">
+                  {t("common.loading")}
+                </div>
               }
-            />
+            >
+              <WorkPanelIde
+                resetKey={conversationId ?? "new"}
+                workspacePath={workspacePath}
+                artifacts={artifacts}
+                running={isStreaming}
+                activeLabel={
+                  isStreaming
+                    ? `${t("chat.replying")} · ${formatElapsed(streamElapsedMs)} · ${selectedModel?.displayName ?? selectedModel?.name ?? "—"}`
+                    : t("chat.workPanel.idle")
+                }
+              />
+            </Suspense>
             <details className="group">
               <summary className="cursor-pointer list-none px-4 py-3 text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50 hover:text-foreground">
                 {t("chat.workPanel.artifacts")}

@@ -102,18 +102,21 @@ describe("streamViaCli 正常流式", () => {
 
   it("stdout 含官方 session 事件 → onSession 被调且结果带 officialSessionId", async () => {
     const onSession = vi.fn();
-    const p = streamViaCli(endpoint, messages, { onDelta: vi.fn(), onSession });
+    const onModel = vi.fn();
+    const p = streamViaCli(endpoint, messages, { onDelta: vi.fn(), onSession, onModel });
     const ch = captureSpawnChannel();
 
     ch.send({
       type: "stdout",
-      line: '{"type":"system","subtype":"init","session_id":"sess-1"}',
+      line: '{"type":"system","subtype":"init","session_id":"sess-1","model":"claude-sonnet-4-6"}',
     });
     ch.send({ type: "terminated", code: 0 });
 
     const res = await p;
     expect(onSession).toHaveBeenCalledWith("sess-1");
+    expect(onModel).toHaveBeenCalledWith("claude-sonnet-4-6");
     expect(res.officialSessionId).toBe("sess-1");
+    expect(res.actualModelName).toBe("claude-sonnet-4-6");
   });
 });
 
@@ -249,6 +252,23 @@ describe("CLI 程序路径选择", () => {
     const spawnCall = invokeMock.mock.calls.find((c) => c[0] === "spawn_cli_stream");
     const params = spawnCall?.[1] as { program?: string } | undefined;
     expect(params?.program).toBe("/opt/homebrew/bin/claude");
+
+    const ch = captureSpawnChannel();
+    ch.send({ type: "terminated", code: 0 });
+    await p;
+  });
+
+  it("endpoint.workingDirectory 会传给 Rust spawn，避免 CLI 读错项目", async () => {
+    const p = streamViaCli(
+      { ...endpoint, workingDirectory: "/Users/me/project-a" },
+      messages,
+      { onDelta: vi.fn() },
+    );
+    await Promise.resolve();
+
+    const spawnCall = invokeMock.mock.calls.find((c) => c[0] === "spawn_cli_stream");
+    const params = spawnCall?.[1] as { workingDirectory?: string | null } | undefined;
+    expect(params?.workingDirectory).toBe("/Users/me/project-a");
 
     const ch = captureSpawnChannel();
     ch.send({ type: "terminated", code: 0 });
