@@ -63,6 +63,8 @@ describe("initSchema", () => {
       "project_memory_vectors",
       "workflow_runs",
       "workflow_events",
+      "intent_examples",
+      "intent_feedback_events",
     ]) {
       expect(tables).toContain(t);
     }
@@ -124,6 +126,41 @@ describe("workflowRuns", () => {
       "workflow.created",
       "workflow.node_waiting_user",
     ]);
+  });
+});
+
+describe("intentLearning", () => {
+  it("records feedback events and persists corrected examples", async () => {
+    const eventId = await db.intentLearning.recordFeedback({
+      userText: "不是，我不是要博弈，我是要评审",
+      predictedAction: "debate",
+      correctedAction: "review",
+      workflowState: "plan",
+      source: "user_text",
+      reason: "用户明确纠正了系统误判",
+    });
+
+    expect(eventId).toBeTruthy();
+
+    const example = await db.intentLearning.upsertExample({
+      action: "review",
+      text: "不是，我不是要博弈，我是要评审",
+      explanation: "用户把误触发的博弈纠正为评审。",
+      source: "user_correction",
+      confidence: 0.9,
+      weight: 1.2,
+      enabled: true,
+    });
+
+    expect(example.id).toBeTruthy();
+    expect(example.action).toBe("review");
+    expect(example.source).toBe("user_correction");
+
+    const examples = await db.intentLearning.listExamples();
+    expect(examples.some((e) => e.id === example.id && e.text.includes("评审"))).toBe(true);
+
+    const events = await db.intentLearning.listFeedbackEvents();
+    expect(events.some((e) => e.id === eventId && e.correctedAction === "review")).toBe(true);
   });
 });
 

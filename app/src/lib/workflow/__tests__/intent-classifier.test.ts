@@ -37,6 +37,20 @@ describe("classifyTurnIntent", () => {
     expect(classifyTurnIntent({ text: "我们开多模型博弈比较方案", activeRun: snapshot() }).patch?.debateRequested).toBe(true);
   });
 
+  it("分析项目并写推广软文不是博弈任务", () => {
+    const decision = classifyTurnIntent({
+      text: "全面盘查一遍我们的项目，深入理解，不要只读取 .md 文件，等会儿我要你写一篇公众号软文来推广",
+      activeRun: snapshot(),
+    });
+
+    expect(decision.patch?.debateRequested).not.toBe(true);
+  });
+
+  it("反驳、比较方案这类普通描述不再自动升级成博弈", () => {
+    expect(classifyTurnIntent({ text: "帮我比较方案后写成一篇软文", activeRun: snapshot() }).patch?.debateRequested).not.toBe(true);
+    expect(classifyTurnIntent({ text: "文章里要提前反驳用户疑虑", activeRun: snapshot() }).patch?.debateRequested).not.toBe(true);
+  });
+
   it("打回当前结果不会创建新 workflow", () => {
     const decision = classifyTurnIntent({ text: "不对，这个方案重来", activeRun: snapshot() });
     expect(decision.action).toBe("reject_node");

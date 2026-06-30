@@ -12,7 +12,7 @@ import { streamViaCli } from "./cli-engine";
 import type { RunRole } from "./debate-engine";
 
 /** 生产用 RunRole：调真实模型 + 记录用量（role 记成 debate_<角色>，StatsPage 可见对弈成本） */
-export const realRunRole: RunRole = async ({ systemPrompt, userPrompt, config }) => {
+export const realRunRole: RunRole = async ({ systemPrompt, userPrompt, config, signal }) => {
   let content = "";
   let inputTokens = 0;
   let outputTokens = 0;
@@ -31,14 +31,20 @@ export const realRunRole: RunRole = async ({ systemPrompt, userPrompt, config })
         { role: "user", content: userPrompt },
       ],
       { onDelta: (d) => { content += d; } },
-      {},
+      { signal },
     );
     inputTokens = cli.inputTokens;
     outputTokens = cli.outputTokens;
   } else {
     const lm = getLanguageModel(config.providerType, config.modelName, config.apiKey, config.baseUrl);
     // 按 models.dev 该模型真实输出上限给足预算，避免推理型模型把额度耗在思考、正文被截断
-    const res = await generateText({ model: lm, system: systemPrompt, prompt: userPrompt, maxOutputTokens: resolveMaxOutputTokens(config.modelName) });
+    const res = await generateText({
+      model: lm,
+      system: systemPrompt,
+      prompt: userPrompt,
+      maxOutputTokens: resolveMaxOutputTokens(config.modelName),
+      abortSignal: signal,
+    });
     content = res.text;
     inputTokens = res.usage?.inputTokens ?? 0;
     outputTokens = res.usage?.outputTokens ?? 0;

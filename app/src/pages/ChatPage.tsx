@@ -19,7 +19,7 @@ import { ToolCallCard } from "@/components/chat/ToolCallCard";
 import { WorkingStatusBar } from "@/components/chat/WorkingStatusBar";
 import { ensureModelLimitsLoaded } from "@/lib/llm/model-limits";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
-import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, toolExecutions, workflowRuns, getRoleBindingsForConversation, projects as dbProjects, projectMemories as dbProjectMemories, type Conversation, type DbMessage, type ToolExecutionRow } from "@/lib/db";
+import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, toolExecutions, workflowRuns, intentLearning, getRoleBindingsForConversation, projects as dbProjects, projectMemories as dbProjectMemories, type Conversation, type DbMessage, type ToolExecutionRow } from "@/lib/db";
 import { type ToolConfirmRequest } from "@/lib/llm/tools";
 import { prepareWorkspaceToolRuntime, type WorkspaceToolRuntime } from "@/lib/llm/workspace-tool-runtime";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -34,6 +34,7 @@ import { classifyMessageComplexity } from "@/lib/llm/message-router";
 import { shouldAutoRunChain, shouldRunBackgroundOrchestration } from "@/lib/llm/orchestration-gating";
 import { routeMessage } from "@/lib/llm/smart-router";
 import { isSmartRoutingEnabled, usePermissionModeSetting } from "@/lib/app-settings";
+import { shouldExposeWriteTools } from "@/lib/llm/tool-permission-policy";
 import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
 import { compressHistory, type ChatMsg } from "@/lib/llm/context-compressor";
 import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble, buildProjectMemoryPreamble } from "@/lib/llm/context-preamble";
@@ -42,9 +43,12 @@ import { buildWorkspacePreamble } from "@/lib/llm/workspace-context";
 import { getFsAdapter } from "@/lib/llm/tools/fs-adapter";
 import { buildMarkdownExportContent, detectDesktopExportIntent, sanitizeExportFileName } from "@/lib/llm/export-intent";
 import { createCodeTaskWorkflowSnapshot } from "@/lib/workflow/code-task-template";
-import { classifyTurnIntent } from "@/lib/workflow/intent-classifier";
+import { classifyTurnIntentWithJudge } from "@/lib/workflow/intent-judge";
+import { isExplicitDebateRequest } from "@/lib/workflow/intent-classifier";
+import { detectIntentCorrection, intentActionLabel } from "@/lib/workflow/intent-feedback";
+import type { IntentExample } from "@/lib/workflow/semantic-intent-router";
 import { applyTurnIntentDecision, completeCurrentWorkflowNode } from "@/lib/workflow/reducer";
-import type { WorkflowSnapshot } from "@/lib/workflow/types";
+import type { TurnIntentDecision, WorkflowSnapshot } from "@/lib/workflow/types";
 import { evaluateHarness, isClean, buildCorrectionPrompt, detectIntentNoToolCall, buildIntentNudgePrompt, type HarnessVerdict } from "@/lib/llm/harness/feedback";
 import { runChain as runChainImpl } from "@/lib/llm/chain-runner";
 import { type RoleId } from "@/lib/llm/orchestrator";
@@ -1083,6 +1087,21 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       nodeModelId && availableModels.some((m) => m.id === nodeModelId) ? nodeModelId : selectedModelId;
     const model = availableModels.find((m) => m.id === effectiveId);
     if (!model || isStreaming) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const cleanupStoppedTurn = () => {
+      setIsStreaming(false);
+      if (abortRef.current === controller) abortRef.current = null;
+    };
+    const stopIfAborted = () => {
+      if (!controller.signal.aborted) return false;
+      cleanupStoppedTurn();
+      return true;
+    };
+    setIsStreaming(true);
+    setStreamError(null);
+    setSwitchNotice(null);
+    setCacheNotice(null);
     if (effectiveId !== selectedModelId) setSelectedModelId(effectiveId);
     const routingDecision =
       pendingRoutingDecisionRef.current &&
@@ -1105,15 +1124,26 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     const cred = credentials.find((c) => c.providerId === model.providerId);
     if (!cred) {
       setStreamError(t("chat.noCredential"));
+      cleanupStoppedTurn();
       return;
     }
 
     // CLI 引擎走本机订阅登录态，没有 API Key；API 直连才需要取 Key
     const primaryIsCli = isCliProviderType(model.provider?.type ?? "");
     const apiKey = primaryIsCli ? "" : ((await getApiKey(cred.id)) ?? "");
+    if (stopIfAborted()) return;
     if (!primaryIsCli && !apiKey) {
       setStreamError(t("chat.noApiKey"));
+      cleanupStoppedTurn();
       return;
+    }
+    let intentJudgeModel: ReturnType<typeof getLanguageModel> | null = null;
+    if (!primaryIsCli && model.provider?.type) {
+      try {
+        intentJudgeModel = getLanguageModel(model.provider.type, model.name, apiKey, cred.baseUrl);
+      } catch {
+        intentJudgeModel = null;
+      }
     }
 
     // 附件图片：只有 CLI 模型（claude/codex 本机）真不能传图，拦住提示换 API；
@@ -1121,6 +1151,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     const hasImage = attachments?.some((a) => a.kind === "image");
     if (hasImage && primaryIsCli) {
       setStreamError(t("chat.attachments.cliNoImage"));
+      cleanupStoppedTurn();
       return;
     }
     // 拖入的文件夹：绑定为 AI 的工作文件夹（本次工具调用直接用这个路径，不靠异步 state）
@@ -1139,6 +1170,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         // 落库不可用时降级为纯内存，不阻断对话
       }
     }
+    if (stopIfAborted()) return;
     let userId: string = crypto.randomUUID();
     if (convId) {
       try {
@@ -1156,6 +1188,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         void dbConversations.touch(convId).catch(() => {});
       }
     }
+    if (stopIfAborted()) return;
 
     // 把助手最终/部分回答落库（成功、缓存命中、停止、中断都不丢）
     const persistAssistant = (content: string, modelId: string | null, usage?: { inputTokens: number; outputTokens: number }) => {
@@ -1168,6 +1201,8 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     let turnWorkflowSnapshot = workflowSnapshotRef.current;
     let turnWorkflowRunId: string | null = turnWorkflowSnapshot?.runId ?? null;
     let shouldCompleteWorkflowNode = false;
+    let turnIntentDecision: TurnIntentDecision | null = null;
+    let workflowAdvancedThisTurn = false;
     if (convId) {
       try {
         if (!turnWorkflowSnapshot) {
@@ -1176,11 +1211,49 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           if (turnWorkflowSnapshot) applyWorkflowSnapshot(turnWorkflowSnapshot);
         }
 
-        const decision = classifyTurnIntent({
+        let learnedExamples: IntentExample[] = [];
+        try {
+          const correction = detectIntentCorrection(text);
+          if (correction) {
+            await intentLearning.recordFeedback({
+              userText: text,
+              predictedAction: correction.predictedAction,
+              correctedAction: correction.correctedAction,
+              workflowState: turnWorkflowSnapshot?.currentNodeId ?? turnWorkflowSnapshot?.status ?? null,
+              source: "user_text",
+              reason: `用户明确纠正：不是${intentActionLabel(correction.predictedAction)}，而是${intentActionLabel(correction.correctedAction)}`,
+            });
+            await intentLearning.upsertExample({
+              action: correction.correctedAction,
+              text,
+              explanation: `用户纠正过：这类表达应识别为${intentActionLabel(correction.correctedAction)}，不是${intentActionLabel(correction.predictedAction)}。`,
+              source: "user_correction",
+              confidence: correction.confidence,
+              weight: 1.25,
+              enabled: true,
+            });
+          }
+          learnedExamples = (await intentLearning.listExamples({ enabledOnly: true })).map((example) => ({
+            id: example.id,
+            action: example.action,
+            text: example.text,
+            explanation: example.explanation,
+            source: example.source,
+            weight: example.weight,
+            enabled: example.enabled,
+          }));
+        } catch {
+          learnedExamples = [];
+        }
+
+        const decision = await classifyTurnIntentWithJudge({
           text,
           activeRun: turnWorkflowSnapshot,
           recentTurnIds: [userId],
+          model: intentJudgeModel,
+          learnedExamples,
         });
+        turnIntentDecision = decision;
 
         if (decision.action === "start_run") {
           const currentConversation = conversationList.find((c) => c.id === convId) ?? null;
@@ -1197,6 +1270,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           turnWorkflowSnapshot = snapshot;
           turnWorkflowRunId = runId;
           shouldCompleteWorkflowNode = true;
+          workflowAdvancedThisTurn = true;
           applyWorkflowSnapshot(snapshot);
         } else if (turnWorkflowSnapshot && decision.action !== "answer_only") {
           const nextSnapshot = applyTurnIntentDecision({ snapshot: turnWorkflowSnapshot, decision });
@@ -1209,6 +1283,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           turnWorkflowSnapshot = nextSnapshot;
           turnWorkflowRunId = nextSnapshot.runId;
           shouldCompleteWorkflowNode = true;
+          workflowAdvancedThisTurn = true;
           applyWorkflowSnapshot(nextSnapshot);
         } else if (turnWorkflowRunId) {
           await workflowRuns.appendEvent({
@@ -1222,6 +1297,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         // workflow 是辅助状态，失败不能阻断主对话。
       }
     }
+    if (stopIfAborted()) return;
 
     const userMsg: ChatMessage = { id: userId, role: "user", content: text, createdAt: new Date().toISOString(), ...(attachments?.length ? { attachments } : {}) };
     const newMessages = [...messages, userMsg];
@@ -1347,7 +1423,20 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     }
 
     const currentWorkflowNode = turnWorkflowSnapshot?.nodes.find((n) => n.id === turnWorkflowSnapshot?.currentNodeId) ?? null;
-    const shouldRunDebateTurn = currentWorkflowNode?.phase === "debate" && turnWorkflowSnapshot?.intent.debateRequested;
+    // 真对弈触发条件（修：旧逻辑四重 AND 要求"必须先有 workflow run 且停在 debate 节点"，
+    // 但"写软文"起头的对话判 answer_only、根本不建 run，导致用户明确说"开始博弈"也永远进不去真对弈，
+    // 只能让单模型用文字演一场假博弈）。新逻辑：
+    //  ① 用户这句明确要博弈（意图判定 debate，或原文含"博弈/对弈/PK/辩论/debate"）→ 直接跑真对弈，
+    //     不要求有 run（对弈执行块对 snapshot 为 null 已全程守门，跑完只是跳过节点记账）；
+    //  ② 或工作流刚好推进到 debate 节点。
+    const explicitDebateRequest =
+      turnIntentDecision?.patch?.debateRequested === true ||
+      isExplicitDebateRequest(text);
+    const shouldRunDebateTurn =
+      explicitDebateRequest ||
+      (currentWorkflowNode?.phase === "debate" &&
+        !!turnWorkflowSnapshot?.intent.debateRequested &&
+        workflowAdvancedThisTurn);
     if (shouldRunDebateTurn) {
       const assistantId = crypto.randomUUID();
       const debateMsg: ChatMessage = {
@@ -1375,7 +1464,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           .filter((m) => m.kind !== "receipt")
           .map((m) => `${m.role === "user" ? "用户" : "AI"}：${m.content.slice(0, 1600)}`)
           .join("\n\n");
-        const result = await runDynamicDebate({ topic, participants, maxParticipants: 4 }, realRunRole);
+        const result = await runDynamicDebate({ topic, participants, maxParticipants: 4, signal: controller.signal }, realRunRole);
         const nameFor = (modelId: string) => {
           const found = availableModels.find((m) => m.id === modelId);
           return found?.displayName || found?.name || modelId;
@@ -1424,6 +1513,29 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           applyWorkflowSnapshot(nextWorkflow);
         }
       } catch (err) {
+        if ((err as Error).name === "AbortError") {
+          const stoppedMessage = t("chat.stopped");
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantId ? { ...m, content: stoppedMessage } : m)),
+          );
+          if (convId && turnWorkflowSnapshot && turnWorkflowRunId) {
+            const cancelledWorkflow: WorkflowSnapshot = {
+              ...turnWorkflowSnapshot,
+              status: "cancelled",
+              nodes: turnWorkflowSnapshot.nodes.map((n) =>
+                n.id === turnWorkflowSnapshot.currentNodeId ? { ...n, status: "skipped" } : n,
+              ),
+            };
+            await workflowRuns.saveSnapshot({
+              runId: turnWorkflowRunId,
+              snapshot: cancelledWorkflow,
+              eventType: "workflow.debate_cancelled",
+              eventPayload: { reason: "user_stopped" },
+            }).catch(() => {});
+            applyWorkflowSnapshot(cancelledWorkflow);
+          }
+          return;
+        }
         const message = err instanceof Error ? err.message : t("chat.debate.failed");
         setMessages((prev) =>
           prev.map((m) => (m.id === assistantId ? { ...m, content: message } : m)),
@@ -1448,6 +1560,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         }
       } finally {
         setIsStreaming(false);
+        if (abortRef.current === controller) abortRef.current = null;
       }
       return;
     }
@@ -1471,7 +1584,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     // - 干活类意图（看项目/做方案/执行/验证）→ 必须真跑工具，不能重播上次的叙述文字。
     // 只有「什么是 X / 为什么 Y」这类纯知识问答才缓存，省 token 又不会乱命中。
     const cacheWorkspace = folderAtt?.path ?? workspacePath;
-    const cacheIntent = classifyTurnIntent({ text, activeRun: workflowSnapshotRef.current });
+    const cacheIntent = turnIntentDecision ?? await classifyTurnIntentWithJudge({ text, activeRun: workflowSnapshotRef.current, model: intentJudgeModel });
     const cacheEligible = smart && !cacheWorkspace && cacheIntent.action === "answer_only";
 
     // v0.9 阶段7：纯问答先查语义缓存——命中则秒回、0 成本、跳过 LLM
@@ -1485,7 +1598,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           );
           persistAssistant(hit.responseText, model.id);
           setCacheNotice(t("chat.cacheHit", { days }));
-          setIsStreaming(false);
+          cleanupStoppedTurn();
           return;
         }
       } catch {
@@ -1493,8 +1606,6 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       }
     }
 
-    const controller = new AbortController();
-    abortRef.current = controller;
     // 拖入文件夹时，本次工具调用直接用 folder 路径（不靠异步 setWorkspacePath 更新）。
     // CLI 子进程也必须用这个 cwd，否则会从 Cosmgrid-Agent 开发目录读取记忆和文件。
 
@@ -1504,7 +1615,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       if (primaryIsCli && effectiveWorkspace) primary.workingDirectory = effectiveWorkspace;
     } catch (err) {
       setStreamError(err instanceof Error ? err.message : t("chat.constructError"));
-      setIsStreaming(false);
+      cleanupStoppedTurn();
       return;
     }
 
@@ -1523,6 +1634,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       let fbKey = "";
       if (!fbIsCli) {
         const k = await getApiKey(fbCred.id);
+        if (stopIfAborted()) return;
         if (!k) continue;
         fbKey = k;
       }
@@ -1541,20 +1653,26 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     let workspacePreamble: string | null = null;
     let projectMemoryPreamble: string | null = null;
     let crossProjectPreamble: string | null = null;
+    const includeWriteTools = shouldExposeWriteTools({
+      text,
+      permissionMode,
+      decision: cacheIntent,
+    });
 
     if (effectiveWorkspace) {
       if (primaryIsCli) {
-        workspacePreamble = await buildWorkspacePreamble(effectiveWorkspace);
+        workspacePreamble = await buildWorkspacePreamble(effectiveWorkspace, { includeWrite: includeWriteTools });
+        if (stopIfAborted()) return;
       } else {
-        const includeWrite = permissionMode !== "read";
         const runtime = await prepareWorkspaceToolRuntime({
           workspacePath: effectiveWorkspace,
-          includeWrite,
+          includeWrite: includeWriteTools,
           conversationId: conversationId ?? undefined,
           // auto 档：写操作不弹窗直接放行；confirm 档：每个写操作走 requestConfirm 等用户按确认。
           confirm: permissionMode === "auto" ? async () => true : requestConfirm,
           includePreamble: true,
         });
+        if (stopIfAborted()) return;
         tools = runtime.tools;
         workspacePreamble = runtime.workspacePreamble;
       }
@@ -1569,6 +1687,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           dbProjects.getById(currentProjectId),
           dbProjectMemories.listByProject(currentProjectId),
         ]);
+        if (stopIfAborted()) return;
         projectMemoryPreamble = buildProjectMemoryPreamble(project?.name, memories);
         crossProjectPreamble = preamble;
       } catch {
@@ -1644,6 +1763,9 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           convo,
           {
             onDelta: (delta) => {
+              // 用户已喊停：丢弃后续增量。防止「卡死 provider 不理 abort、还在吐字」时
+              // 点了停止气泡仍继续刷新（handleStop 已把 UI 拉回空闲态）。
+              if (controller.signal.aborted) return;
               fullContent += delta;
               setMessages((prev) =>
                 prev.map((m) => (m.id === assistantId ? { ...m, content: fullContent } : m))
@@ -1770,7 +1892,14 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       // 不丢已经流式出来的半个回答（停止/中断都保留并落库）
       persistAssistant(fullContent, model.id);
       setHarnessNotice(null);
-      if ((err as Error).name === "AbortError") return;
+      if ((err as Error).name === "AbortError") {
+        if (!fullContent) {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantId ? { ...m, content: t("chat.stopped") } : m)),
+          );
+        }
+        return;
+      }
       setStreamError(classifyLlmError(err, t).userMessage);
       // 不再删用户消息（已落库）；只移除「空的」助手占位，保留有内容的半个回答
       setMessages((prev) => prev.filter((m) => m.id !== assistantId || m.content !== ""));
@@ -2098,11 +2227,19 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     }
   }
 
-  // 停止 = 中止当前回复 + 清空排队（用户主动喊停，不该让后面排的继续跑）
+  // 停止 = 权威停止：立即把 UI 拉回空闲态，不依赖底层 promise 抛错。
+  // 关键：有些 provider（如 MiniMax）卡死时**不理会 AbortSignal**，fetch 既不返回也不抛错，
+  // 流式的 finally 永远不执行。若只发 abort() 不强制 setIsStreaming(false)，界面会永远卡「回复中」。
+  // 所以这里直接掐 UI 状态 + 清引用 + 清队列；残留的后台 promise 由 controller.signal.aborted
+  // 守门（onDelta 丢弃、缓存/编排不写），settle 时进 finally 再 setIsStreaming(false) 也是幂等的。
   function handleStop() {
     abortRef.current?.abort();
     chainAbortRef.current?.abort();
+    abortRef.current = null;
+    chainAbortRef.current = null;
     setPendingQueue([]);
+    setIsStreaming(false);
+    setChainRunning(false);
   }
 
   // 串行排空队列：不忙（没在流式）时取队首发送，发完自动取下一条。

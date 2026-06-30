@@ -30,7 +30,10 @@ function truncate(text: string, max: number): string {
  *
  * @param workspacePath 工作文件夹绝对路径
  */
-export async function buildWorkspacePreamble(workspacePath: string): Promise<string> {
+export async function buildWorkspacePreamble(
+  workspacePath: string,
+  options: { includeWrite?: boolean } = {},
+): Promise<string> {
   const fs = getFsAdapter();
   const sections: string[] = [];
   let budget = TOTAL_MAX;
@@ -50,10 +53,16 @@ export async function buildWorkspacePreamble(workspacePath: string): Promise<str
     }
   }
 
+  const toolLine = options.includeWrite
+    ? "你具备文件工具：可在此目录内读取文件、搜索、查看 git，也能写入文件、执行命令。"
+    : "你具备只读文件工具：可在此目录内读取文件、搜索、查看 git；本轮没有写入文件或执行命令的工具。";
+  const actionLine = options.includeWrite
+    ? "当用户要你创建/修改文件或运行命令时，**直接调用对应工具去做**——不要在回复里向用户索要确认，也不要只说\"我来做/让我试试\"然后停下。写入与执行的安全确认由应用自动弹窗处理，你无需在对话里征求同意。"
+    : "本轮如果只是理解项目、分析代码、写文案或总结，请使用 read/glob/grep/git_read 等只读工具完成；不要声称需要 bash，也不要假装执行命令。";
   const header =
     `当前工作文件夹：${workspacePath}\n` +
-    `你具备文件工具：可在此目录内读取文件、搜索、查看 git，也能写入文件、执行命令。\n` +
-    `当用户要你创建/修改文件或运行命令时，**直接调用对应工具去做**——不要在回复里向用户索要确认，也不要只说"我来做/让我试试"然后停下。写入与执行的安全确认由应用自动弹窗处理，你无需在对话里征求同意。\n` +
+    `${toolLine}\n` +
+    `${actionLine}\n` +
     `回答涉及"这个项目/这些代码"的问题时，应先用工具读取真实文件，不要凭空猜测。`;
 
   if (sections.length === 0) {

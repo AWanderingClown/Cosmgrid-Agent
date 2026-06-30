@@ -17,6 +17,7 @@ export type LlmErrorCategory =
   | "rate_limit" // 429 - 套餐耗尽
   | "timeout" // 请求超时
   | "network" // 网络故障
+  | "web_content_unavailable" // 外部网页/链接内容无法读取
   | "context_overflow" // 上下文超出窗口
   | "model_not_found" // 404 - 模型下线
   | "server_error" // 5xx - provider 服务故障
@@ -227,6 +228,31 @@ export function classifyLlmError(
       category: "server_error",
       httpStatus: 502,
       userMessage: msg("AI 执行进程异常退出，正在尝试自动恢复", "errorClassifier.server_error"),
+      technicalMessage: sanitized,
+      shouldFallback: true,
+    };
+  }
+  if (
+    lower === "load failed" ||
+    lower.includes("failed to load") ||
+    lower.includes("url content") ||
+    lower.includes("unsupported url") ||
+    lower.includes("unable to access url")
+  ) {
+    return {
+      category: "web_content_unavailable",
+      httpStatus: 422,
+      userMessage: msg("外部链接内容读取失败。微信文章这类页面经常需要登录或被防抓取，请把正文粘贴进来，或截图/导出后发给我，我再按参考文章重写。", "errorClassifier.web_content_unavailable"),
+      technicalMessage: sanitized,
+      shouldFallback: false,
+    };
+  }
+  if (rawMessage.includes("SSE_CHUNK_TIMEOUT")) {
+    // provider 流式响应中途死寂（干完活没发结束信号 / 连接僵死）。按可恢复处理：切下一个模型续。
+    return {
+      category: "timeout",
+      httpStatus: 504,
+      userMessage: msg("当前模型响应中断（可能已完成但未正常结束），正在自动切换模型继续", "errorClassifier.stream_stalled"),
       technicalMessage: sanitized,
       shouldFallback: true,
     };

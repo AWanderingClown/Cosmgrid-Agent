@@ -3,7 +3,8 @@ import type { TurnIntentDecision, WorkflowSnapshot } from "./types";
 const START_PROJECT_RE = /(看|读|扫|分析|了解).*(项目|代码|仓库|工程)|项目.*(看|读|分析)|read.*project|inspect.*project/i;
 const PLAN_RE = /(方案|计划|规划|路线图|迭代|架构|设计|plan|roadmap|proposal|architecture)/i;
 const REVIEW_RE = /(评审|审查|复核|检查方案|另一个模型|review|critique)/i;
-const DEBATE_RE = /(对弈|博弈|反驳|多模型|比较方案|debate|compare options)/i;
+// 「博弈」加负向断言排除「博弈论」（解释博弈论 ≠ 要多模型对弈）；其余动作词照旧。
+const DEBATE_RE = /(对弈|博弈(?!论)|多模型\s*(PK|pk|对弈|博弈|辩论)|模型\s*(PK|pk)|开\s*(个)?\s*(PK|pk)|debate|multi[-\s]?model debate)/i;
 const EXECUTE_RE = /(直接执行|开始执行|按.*做|照.*做|执行方案|开始实现|落地|改代码|修复|implement|execute|apply it|do it)/i;
 const VERIFY_RE = /(验证|测试|跑测试|构建|编译|检查结果|build|test|verify|typecheck|lint)/i;
 const PAUSE_RE = /(暂停|先停|等一下|pause|hold)/i;
@@ -11,6 +12,10 @@ const CANCEL_RE = /(取消|算了|停止这个任务|cancel|stop this)/i;
 const REJECT_RE = /(不对|重来|不是这个|改一下方案|打回|reject|redo)/i;
 const CONTINUE_RE = /^(继续|继续吧|下一步|go on|continue|next)$/i;
 const QUESTION_RE = /(是什么|为什么|怎么理解|解释|说明|啥意思|what is|why|explain)/i;
+
+export function isExplicitDebateRequest(text: string): boolean {
+  return DEBATE_RE.test(text.trim());
+}
 
 function baseDecision(args: {
   action: TurnIntentDecision["action"];
@@ -102,7 +107,7 @@ export function classifyTurnIntent(args: {
       });
     }
 
-    if (DEBATE_RE.test(text)) {
+    if (isExplicitDebateRequest(text)) {
       return baseDecision({
         action: "continue_run",
         targetRunId: activeRun.runId,

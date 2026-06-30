@@ -43,7 +43,7 @@ export async function prepareWorkspaceToolRuntime(
 
   if (options.includePreamble) {
     try {
-      workspacePreamble = await buildWorkspacePreamble(options.workspacePath);
+      workspacePreamble = await buildWorkspacePreamble(options.workspacePath, { includeWrite: options.includeWrite });
     } catch (err) {
       console.error("[tools] 读项目自述失败（不影响工具）:", err);
     }

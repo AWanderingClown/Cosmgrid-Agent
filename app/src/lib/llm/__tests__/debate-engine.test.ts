@@ -101,6 +101,41 @@ describe("runDebate — 错误传播", () => {
 });
 
 describe("runDynamicDebate — 动态参与模型", () => {
+  it("把 abort signal 透传给每个参与角色", async () => {
+    const controller = new AbortController();
+    const seenSignals: (AbortSignal | undefined)[] = [];
+    const run: RunRole = vi.fn(async ({ signal, config }) => {
+      seenSignals.push(signal);
+      return { content: `${config.role}-output`, inputTokens: 1, outputTokens: 1 };
+    });
+
+    await runDynamicDebate({
+      topic: "比较两个实现方案",
+      participants: [cfg("solver", "m-a"), cfg("critic", "m-b")],
+      signal: controller.signal,
+    }, run);
+
+    expect(seenSignals).toEqual([controller.signal, controller.signal, controller.signal]);
+  });
+
+  it("用户停止后不再继续启动下一轮模型调用", async () => {
+    const controller = new AbortController();
+    const calls: string[] = [];
+    const run: RunRole = vi.fn(async ({ config }) => {
+      calls.push(config.role);
+      controller.abort();
+      return { content: `${config.role}-output`, inputTokens: 1, outputTokens: 1 };
+    });
+
+    await expect(runDynamicDebate({
+      topic: "比较两个实现方案",
+      participants: [cfg("solver", "m-a"), cfg("critic", "m-b")],
+      signal: controller.signal,
+    }, run)).rejects.toThrow("AbortError");
+
+    expect(calls).toEqual(["solver"]);
+  });
+
   it("只有 1 个模型时做单模型自审，不伪装成 PK", async () => {
     const { run, calls } = makeRunRole();
     const r = await runDynamicDebate({

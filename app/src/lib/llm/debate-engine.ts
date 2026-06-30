@@ -39,6 +39,7 @@ export interface RunRoleParams {
   systemPrompt: string;
   userPrompt: string;
   config: DebateRoleConfig;
+  signal?: AbortSignal;
 }
 
 /** 注入的 LLM 执行器：production 用 getLanguageModel + generateText；测试用假实现 */
@@ -51,6 +52,7 @@ export interface DebateInput {
   judge: DebateRoleConfig;
   /** 快速模式：跳过 Critic，只 Solver + Judge（省 ~1/3 token） */
   quickMode?: boolean;
+  signal?: AbortSignal;
 }
 
 export interface DynamicDebateInput {
@@ -58,6 +60,7 @@ export interface DynamicDebateInput {
   participants: DebateRoleConfig[];
   /** 最多使用多少个参与模型，默认 4。防止模型太多时成本和等待时间失控。 */
   maxParticipants?: number;
+  signal?: AbortSignal;
 }
 
 export interface DebateResult {
@@ -140,6 +143,16 @@ function withRole(config: DebateRoleConfig, role: string): DebateRoleConfig {
   return { ...config, role };
 }
 
+function abortError(): Error {
+  const err = new Error("AbortError");
+  err.name = "AbortError";
+  return err;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortError();
+}
+
 /**
  * 跑一场对弈。runRole 注入，引擎只负责编排与上下文传递。
  * 任一角色抛错则整场抛错（调用方决定是否重试/降级）。
@@ -148,30 +161,36 @@ export async function runDebate(input: DebateInput, runRole: RunRole): Promise<D
   const rounds: RoleOutput[] = [];
 
   // 1. Solver
+  throwIfAborted(input.signal);
   const solver = await runRole({
     systemPrompt: solverSystemPrompt(),
     userPrompt: solverUserPrompt(input.topic),
     config: input.solver,
+    signal: input.signal,
   });
   rounds.push({ role: "solver", modelId: input.solver.modelId, ...solver });
 
   // 2. Critic（quickMode 跳过）
   let critique: string | null = null;
   if (!input.quickMode) {
+    throwIfAborted(input.signal);
     const critic = await runRole({
       systemPrompt: criticSystemPrompt(),
       userPrompt: criticUserPrompt(input.topic, solver.content),
       config: input.critic,
+      signal: input.signal,
     });
     critique = critic.content;
     rounds.push({ role: "critic", modelId: input.critic.modelId, ...critic });
   }
 
   // 3. Judge
+  throwIfAborted(input.signal);
   const judge = await runRole({
     systemPrompt: judgeSystemPrompt(),
     userPrompt: judgeUserPrompt(input.topic, solver.content, critique),
     config: input.judge,
+    signal: input.signal,
   });
   rounds.push({ role: "judge", modelId: input.judge.modelId, ...judge });
 
@@ -198,6 +217,7 @@ export async function runDynamicDebate(input: DynamicDebateInput, runRole: RunRo
 
   if (participants.length === 1) {
     const soloConfig = withRole(participants[0]!, "solo_review");
+    throwIfAborted(input.signal);
     const solo = await runRole({
       systemPrompt: [
         "你是单模型自审者。当前只有一个可用模型，不能伪装成多模型 PK。",
@@ -205,16 +225,19 @@ export async function runDynamicDebate(input: DynamicDebateInput, runRole: RunRo
       ].join("\n"),
       userPrompt: dynamicProposalUserPrompt(input.topic),
       config: soloConfig,
+      signal: input.signal,
     });
     rounds.push({ role: soloConfig.role, modelId: soloConfig.modelId, ...solo });
     return { topic: input.topic, rounds, finalSolution: solo.content };
   }
 
   const proposerConfig = withRole(participants[0]!, "solver");
+  throwIfAborted(input.signal);
   const proposal = await runRole({
     systemPrompt: solverSystemPrompt(),
     userPrompt: dynamicProposalUserPrompt(input.topic),
     config: proposerConfig,
+    signal: input.signal,
   });
   rounds.push({ role: proposerConfig.role, modelId: proposerConfig.modelId, ...proposal });
 
@@ -225,20 +248,24 @@ export async function runDynamicDebate(input: DynamicDebateInput, runRole: RunRo
 
   const critiques: RoleOutput[] = [];
   for (const criticConfig of criticConfigs) {
+    throwIfAborted(input.signal);
     const critique = await runRole({
       systemPrompt: criticSystemPrompt(),
       userPrompt: dynamicCritiqueUserPrompt(input.topic, proposal.content),
       config: criticConfig,
+      signal: input.signal,
     });
     const output = { role: criticConfig.role, modelId: criticConfig.modelId, ...critique };
     critiques.push(output);
     rounds.push(output);
   }
 
+  throwIfAborted(input.signal);
   const judge = await runRole({
     systemPrompt: judgeSystemPrompt(),
     userPrompt: dynamicJudgeUserPrompt(input.topic, proposal.content, critiques),
     config: judgeConfig,
+    signal: input.signal,
   });
   rounds.push({ role: judgeConfig.role, modelId: judgeConfig.modelId, ...judge });
 

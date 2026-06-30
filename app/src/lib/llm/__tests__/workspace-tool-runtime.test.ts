@@ -68,6 +68,7 @@ describe("prepareWorkspaceToolRuntime", () => {
 
     expect(runtime.tools).toEqual({ read: { description: "read" } });
     expect(runtime.workspacePreamble).toBeNull();
+    expect(mocks.buildWorkspacePreamble).toHaveBeenCalledWith("/ws", { includeWrite: false });
   });
 
   it("工具构造失败不影响项目说明", async () => {
@@ -83,5 +84,16 @@ describe("prepareWorkspaceToolRuntime", () => {
 
     expect(runtime.tools).toBeUndefined();
     expect(runtime.workspacePreamble).toBe("workspace preamble");
+    expect(mocks.buildWorkspacePreamble).toHaveBeenCalledWith("/ws", { includeWrite: false });
+  });
+
+  it("项目说明读取时透传 includeWrite", async () => {
+    await prepareWorkspaceToolRuntime({
+      workspacePath: "/ws",
+      includeWrite: true,
+      includePreamble: true,
+    });
+
+    expect(mocks.buildWorkspacePreamble).toHaveBeenCalledWith("/ws", { includeWrite: true });
   });
 });

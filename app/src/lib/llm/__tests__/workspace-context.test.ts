@@ -36,7 +36,15 @@ describe("buildWorkspacePreamble", () => {
     const out = await buildWorkspacePreamble(WS);
     expect(out).toContain(WS);
     expect(out).toContain("文件工具");
+    expect(out).toContain("本轮没有写入文件或执行命令的工具");
     expect(out).not.toContain("# CLAUDE.md");
+  });
+
+  it("includeWrite=true 时说明可写入和执行命令", async () => {
+    setFsAdapter(makeFakeFs({}));
+    const out = await buildWorkspacePreamble(WS, { includeWrite: true });
+    expect(out).toContain("也能写入文件、执行命令");
+    expect(out).toContain("安全确认由应用自动弹窗处理");
   });
 
   it("多个自述文件按优先级都纳入", async () => {

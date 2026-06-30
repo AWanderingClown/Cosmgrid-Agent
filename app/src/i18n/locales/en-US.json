@@ -23,7 +23,9 @@
     "rate_limit": "Plan quota exhausted or rate-limited — wait a moment or check your plan status",
     "server_error": "AI service temporarily unavailable — please try again later",
     "timeout": "Request timed out — check your network or try again later",
+    "stream_stalled": "The model's response stalled (it may have finished but didn't close properly) — switching to the next model to continue",
     "network": "Network connection failed — check network or Base URL config",
+    "web_content_unavailable": "External link content could not be loaded. WeChat articles often require login or block scraping. Paste the article text, send screenshots, or export the file, and I can rewrite from those references.",
     "unknown": "Conversation failed — please try again later"
   },
   "app": {
@@ -82,8 +84,8 @@
       "autoHint": "Auto: AI writes files / runs commands without per-action prompts (use for trusted work)"
     },
     "tools": {
-      "confirmTitle": "AI is requesting an action — please confirm",
-      "approve": "Approve",
+      "confirmTitle": "AI requests a write or command — confirm first",
+      "approve": "Confirm",
       "reject": "Cancel",
       "confirmHint": "This action changes things; it runs only after you confirm."
     },
@@ -246,6 +248,7 @@
     "toolCallDone": "Tool call",
     "jumpToBottom": "Jump to bottom",
     "replying": "Replying",
+    "stopped": "Stopped",
     "queued": "Queued",
     "inputDraftHint": "Model is replying… keep typing, messages are queued and handled in order",
     "orchestrator": {
