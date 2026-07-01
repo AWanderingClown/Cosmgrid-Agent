@@ -72,4 +72,25 @@ describe("withSseChunkTimeout", () => {
     const res = await wrapped("https://x/json");
     await expect(res.text()).resolves.toBe('{"ok":true}');
   });
+
+  it("服务端连响应头都不回（fetch() 本身悬挂）→ 也会超时报错，不是只护 chunk 间隔（修 GPT 5.5 卡死7分钟不动）", async () => {
+    vi.useRealTimers();
+    // base fetch 永不 resolve，模拟服务端挂起、连 headers 都没返回
+    const base = vi.fn(() => new Promise<Response>(() => {}));
+    const wrapped = withSseChunkTimeout(base as unknown as typeof fetch, 50);
+    await expect(wrapped("https://x/hangs-before-headers")).rejects.toThrow(SSE_CHUNK_TIMEOUT_MARKER);
+  });
+
+  it("fetch() 正常在超时窗口内返回响应头 → 不受这道关卡影响，照常走 chunk 超时逻辑", async () => {
+    vi.useRealTimers();
+    const base = vi.fn(async () =>
+      makeSseResponse([
+        { delayMs: 5, data: "a" },
+        { delayMs: 5, data: "b" },
+      ]),
+    );
+    const wrapped = withSseChunkTimeout(base as unknown as typeof fetch, 50);
+    const res = await wrapped("https://x/stream");
+    await expect(drain(res)).resolves.toBe("ab");
+  });
 });

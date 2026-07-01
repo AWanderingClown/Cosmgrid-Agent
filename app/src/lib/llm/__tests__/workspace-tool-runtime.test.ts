@@ -96,4 +96,18 @@ describe("prepareWorkspaceToolRuntime", () => {
 
     expect(mocks.buildWorkspacePreamble).toHaveBeenCalledWith("/ws", { includeWrite: true });
   });
+
+  it("透传 desktopPath 给 buildWorkspacePreamble（让模型知道桌面在哪，能自己用 write 工具存桌面）", async () => {
+    await prepareWorkspaceToolRuntime({
+      workspacePath: "/ws",
+      includeWrite: true,
+      includePreamble: true,
+      desktopPath: "/Users/me/Desktop",
+    });
+
+    expect(mocks.buildWorkspacePreamble).toHaveBeenCalledWith("/ws", {
+      includeWrite: true,
+      desktopPath: "/Users/me/Desktop",
+    });
+  });
 });

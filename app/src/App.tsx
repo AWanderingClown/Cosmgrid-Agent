@@ -16,8 +16,6 @@ import {
 } from "@/lib/db";
 import { planUsageLevel, type UsageLevel } from "@/lib/llm/plan-thresholds";
 import { computeTokenPlanUsageMap } from "@/lib/llm/token-plan-usage";
-import { syncModelPrices } from "@/lib/llm/price-catalog";
-import { backfillProjectMemoryVectors } from "@/lib/memory/retrieval";
 import { migrateLegacyApiKeys } from "@/lib/keystore";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
@@ -94,7 +92,7 @@ function App() {
     void initSchema()
       .then(() => seedBuiltInTemplates())
       .then(() => setDbReady(true))
-      .catch((err: unknown) => setDbError(err instanceof Error ? err.message : "Database init failed"));
+      .catch((err: unknown) => setDbError(err instanceof Error ? err.message : String(err)));
   }, []);
 
   useEffect(() => {
@@ -114,8 +112,8 @@ function App() {
   useEffect(() => {
     if (!dbReady) return;
     void loadPlansWithRecordedUsage().then(setPlans);
-    void syncModelPrices();
-    void backfillProjectMemoryVectors({ limit: 120 }).catch(() => {});
+    void import("@/lib/llm/price-catalog").then((m) => m.syncModelPrices());
+    void import("@/lib/memory/retrieval").then((m) => m.backfillProjectMemoryVectors({ limit: 120 })).catch(() => {});
     const id = setInterval(() => {
       void loadPlansWithRecordedUsage().then(setPlans);
     }, 60_000);

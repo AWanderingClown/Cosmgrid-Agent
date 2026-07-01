@@ -75,11 +75,21 @@ describe("write 工具", () => {
     expect(files["/ws/src/new.ts"]).toBeUndefined();
   });
 
-  it("越界路径直接拒绝，不弹确认", async () => {
+  it("工作区外的路径不再直接拒绝——会弹确认，摘要文案标出'工作区之外'，用户批准后照样能写（对齐 opencode 的 external_directory 询问）", async () => {
     const confirm = vi.fn().mockResolvedValue(true);
-    const r = await writeTool.execute({ file_path: "../../etc/x", content: "x" }, ctxWith(confirm));
+    const r = await writeTool.execute({ file_path: "/Users/me/Desktop/plan.md", content: "x" }, ctxWith(confirm));
+    expect(r.status).toBe("success");
+    expect(confirm).toHaveBeenCalledTimes(1);
+    const arg = confirm.mock.calls[0]![0];
+    expect(arg.summary).toContain("工作区之外");
+    expect(files["/Users/me/Desktop/plan.md"]).toBe("x");
+  });
+
+  it("工作区外的路径，用户拒绝确认 → denied，不写盘", async () => {
+    const confirm = vi.fn().mockResolvedValue(false);
+    const r = await writeTool.execute({ file_path: "/Users/me/Desktop/plan.md", content: "x" }, ctxWith(confirm));
     expect(r.status).toBe("denied");
-    expect(confirm).not.toHaveBeenCalled();
+    expect(files["/Users/me/Desktop/plan.md"]).toBeUndefined();
   });
 
   it("敏感路径直接拒绝", async () => {
@@ -162,5 +172,20 @@ describe("edit 工具", () => {
     );
     expect(r.status).toBe("denied");
     expect(files["/ws/src/a.ts"]).toBe(before);
+  });
+
+  it("工作区外的文件也能改——不再直接拒绝，摘要标出'工作区之外'，批准后正常替换", async () => {
+    const m = makeMutableFs({ "/Users/me/Desktop/plan.md": "old line\n" });
+    files = m.files;
+    setFsAdapter(m.fs);
+    const confirm = vi.fn().mockResolvedValue(true);
+    const r = await editTool.execute(
+      { file_path: "/Users/me/Desktop/plan.md", old_string: "old line", new_string: "new line" },
+      ctxWith(confirm),
+    );
+    expect(r.status).toBe("success");
+    expect(files["/Users/me/Desktop/plan.md"]).toBe("new line\n");
+    const arg = confirm.mock.calls[0]![0];
+    expect(arg.summary).toContain("工作区之外");
   });
 });

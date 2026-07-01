@@ -56,6 +56,7 @@
     "renameChat": "重命名",
     "deleteConvConfirm": "删除这个对话？此操作不可撤销。",
     "loadError": "加载失败",
+    "newChatFailed": "新建对话失败，可能是应用被重复打开导致数据库被占用，请重启应用后重试",
     "noCredential": "未找到 API 凭证",
     "noApiKey": "API Key 缺失",
     "constructError": "构造失败",

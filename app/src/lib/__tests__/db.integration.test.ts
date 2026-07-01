@@ -78,6 +78,29 @@ describe("initSchema", () => {
     ).map((r) => r.name);
     expect(tables).not.toContain("conversation_model_snapshots");
   });
+
+  it("记录 schema 迁移版本并补齐历史增量列", async () => {
+    const migrationRows = await adapter.select<Array<{ version: string }>>(
+      "SELECT version FROM schema_migrations ORDER BY version ASC",
+    );
+    expect(migrationRows.map((r) => r.version)).toEqual([
+      "202607010001-conversation-orchestration-workspace",
+      "202607010002-message-attachments-chain-kind",
+      "202607010003-usage-event-routing-pricing",
+      "202607010004-semantic-cache-provider",
+      "202607010005-savings-price-catalog-links",
+    ]);
+
+    const usageColumns = await adapter.select<Array<{ name: string }>>("PRAGMA table_info(usage_events)");
+    expect(usageColumns.map((c) => c.name)).toEqual(
+      expect.arrayContaining(["conversation_id", "role_kind", "pricing_known", "price_catalog_id", "outcome"]),
+    );
+
+    const messageColumns = await adapter.select<Array<{ name: string }>>("PRAGMA table_info(messages)");
+    expect(messageColumns.map((c) => c.name)).toEqual(
+      expect.arrayContaining(["actor_role", "chain_step_index", "chain_step_total", "chain_done", "kind"]),
+    );
+  });
 });
 
 describe("workflowRuns", () => {
@@ -237,6 +260,26 @@ describe("conversations + 主对话", () => {
       chainStepTotal: 3,
       chainDone: true,
     });
+  });
+
+  it("消息的 kind 标记（如 system-notice）能落库并恢复，不会在重新加载后变回普通 chat", async () => {
+    const conv = await db.conversations.create({ title: "kind message", projectId: null });
+    const msg = await db.messages.create({
+      conversationId: conv.id,
+      role: "assistant",
+      content: "已保存到桌面：/Users/x/Desktop/foo.md",
+      kind: "system-notice",
+    });
+    expect(msg.kind).toBe("system-notice");
+
+    const restored = await db.messages.listByConversation(conv.id);
+    expect(restored.find((m) => m.id === msg.id)).toMatchObject({ kind: "system-notice" });
+  });
+
+  it("不传 kind 时落库为 null，恢复后不会被误判为 system-notice", async () => {
+    const conv = await db.conversations.create({ title: "no kind message", projectId: null });
+    const msg = await db.messages.create({ conversationId: conv.id, role: "assistant", content: "正常回答" });
+    expect(msg.kind).toBeNull();
   });
 
   it("阶段 E3：chain 消息可更新完成状态，空更新返回原消息，缺失 id 返回 null", async () => {

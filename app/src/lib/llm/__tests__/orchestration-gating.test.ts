@@ -18,20 +18,61 @@ describe("orchestration-gating", () => {
     expect(hasWorkflowIntent("你好")).toBe(false);
     expect(hasWorkflowIntent("你是什么模型")).toBe(false);
     expect(hasWorkflowIntent("？？")).toBe(false);
-    expect(shouldRunBackgroundOrchestration({ text: "你好", taskRole: "simple", hasWorkspace: false })).toBe(false);
+    expect(
+      shouldRunBackgroundOrchestration({ text: "你好", taskRole: "simple", hasWorkspace: false, intentAction: "answer_only" }),
+    ).toBe(false);
   });
 
   it("没有工作区时，普通任务不启动工作链路", () => {
-    expect(shouldRunBackgroundOrchestration({ text: "把这句话翻译成英文", taskRole: "simple", hasWorkspace: false })).toBe(false);
+    expect(
+      shouldRunBackgroundOrchestration({
+        text: "把这句话翻译成英文",
+        taskRole: "simple",
+        hasWorkspace: false,
+        intentAction: "answer_only",
+      }),
+    ).toBe(false);
   });
 
   it("绑定工作区且有改代码意图时才触发", () => {
-    expect(shouldRunBackgroundOrchestration({ text: "帮我修复这个页面报错", taskRole: "standard", hasWorkspace: true })).toBe(true);
-    expect(shouldRunBackgroundOrchestration({ text: "run tests and fix the bug", taskRole: "standard", hasWorkspace: true })).toBe(true);
+    expect(
+      shouldRunBackgroundOrchestration({
+        text: "帮我修复这个页面报错",
+        taskRole: "standard",
+        hasWorkspace: true,
+        intentAction: "start_run",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRunBackgroundOrchestration({
+        text: "run tests and fix the bug",
+        taskRole: "standard",
+        hasWorkspace: true,
+        intentAction: "continue_run",
+      }),
+    ).toBe(true);
   });
 
-  it("复杂任务即使暂未绑定工作区也允许编排建议", () => {
-    expect(shouldRunBackgroundOrchestration({ text: "帮我设计这个系统架构", taskRole: "hard", hasWorkspace: false })).toBe(true);
+  it("纯讨论/为什么这样设计类问题，即使命中hard关键词、没绑工作区，也不触发编排（不该偷偷换模型）", () => {
+    expect(
+      shouldRunBackgroundOrchestration({
+        text: "为什么这个架构要这样设计？",
+        taskRole: "hard",
+        hasWorkspace: false,
+        intentAction: "answer_only",
+      }),
+    ).toBe(false);
+  });
+
+  it("想法讨论清楚、语义判断已收敛成具体任务时，即使暂未绑定工作区也允许编排介入", () => {
+    expect(
+      shouldRunBackgroundOrchestration({
+        text: "好的，那就按这个方案开始建项目吧",
+        taskRole: "hard",
+        hasWorkspace: false,
+        intentAction: "start_run",
+      }),
+    ).toBe(true);
   });
 
   it("只要方案时不立刻重复跑 architect 接力", () => {

@@ -38,6 +38,22 @@ function countLines(text: string): number {
   return text.split("\n").length;
 }
 
+function statusText(status: string): string {
+  if (status === "success") return "已完成";
+  if (status === "denied") return "已取消";
+  if (status === "awaiting_approval") return "等待确认";
+  if (status === "timeout") return "已超时";
+  if (status === "error") return "执行失败";
+  return status || "未知";
+}
+
+function outputSummary(output: string): string {
+  const trimmed = output.trim();
+  if (!trimmed) return "";
+  const firstLine = trimmed.split("\n").find((line) => line.trim().length > 0) ?? "";
+  return firstLine.slice(0, 160);
+}
+
 export function summarizeToolCall(toolName: string, input: Record<string, unknown>): string {
   switch (toolName) {
     case "read":
@@ -80,16 +96,28 @@ function summaryMeta(toolName: string, input: Record<string, unknown>): { key: s
   }
 }
 
+function buildHumanDetail(row: ToolExecutionRow, shortSummary: string): string {
+  const lines = [
+    `动作：${shortSummary}`,
+    `结果：${statusText(row.status)}`,
+    `耗时：${row.durationMs}ms`,
+  ];
+  const out = outputSummary(row.output);
+  if (out && row.status !== "success") lines.push(`提示：${out}`);
+  return lines.join("\n");
+}
+
 export function deriveToolCallViews(rows: ToolExecutionRow[]): ToolCallView[] {
   return rows.map((row) => {
     const input = safeParseJson(row.input);
-    const detailFull = JSON.stringify({ input, output: row.output }, null, 2);
     const meta = summaryMeta(row.toolName, input);
+    const shortSummary = summarizeToolCall(row.toolName, input);
+    const detailFull = buildHumanDetail(row, shortSummary);
     return {
       id: row.id,
       toolName: row.toolName,
       status: row.status as ToolCallViewStatus,
-      shortSummary: summarizeToolCall(row.toolName, input),
+      shortSummary,
       summaryKey: meta.key,
       summaryVars: meta.vars,
       detailPreview: detailFull.slice(0, 240),

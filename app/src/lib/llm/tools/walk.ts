@@ -82,3 +82,41 @@ export async function walkFiles(root: string, maxFiles = 5000): Promise<string[]
   await recurse(root, "");
   return out;
 }
+
+/**
+ * 浅层目录树（给 workspace preamble 用）：只展开前 maxDepth 层，让模型开场就知道
+ * 项目根下真实有什么，不用靠瞎猜 glob 模式去摸——弱模型摸不中容易误判"没有源码"。
+ * 复用跟 walkFiles 一样的 .gitignore/DEFAULT_IGNORE_DIRS 规则，目录带尾斜杠标记。
+ */
+export async function listShallowTree(root: string, maxDepth = 2, maxEntries = 300): Promise<string[]> {
+  const fs = getFsAdapter();
+  const ig = await loadGitignore(root, fs);
+  const out: string[] = [];
+
+  async function recurse(dir: string, rel: string, depth: number): Promise<void> {
+    if (out.length >= maxEntries) return;
+    let entries;
+    try {
+      entries = await fs.readDir(dir);
+    } catch {
+      return;
+    }
+    const sorted = [...entries].sort((a, b) => a.name.localeCompare(b.name));
+    for (const e of sorted) {
+      if (out.length >= maxEntries) return;
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory) {
+        if (DEFAULT_IGNORE_DIRS.has(e.name)) continue;
+        if (ig.ignores(`${childRel}/`)) continue;
+        out.push(`${childRel}/`);
+        if (depth < maxDepth) await recurse(`${dir}/${e.name}`, childRel, depth + 1);
+      } else if (e.isFile) {
+        if (ig.ignores(childRel)) continue;
+        out.push(childRel);
+      }
+    }
+  }
+
+  await recurse(root, "", 1);
+  return out;
+}

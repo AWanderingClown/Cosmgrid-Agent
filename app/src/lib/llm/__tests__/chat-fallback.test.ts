@@ -256,6 +256,25 @@ describe("streamWithFallback - 非用户中断自动恢复", () => {
     expect(secondCall.messages.at(-1)?.content).toContain("从刚才中断处继续");
   });
 
+  it("finishReason=tool-calls（撞 stopWhen 步数上限）自动续写，不当异常抛错炸链（修多角色接力硬失败 bug）", async () => {
+    mocks.streamText
+      .mockReturnValueOnce(makeSuccessStream(["先读了一半文件"], { inputTokens: 10, outputTokens: 20 }, "tool-calls"))
+      .mockReturnValueOnce(makeSuccessStream(["读完了，结论是……"], { inputTokens: 5, outputTokens: 10 }, "stop"));
+
+    const deltas: string[] = [];
+    const result = await streamWithFallback(
+      [primary],
+      [{ role: "user", content: "帮我读完整个项目" }],
+      { onDelta: (d) => deltas.push(d) },
+    );
+
+    expect(result).toEqual({ usedModelId: "m-primary", switched: false });
+    expect(deltas.join("")).toBe("先读了一半文件读完了，结论是……");
+    expect(mocks.streamText).toHaveBeenCalledTimes(2);
+    const secondCall = mocks.streamText.mock.calls[1]![0] as { messages: Array<{ role: string; content: string }> };
+    expect(secondCall.messages.at(-1)?.content).toContain("从刚才中断处继续");
+  });
+
   it("流式输出一半后网络断开时，切 fallback 并带上已输出片段继续", async () => {
     mocks.streamText
       .mockReturnValueOnce(makePartialFailingStream(["已经完成一半。"], new Error("fetch failed")))

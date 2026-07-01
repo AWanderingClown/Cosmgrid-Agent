@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use keyring::Entry;
 use tauri::ipc::Channel;
+use tauri::Manager;
 use tauri::State;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -393,6 +394,15 @@ fn set_menu_language(app: tauri::AppHandle, lang: String) -> Result<(), String> 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 单实例保护：重复启动（Dock 图标重复点 / 崩溃残留进程 / Finder 重复双击）会导致
+        // 两个进程同时抢占同一个 SQLite 文件，触发数据库打开失败或写入静默失败（"新对话"点了没反应）。
+        // 第二个实例启动时转发事件给已在跑的实例并直接退出，不新建进程。必须是第一个注册的插件。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_focus();
+                let _ = window.unminimize();
+            }
+        }))
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_shell::init())

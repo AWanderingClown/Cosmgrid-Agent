@@ -45,4 +45,20 @@ describe("deriveToolCallViews", () => {
     const [view] = deriveToolCallViews([row({ toolName: "bash", input: "{bad" })]);
     expect(view!.shortSummary).toBe("执行命令：命令");
   });
+
+  it("展开详情输出人话摘要，不暴露原始 JSON", () => {
+    const [view] = deriveToolCallViews([
+      row({
+        toolName: "write",
+        input: JSON.stringify({ file_path: "docs/plan.md", content: "one\ntwo" }),
+        output: "written",
+        status: "success",
+      }),
+    ]);
+
+    expect(view!.detailFull).toContain("动作：写入 plan.md（2 行）");
+    expect(view!.detailFull).toContain("结果：已完成");
+    expect(view!.detailFull).not.toContain('"input"');
+    expect(view!.detailFull).not.toContain('"content"');
+  });
 });

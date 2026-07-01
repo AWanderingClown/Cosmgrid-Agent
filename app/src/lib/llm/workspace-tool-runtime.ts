@@ -10,6 +10,8 @@ export interface WorkspaceToolRuntimeOptions {
   confirm?: (preview: ToolConfirmRequest) => Promise<boolean>;
   blockedCommands?: string[];
   includePreamble?: boolean;
+  /** 桌面绝对路径——让模型知道"保存/导出到桌面"该写哪（见 workspace-context.ts 的 desktopPath）。 */
+  desktopPath?: string | null;
 }
 
 export interface WorkspaceToolRuntime {
@@ -43,7 +45,10 @@ export async function prepareWorkspaceToolRuntime(
 
   if (options.includePreamble) {
     try {
-      workspacePreamble = await buildWorkspacePreamble(options.workspacePath, { includeWrite: options.includeWrite });
+      workspacePreamble = await buildWorkspacePreamble(options.workspacePath, {
+        includeWrite: options.includeWrite,
+        desktopPath: options.desktopPath,
+      });
     } catch (err) {
       console.error("[tools] 读项目自述失败（不影响工具）:", err);
     }

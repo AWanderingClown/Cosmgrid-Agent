@@ -1,6 +1,6 @@
 // path-safety 单测（v0.7 阶段4：路径边界 + 敏感路径，安全关键）
 import { describe, it, expect } from "vitest";
-import { normalizePath, resolveInWorkspace, isSensitivePath, checkPath } from "../path-safety";
+import { normalizePath, resolveInWorkspace, isSensitivePath, checkPath, checkWritePath } from "../path-safety";
 
 const WS = "/Users/me/projects/foo";
 
@@ -62,5 +62,41 @@ describe("isSensitivePath / checkPath — 敏感路径", () => {
   it("普通源码文件不敏感", () => {
     expect(isSensitivePath(`${WS}/src/index.ts`)).toBe(false);
     expect(checkPath(WS, "src/index.ts").ok).toBe(true);
+  });
+});
+
+describe("checkWritePath — 写类工具专用，工作区外放行但标记 external", () => {
+  it("工作区内 → 放行，external=false", () => {
+    const r = checkWritePath(WS, "src/auth.ts");
+    expect(r.ok).toBe(true);
+    expect(r.external).toBe(false);
+  });
+
+  it("workspace 根本身 → 放行，external=false", () => {
+    expect(checkWritePath(WS, ".").external).toBe(false);
+  });
+
+  it("工作区外的绝对路径（如桌面）→ 放行，external=true（不再像 checkPath 那样硬拒绝）", () => {
+    const r = checkWritePath(WS, "/Users/me/Desktop/plan.md");
+    expect(r.ok).toBe(true);
+    expect(r.external).toBe(true);
+    expect(r.resolved).toBe("/Users/me/Desktop/plan.md");
+  });
+
+  it("路径遍历到工作区外 → 放行，external=true", () => {
+    const r = checkWritePath(WS, "../../etc/motd");
+    expect(r.ok).toBe(true);
+    expect(r.external).toBe(true);
+  });
+
+  it("前缀相同但不在子目录下的兄弟目录 → 放行，external=true", () => {
+    const r = checkWritePath(WS, "/Users/me/projects/foobar/x");
+    expect(r.ok).toBe(true);
+    expect(r.external).toBe(true);
+  });
+
+  it("敏感路径 → 不管在不在工作区内，一律拒绝（这条不因为 external 而放松）", () => {
+    expect(checkWritePath(WS, ".env").ok).toBe(false);
+    expect(checkWritePath("/Users/me/Desktop", ".ssh/id_rsa").ok).toBe(false);
   });
 });

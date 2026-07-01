@@ -56,6 +56,7 @@
     "renameChat": "Rename",
     "deleteConvConfirm": "Delete this conversation? This cannot be undone.",
     "loadError": "Failed to load",
+    "newChatFailed": "Failed to create a new chat — the app may be running twice and locking the database. Please restart the app and try again.",
     "noCredential": "API credential not found",
     "noApiKey": "API Key missing",
     "constructError": "Failed to construct model",

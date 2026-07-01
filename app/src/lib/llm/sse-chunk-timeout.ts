@@ -73,6 +73,37 @@ function wrapSseResponse(res: Response, ms: number): Response {
 }
 
 /**
+ * 给 fetch() 本身（拿到第一个 Response 之前）套超时——防的是「连响应头都没返回」的僵死：
+ * 服务端一直不回应（挂起 / 网络卡死），`fetch()` 这个 Promise 永远不 resolve/reject。
+ * 这跟 wrapSseResponse 是两道独立的关卡：那道防"流开始后中途哑了"，这道防"流压根没开始"——
+ * 实测 GPT 5.5 这类重 reasoning 模型会在服务端"思考"很久才吐第一个字节，
+ * 只护 chunk 间隔护不住这种情况，得连 fetch() 本身也一起计时。
+ */
+async function fetchWithTimeout(
+  baseFetch: typeof fetch,
+  input: Parameters<typeof fetch>[0],
+  init: Parameters<typeof fetch>[1],
+  ms: number,
+): Promise<Response> {
+  if (typeof ms !== "number" || ms <= 0) return baseFetch(input as RequestInfo, init);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await new Promise<Response>((resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new Error(
+            `${SSE_CHUNK_TIMEOUT_MARKER}: 请求发出后 ${ms}ms 内服务端没有任何响应（可能是服务端挂起或网络卡死）。`,
+          ),
+        );
+      }, ms);
+      baseFetch(input as RequestInfo, init).then(resolve, reject);
+    });
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
  * 把任意 fetch 包成「带 SSE chunk 静默超时」的 fetch，注入给 Vercel AI SDK 的 provider。
  * @param baseFetch 底层 fetch（不传则用全局 fetch）
  * @param ms chunk 静默上限，默认 {@link SSE_CHUNK_TIMEOUT_MS}
@@ -82,7 +113,7 @@ export function withSseChunkTimeout(
   ms: number = SSE_CHUNK_TIMEOUT_MS,
 ): typeof fetch {
   return async (input, init) => {
-    const res = await baseFetch(input as RequestInfo, init);
+    const res = await fetchWithTimeout(baseFetch, input, init, ms);
     return wrapSseResponse(res, ms);
   };
 }

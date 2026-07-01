@@ -21,6 +21,8 @@ export default defineConfig({
             if (id.includes("/node_modules/i18next/") || id.includes("/node_modules/react-i18next/")) return "vendor-i18n";
             if (id.includes("/node_modules/underscore/")) return "vendor-underscore";
             if (id.includes("/node_modules/zod/")) return "vendor-zod";
+            if (id.includes("/node_modules/pdfjs-dist/")) return "vendor-pdf";
+            if (id.includes("/node_modules/mammoth/")) return "vendor-docx";
             if (
               /[\\/]node_modules[\\/](react-markdown|remark-|rehype-|unified|mdast-|micromark|hast-|unist-|vfile|markdown-table|property-information|space-separated-tokens|comma-separated-tokens|character-entities|decode-named-character-reference|devlop|bail|ccount|longest-streak|trim-lines|zwitch|html-url-attributes|estree-)/.test(id)
             ) {

@@ -5,7 +5,7 @@
 
 import { z } from "zod";
 import type { ToolDefinition, ToolResult } from "./types";
-import { checkPath } from "./path-safety";
+import { checkWritePath } from "./path-safety";
 import { getFsAdapter } from "./fs-adapter";
 import { computeDiff, diffSummaryLine } from "./diff-util";
 import { requireApproval } from "./confirm";
@@ -38,7 +38,7 @@ export const editTool: ToolDefinition<EditParams> = {
   parameters: paramsSchema,
   readOnly: false,
   async execute(input, ctx): Promise<ToolResult> {
-    const check = checkPath(ctx.workspacePath, input.file_path);
+    const check = checkWritePath(ctx.workspacePath, input.file_path);
     if (!check.ok) return { status: "denied", output: check.reason ?? "路径不允许" };
     if (input.old_string === input.new_string) {
       return { status: "error", output: "old_string 与 new_string 相同，无需修改。" };
@@ -63,9 +63,10 @@ export const editTool: ToolDefinition<EditParams> = {
     const newContent = oldContent.replace(input.old_string, input.new_string);
     const diff = computeDiff(oldContent, newContent);
 
+    const externalNotice = check.external ? "⚠️ 这次要写到工作区之外：" : "";
     const denied = await requireApproval(ctx, {
       toolName: "edit",
-      summary: `修改 ${diffSummaryLine(check.resolved, diff)}`,
+      summary: `${externalNotice}修改 ${diffSummaryLine(check.resolved, diff)}`,
       diff: diff.patch,
     });
     if (denied) return denied;
