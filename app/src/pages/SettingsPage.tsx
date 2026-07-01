@@ -1,7 +1,7 @@
 // SettingsPage - 设置页 (v0.7.5: 移除缺失的 RadioGroup 依赖，采用自定义稳定实现)
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap, FolderKanban, Brain } from "lucide-react";
+import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap, FolderKanban, Brain, Bug } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useTheme, type Theme } from "@/lib/theme";
-import { useMemoryEmbeddingSetting, useSmartRoutingSetting } from "@/lib/app-settings";
+import { useMemoryEmbeddingSetting, usePureSingleModelModeSetting, useSmartRoutingSetting } from "@/lib/app-settings";
 import { apiCredentials, type ApiCredential } from "@/lib/db";
 import { backfillProjectMemoryVectors } from "@/lib/memory/retrieval";
 import { SUPPORTED_LANGUAGES, LANGUAGE_LABELS, type SupportedLanguage } from "@/i18n";
@@ -23,6 +23,7 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
   const [smartRouting, setSmartRouting] = useSmartRoutingSetting();
+  const [pureSingleModelMode, setPureSingleModelMode] = usePureSingleModelModeSetting();
   const [memoryEmbedding, setMemoryEmbedding] = useMemoryEmbeddingSetting();
   const [embeddingCredentials, setEmbeddingCredentials] = useState<ApiCredential[]>([]);
   const [syncingMemoryIndex, setSyncingMemoryIndex] = useState(false);
@@ -248,6 +249,36 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
                   className={cn(
                     "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform duration-300",
                     smartRouting ? "translate-x-6" : "translate-x-1"
+                  )}
+                />
+              </button>
+            </div>
+          </Card>
+
+          {/* 纯净单模型模式（调试用） */}
+          <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-8 shadow-xl">
+            <div className="flex items-center gap-3 pb-4 border-b border-white/10">
+              <Bug className="w-5 h-5 text-primary" />
+              <h2 className="text-xl font-bold dark:text-white">{t("settings.pureMode.title")}</h2>
+            </div>
+            <div className="flex items-center justify-between gap-4 p-5 bg-white/5 rounded-2xl border border-white/5">
+              <div className="space-y-1">
+                <div className="text-sm font-bold">{t("settings.pureMode.toggleTitle")}</div>
+                <p className="text-xs text-muted-foreground max-w-lg leading-relaxed">{t("settings.pureMode.toggleDesc")}</p>
+              </div>
+              <button
+                role="switch"
+                aria-checked={pureSingleModelMode}
+                onClick={() => setPureSingleModelMode(!pureSingleModelMode)}
+                className={cn(
+                  "relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors duration-300",
+                  pureSingleModelMode ? "bg-primary" : "bg-white/15"
+                )}
+              >
+                <span
+                  className={cn(
+                    "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform duration-300",
+                    pureSingleModelMode ? "translate-x-6" : "translate-x-1"
                   )}
                 />
               </button>

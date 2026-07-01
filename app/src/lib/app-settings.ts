@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 
 const SMART_ROUTING_KEY = "cosmgrid.smartRouting";
+const PURE_SINGLE_MODEL_MODE_KEY = "cosmgrid.pureSingleModelMode";
 const MEMORY_EMBEDDING_MODE_KEY = "cosmgrid.memoryEmbedding.mode";
 const MEMORY_EMBEDDING_CREDENTIAL_KEY = "cosmgrid.memoryEmbedding.credentialId";
 const MEMORY_EMBEDDING_MODEL_KEY = "cosmgrid.memoryEmbedding.modelName";
@@ -35,6 +36,31 @@ export function useSmartRoutingSetting(): [boolean, (on: boolean) => void] {
 
   useEffect(() => {
     setSmartRoutingEnabled(enabled);
+  }, [enabled]);
+
+  return [enabled, setEnabled];
+}
+
+/**
+ * 纯净单模型模式（调试用）：关掉意图裁判、后台编排自动切模型、对弈自动触发、
+ * 语义缓存、项目记忆检索、harness 自查重答闭环——只留"发消息→选中模型直接回复"这一条最基础的链路。
+ * 用于排查"单模型对话本身是否正常工作"时把其余耦合层全部隔离掉。默认关（不影响现有行为）。
+ */
+export function isPureSingleModelModeEnabled(): boolean {
+  if (!hasLocalStorage()) return false;
+  return localStorage.getItem(PURE_SINGLE_MODEL_MODE_KEY) === "on";
+}
+
+export function setPureSingleModelModeEnabled(on: boolean): void {
+  if (!hasLocalStorage()) return;
+  localStorage.setItem(PURE_SINGLE_MODEL_MODE_KEY, on ? "on" : "off");
+}
+
+export function usePureSingleModelModeSetting(): [boolean, (on: boolean) => void] {
+  const [enabled, setEnabled] = useState<boolean>(isPureSingleModelModeEnabled);
+
+  useEffect(() => {
+    setPureSingleModelModeEnabled(enabled);
   }, [enabled]);
 
   return [enabled, setEnabled];

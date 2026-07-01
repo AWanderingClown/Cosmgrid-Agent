@@ -27,7 +27,7 @@ import { classifyMessageComplexity } from "@/lib/llm/message-router";
 import { shouldAutoRunChain, shouldRunBackgroundOrchestration } from "@/lib/llm/orchestration-gating";
 import { routeMessage } from "@/lib/llm/smart-router";
 import { buildRolePerformanceScoresFromUsageRows } from "@/lib/llm/model-performance-scoring";
-import { isSmartRoutingEnabled, usePermissionModeSetting } from "@/lib/app-settings";
+import { isPureSingleModelModeEnabled, isSmartRoutingEnabled, usePermissionModeSetting } from "@/lib/app-settings";
 import { shouldExposeWriteTools } from "@/lib/llm/tool-permission-policy";
 import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
 import { compressHistory, type ChatMsg } from "@/lib/llm/context-compressor";
@@ -607,6 +607,9 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
 
     // v0.9 阶段7：这一回合是否启用 v2（查缓存/压缩/写缓存）——入口读一次，全程一致
     const smart = isSmartRoutingEnabled();
+    // 纯净单模型模式（调试用）：入口读一次，全程一致——关掉意图裁判/后台编排/对弈自动触发/
+    // 语义缓存/记忆检索/harness重答闭环，只留"发消息→选中模型直接回复"这条最基础链路。
+    const pureMode = isPureSingleModelModeEnabled();
 
     const optimisticTurn = createOptimisticUserTurn<ChatMessage>({ messages, text, attachments });
     const userMsg: ChatMessage = optimisticTurn.userMsg;
@@ -710,7 +713,9 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     let shouldCompleteWorkflowNode = false;
     let turnIntentDecision: TurnIntentDecision | null = null;
     let workflowAdvancedThisTurn = false;
-    if (convId) {
+    // 纯净模式：跳过意图裁判整个环节（不建/续 workflow run，也不真调那次判断用的 LLM），
+    // turnIntentDecision 保持 null，下面 cacheIntent 会兜底成固定的 answer_only。
+    if (convId && !pureMode) {
       try {
         if (!turnWorkflowSnapshot) {
           const activeRun = await workflowRuns.getActiveByConversation(convId);
@@ -817,10 +822,11 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       turnIntentDecision?.patch?.debateRequested === true ||
       isExplicitDebateRequest(text);
     const shouldRunDebateTurn =
-      explicitDebateRequest ||
-      (currentWorkflowNode?.phase === "debate" &&
-        !!turnWorkflowSnapshot?.intent.debateRequested &&
-        workflowAdvancedThisTurn);
+      !pureMode &&
+      (explicitDebateRequest ||
+        (currentWorkflowNode?.phase === "debate" &&
+          !!turnWorkflowSnapshot?.intent.debateRequested &&
+          workflowAdvancedThisTurn));
     if (shouldRunDebateTurn) {
       // 协作链面板从 workflowSnapshot 派生「模型博弈」卡片。用户在没有 run 的对话里直接喊"开始博弈"时
       // turnWorkflowSnapshot 为 null → 派生不出博弈节点 → 卡片不出来。这里临时建一个 run 并标到 debate 节点，
@@ -1001,8 +1007,11 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     // - 干活类意图（看项目/做方案/执行/验证）→ 必须真跑工具，不能重播上次的叙述文字。
     // 只有「什么是 X / 为什么 Y」这类纯知识问答才缓存，省 token 又不会乱命中。
     const cacheWorkspace = folderAtt?.path ?? workspacePath;
-    const cacheIntent = turnIntentDecision ?? await classifyTurnIntentWithJudge({ text, activeRun: workflowSnapshotRef.current, model: intentJudgeModel });
-    const cacheEligible = smart && !cacheWorkspace && cacheIntent.action === "answer_only";
+    // 纯净模式：不再真调一次意图裁判 LLM，直接给固定的 answer_only 兜底（跟真裁判的降级路径一致）。
+    const cacheIntent: TurnIntentDecision = pureMode
+      ? { action: "answer_only", targetRunId: null, confidence: 1, reason: "pure-single-model-mode", evidenceTurnIds: [] }
+      : (turnIntentDecision ?? await classifyTurnIntentWithJudge({ text, activeRun: workflowSnapshotRef.current, model: intentJudgeModel }));
+    const cacheEligible = !pureMode && smart && !cacheWorkspace && cacheIntent.action === "answer_only";
 
     // v0.9 阶段7：纯问答先查语义缓存——命中则秒回、0 成本、跳过 LLM
     if (cacheEligible) {
@@ -1083,7 +1092,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
 
     const currentProjectId =
       (convId ? conversationList.find((c) => c.id === convId)?.projectId : null) ?? null;
-    if (currentProjectId) {
+    if (currentProjectId && !pureMode) {
       try {
         const [{ preamble }, project, memories] = await Promise.all([
           retrieveCrossProjectMemoriesForPrompt(currentProjectId, text),
@@ -1241,7 +1250,8 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           detectIntentNoToolCall(fullContent);
 
         // 任一触发 + 还有重答预算 → 回填纠正指令 + continue（attempt++ 守门）
-        if ((harnessDirty || nudgeNeeded) && attempt < MAX_HARNESS_RETRY) {
+        // 纯净模式下不重答，只留一次真实模型调用，方便单独判断"这条回复本身对不对"。
+        if (!pureMode && (harnessDirty || nudgeNeeded) && attempt < MAX_HARNESS_RETRY) {
           const retryPrompt = harnessDirty
             ? buildCorrectionPrompt(verdict!, { hasTools: !!tools })
             : buildIntentNudgePrompt();
@@ -1323,6 +1333,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     if (
       convId &&
       fullContent &&
+      !pureMode &&
       !controller.signal.aborted &&
       shouldRunBackgroundOrchestration({
         text,
