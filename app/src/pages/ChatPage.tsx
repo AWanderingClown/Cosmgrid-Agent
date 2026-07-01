@@ -62,6 +62,8 @@ import { classifyLlmError } from "@/lib/llm/error-classifier";
 import { ingestFile, ingestPath, toUserCoreMessage, parseAttachments, type Attachment } from "@/lib/llm/attachments";
 import { retrieveCrossProjectMemoriesForPrompt } from "@/lib/memory/retrieval";
 import { listen } from "@tauri-apps/api/event";
+import { createOptimisticUserTurn } from "@/pages/chat/optimistic-turn";
+import { getActiveAssistantModelLabel } from "@/pages/chat/streaming-status";
 import {
   planNodes,
   resolveOrchestration,
@@ -1125,6 +1127,14 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     // v0.9 阶段7：这一回合是否启用 v2（查缓存/压缩/写缓存）——入口读一次，全程一致
     const smart = isSmartRoutingEnabled();
 
+    const optimisticTurn = createOptimisticUserTurn<ChatMessage>({ messages, text, attachments });
+    const userMsg: ChatMessage = optimisticTurn.userMsg;
+    const newMessages: ChatMessage[] = [...messages, userMsg];
+    let userId = userMsg.id;
+    // 输入确认后先把用户气泡放进主对话；落库、意图判断、工具准备都可以慢慢做。
+    stickToBottomRef.current = true;
+    setMessages(newMessages);
+
     const cred = credentials.find((c) => c.providerId === model.providerId);
     if (!cred) {
       setStreamError(t("chat.noCredential"));
@@ -1175,7 +1185,6 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       }
     }
     if (stopIfAborted()) return;
-    let userId: string = crypto.randomUUID();
     if (convId) {
       try {
         userId = (await dbMessages.create({ conversationId: convId, role: "user", content: text, attachments: attachments?.length ? JSON.stringify(attachments) : null })).id;
@@ -1303,8 +1312,6 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     }
     if (stopIfAborted()) return;
 
-    const userMsg: ChatMessage = { id: userId, role: "user", content: text, createdAt: new Date().toISOString(), ...(attachments?.length ? { attachments } : {}) };
-    const newMessages = [...messages, userMsg];
     const exportIntent = detectDesktopExportIntent(text);
     if (exportIntent?.target === "desktop") {
       const previousAssistant = [...messages]
@@ -1971,7 +1978,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       void runBackgroundOrchestration(convId, [...newMessages, { ...assistantMsg, content: fullContent }], {
         onChainPlan: ({ chain, roleBindings: bindings }) => {
           if (chain.length === 0 || controller.signal.aborted) return;
-          if (!shouldAutoRunChain({ text, chain })) return;
+          if (!shouldAutoRunChain({ text, chain, decision: turnIntentDecision ?? cacheIntent })) return;
           // E2a+E2b：chain 接力执行。每跳新插一条 assistant 消息（roleId/chainStep/chainDone 字段，
           // 前缀▶/✓由渲染层从 roleId 派生，不烤进 content —— E2b 用户要求改）
           // + chain 运行时状态（chainRunning/executedRoles/skippedRoles/abortedRole）驱动进度条
@@ -2532,6 +2539,10 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
   }
 
   const selectedModel = availableModels.find(m => m.id === selectedModelId);
+  const activeModelLabel = getActiveAssistantModelLabel(
+    messages,
+    selectedModel?.displayName ?? selectedModel?.name ?? "—",
+  );
   const latestToolCalls = toolCallViews.slice(-8);
   const activeToolCall = pendingConfirm
     ? {
@@ -3006,7 +3017,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
                 running={isStreaming}
                 activeLabel={
                   isStreaming
-                    ? `${t("chat.replying")} · ${formatElapsed(streamElapsedMs)} · ${selectedModel?.displayName ?? selectedModel?.name ?? "—"}`
+                    ? `${t("chat.replying")} · ${formatElapsed(streamElapsedMs)} · ${activeModelLabel}`
                     : t("chat.workPanel.idle")
                 }
               />

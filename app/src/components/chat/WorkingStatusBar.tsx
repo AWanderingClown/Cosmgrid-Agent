@@ -32,11 +32,11 @@ export function WorkingStatusBar({ activeCall, running }: { activeCall?: ToolCal
         </div>
       );
     }
-    // 还没调工具、纯生成文字 → 转圈「正在工作」，不绑任何工具名
+    // 还没调工具、纯生成文字 → 转圈「模型正在回复」，不绑任何工具名
     return (
       <div className="flex min-w-0 items-center gap-2 text-[11px] text-primary">
         <Loader2 className="h-3 w-3 animate-spin" />
-        <span className="font-semibold">{t("chat.working.working")}</span>
+        <span className="font-semibold">{t("chat.working.replying")}</span>
       </div>
     );
   }

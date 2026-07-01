@@ -25,7 +25,7 @@ export function DiffView({ oldText, newText, maxLines = MAX_DETAIL_LINES }: Diff
 
   if (noChange) {
     return (
-      <div className="px-3 py-2 text-[10px] text-muted-foreground/50 italic">
+      <div className="px-3 py-2 text-[10px] text-muted-foreground/50">
         {t("chat.workPanel.diffNoChange")}
       </div>
     );

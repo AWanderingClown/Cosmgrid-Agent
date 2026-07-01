@@ -331,7 +331,7 @@ export function CheckpointDetailDialog({
             <div key={label} className="space-y-1">
               <div className="font-medium">{t(`projectDetail.fields.${label}`)}</div>
               <div className="text-muted-foreground whitespace-pre-wrap">
-                {value || <span className="italic">{t("projectDetail.checkpointDetail.empty")}</span>}
+                {value || <span>{t("projectDetail.checkpointDetail.empty")}</span>}
               </div>
             </div>
           ))}

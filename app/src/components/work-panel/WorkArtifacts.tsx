@@ -64,7 +64,7 @@ const ArtifactItem = memo(function ArtifactItem({ artifact }: { artifact: WorkAr
               <pre className="text-[10px] leading-relaxed font-mono text-muted-foreground/70 whitespace-pre-wrap break-words bg-foreground/[0.04] rounded-lg p-2 max-h-64 overflow-auto custom-scrollbar">
                 {shown}
               </pre>
-              <div className="text-[9px] text-amber-500/70 italic">
+              <div className="text-[9px] text-amber-500/70">
                 {t("chat.workPanel.htmlTooLarge", { size: body.length })}
               </div>
             </>
@@ -97,7 +97,7 @@ const ArtifactItem = memo(function ArtifactItem({ artifact }: { artifact: WorkAr
                   }
                 }}
               />
-              <div className="text-[9px] text-muted-foreground/50 italic">
+              <div className="text-[9px] text-muted-foreground/50">
                 {t("chat.workPanel.htmlJsDisabledHint")}
               </div>
             </>

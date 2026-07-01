@@ -59,11 +59,11 @@
     "noCredential": "API credential not found",
     "noApiKey": "API Key missing",
     "constructError": "Failed to construct model",
-    "switchedTo": "Switched to {{name}}",
+    "switchedTo": "Continuing with fallback model: {{name}}",
     "recovery": {
       "native_resume": "Recovered with the CLI's native resume session",
       "context_replay": "Recovered by continuing from the interruption point without repeating earlier content",
-      "fallback_handoff": "Recovered by handing completed context to the next model"
+      "fallback_handoff": "Primary model stopped; continuing with a fallback model"
     },
     "cacheHit": "Cache hit · answered {{days}}d ago",
     "contextTrimmed": "[{{count}} earlier messages omitted to save tokens]",
@@ -92,6 +92,7 @@
     "working": {
       "idle": "Idle — your turn",
       "working": "Working",
+      "replying": "Model is replying",
       "done": "Done",
       "awaitingApproval": "Waiting for your approval"
     },
@@ -439,8 +440,8 @@
   },
   "builtinTemplates": {
     "default_eight_roles": {
-      "name": "Default 8 Roles",
-      "desc": "Bind each of the 8 team roles (Leader / Architect / Frontend / Backend / Execution Runner / Tester / Reviewer / Security) to a model. Used by the main chat when no project is selected."
+      "name": "Default Roles",
+      "desc": ""
     }
   },
   "handoffMarkdown": {
@@ -452,21 +453,20 @@
   "templates": {
     "sectionLabel": "Pipeline Architect",
     "title": "Project Role Templates",
-    "desc": "Default 8 Roles is the main collaboration plan. Bind the best model to each role, then copy it into your own custom templates later.",
+    "desc": "Bind the best model to each role, or add your own custom template directly.",
     "available": "Available Templates",
     "builtIn": "Built-in",
     "rolesCount": "{{count}} collaboration nodes",
     "addTemplate": "Add Template",
-    "copyTemplate": "Copy Template",
     "deleteTemplate": "Delete Template",
     "createTemplate": "Create Template",
     "templateName": "Template Name",
     "templateNamePlaceholder": "e.g. My Daily Dev Template",
-    "newTemplateDefaultName": "My 8-Role Template",
-    "customTemplateDesc": "Custom 8-role template. Bind models based on your own workflow.",
-    "copyName": "{{name}} Copy",
+    "newTemplateDefaultName": "My Role Template",
     "deleteConfirm": "Delete this custom template? The built-in default template will not be deleted.",
     "smartAssign": "Smart Auto-Assign",
+    "addRole": "Add Role",
+    "deleteRole": "Delete Role",
     "noModels": "No AI models connected. Please go to \"Providers\" first.",
     "primaryModel": "Primary Model",
     "primaryModelPlaceholder": "Select primary model",
@@ -474,7 +474,6 @@
     "fallbackModelPlaceholder": "No backup",
     "fallbackDisabled": "Don't use a backup",
     "selectTemplateHint": "Select a template on the left",
-    "eightRolesBinding": "Default 8 Roles · Bind One Model Per Role",
     "eightRole": {
       "leader_desc": "Break down tasks, steer flow, answer daily questions",
       "architect_desc": "Design plans and architecture tradeoffs",
@@ -750,8 +749,8 @@
         "desc": "At least 2 models are needed to showcase multi-AI collaboration — e.g. Opus for chat, Gemini for coding, Haiku for testing."
       },
       "browseTemplates": {
-        "title": "Review the Default 8 Roles",
-        "desc": "Default 8 Roles is the main collaboration plan: Leader, Architect, Frontend, Backend, Execution Runner, Tester, Reviewer, and Security. You can later copy it into custom templates."
+        "title": "Review the Default Roles",
+        "desc": "Default Roles include Leader, Architect, Frontend, Backend, Execution Runner, Tester, Reviewer, and Security. You can add your own templates later."
       },
       "bindWorkspace": {
         "title": "Return to chat and bind a working folder",
@@ -794,7 +793,7 @@
       "recovery": {
         "native_resume": "Recovered with the CLI's native resume session",
         "context_replay": "Recovered by continuing from the interruption point without repeating earlier content",
-        "fallback_handoff": "Recovered by handing completed context to the next model"
+        "fallback_handoff": "Primary model stopped; continuing with a fallback model"
       },
       "apiKeyMissing": "API Key Missing",
       "initFailed": "Initialization Failed",

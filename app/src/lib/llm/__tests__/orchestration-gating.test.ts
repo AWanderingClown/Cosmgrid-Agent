@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
+import type { TurnIntentDecision } from "@/lib/workflow/types";
 import { hasWorkflowIntent, shouldAutoRunChain, shouldRunBackgroundOrchestration } from "../orchestration-gating";
+
+function decision(overrides: Partial<TurnIntentDecision>): TurnIntentDecision {
+  return {
+    action: "answer_only",
+    targetRunId: null,
+    confidence: 0.9,
+    reason: "test",
+    evidenceTurnIds: [],
+    ...overrides,
+  };
+}
 
 describe("orchestration-gating", () => {
   it("普通闲聊不触发后台编排", () => {
@@ -25,6 +37,41 @@ describe("orchestration-gating", () => {
   it("只要方案时不立刻重复跑 architect 接力", () => {
     expect(shouldAutoRunChain({ text: "做一份更完整的计划方案", chain: ["architect"] })).toBe(false);
     expect(shouldAutoRunChain({ text: "给我一个项目路线图", chain: ["architect"] })).toBe(false);
+  });
+
+  it("评审方案和排下一步计划时，即使编排出了工程角色也不自动开工", () => {
+    expect(
+      shouldAutoRunChain({
+        text: "我这边有一些问题，然后你看一下这个方案对不对？如果对，那我们按这个方案去做下一步的计划。",
+        chain: ["frontend", "backend", "runner"],
+        decision: decision({ action: "continue_run", patch: { executionMode: "plan_only" } }),
+      }),
+    ).toBe(false);
+    expect(
+      shouldAutoRunChain({
+        text: "进优先级建议\nP1 拆分 ChatPage.tsx\nP2 bundle 拆分\n帮我看看这个方案对不对",
+        chain: ["architect", "frontend", "backend"],
+        decision: decision({ action: "continue_run", patch: { reviewRequested: true, executionMode: "plan_only" } }),
+      }),
+    ).toBe(false);
+  });
+
+  it("自动接力优先服从意图识别结果，而不是只看关键词", () => {
+    expect(
+      shouldAutoRunChain({
+        text: "按这个方案去做下一步的计划",
+        chain: ["frontend", "backend"],
+        decision: decision({ action: "continue_run", patch: { executionMode: "plan_only" } }),
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldAutoRunChain({
+        text: "开始实现前端并跑测试",
+        chain: ["frontend", "runner"],
+        decision: decision({ action: "approve_node", patch: { executionMode: "execute_directly" } }),
+      }),
+    ).toBe(true);
   });
 
   it("执行类节点仍然自动接力", () => {

@@ -126,15 +126,15 @@ export function StatsPage() {
   const maxDayCost = Math.max(...(summary?.byDay.map((d) => d.cost) ?? [0]), 0.0001);
 
   return (
-    <div className="h-full w-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
-      <div className="space-y-10 pb-20">
-        <header className="space-y-3 border-l-4 border-primary pl-6 py-2">
-          <div className="flex items-center gap-2 text-primary font-bold">
-            <BarChart3 className="w-5 h-5" />
-            <span className="text-xs uppercase tracking-widest">{t("stats.sectionLabel")}</span>
+    <div className="app-page">
+      <div className="app-section">
+        <header className="app-page-header">
+          <div className="app-eyebrow">
+            <BarChart3 className="w-4 h-4" />
+            <span>{t("stats.sectionLabel")}</span>
           </div>
-          <h1 className="text-4xl font-black tracking-tight dark:text-white">{t("stats.title")}</h1>
-          <p className="text-muted-foreground dark:text-muted-foreground/80 text-sm max-w-2xl leading-relaxed">
+          <h1 className="app-page-title">{t("stats.title")}</h1>
+          <p className="app-page-desc">
             {t("stats.desc")}
           </p>
         </header>
@@ -142,9 +142,9 @@ export function StatsPage() {
         {loading ? (
           <div className="text-sm text-muted-foreground">{t("stats.loading")}</div>
         ) : (
-          <div className="space-y-6">
+          <div className="space-y-5">
             {/* 概览卡片 */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <StatCard icon={<Coins className="w-4 h-4" />} label={t("stats.today")} value={fmtCost(summary!.todayCost)} />
               <StatCard icon={<Activity className="w-4 h-4" />} label={t("stats.last7d")} value={fmtCost(summary!.last7dCost)} />
               <StatCard icon={<Activity className="w-4 h-4" />} label={t("stats.last30d")} value={fmtCost(summary!.last30dCost)} />
@@ -166,12 +166,12 @@ export function StatsPage() {
               </button>
             </div>
 
-            <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 shadow-xl">
-              <div className="flex items-center gap-3 pb-6 border-b border-white/10">
-                <Coins className="w-5 h-5 text-emerald-500" />
-                <h2 className="text-lg font-bold dark:text-white">{t("stats.savingsTitle")}</h2>
+            <Card className="panel-card">
+              <div className="panel-title-row">
+                <Coins className="w-4 h-4 text-emerald-500" />
+                <h2 className="panel-title">{t("stats.savingsTitle")}</h2>
               </div>
-              <div className="pt-6 space-y-4">
+              <div className="pt-4 space-y-3">
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                   <StatCard icon={<Coins className="w-4 h-4" />} label={t("stats.savingsTotal")} value={fmtCost(savingsSummary.total)} />
                   <StatCard icon={<Sparkles className="w-4 h-4" />} label={t("stats.savingsKinds.cache")} value={fmtCost(savingsSummary.byKind.cache)} />
@@ -191,18 +191,18 @@ export function StatsPage() {
             </Card>
 
             {/* 7 天成本趋势（零依赖 CSS 柱状图） */}
-            <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 shadow-xl">
-              <div className="flex items-center gap-3 pb-6 border-b border-white/10">
-                <BarChart3 className="w-5 h-5 text-primary" />
-                <h2 className="text-lg font-bold dark:text-white">{t("stats.trendTitle")}</h2>
+            <Card className="panel-card">
+              <div className="panel-title-row">
+                <BarChart3 className="w-4 h-4 text-primary" />
+                <h2 className="panel-title">{t("stats.trendTitle")}</h2>
               </div>
-              <div className="flex items-end justify-between gap-2 h-40 pt-6">
+              <div className="flex items-end justify-between gap-2 h-36 pt-4">
                 {summary!.byDay.map((d) => (
                   <div key={d.date} className="flex-1 flex flex-col items-center gap-2 group">
                     <div className="text-[9px] font-bold text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
                       {fmtCost(d.cost)}
                     </div>
-                    <div className="w-full flex items-end justify-center" style={{ height: "100px" }}>
+                    <div className="w-full flex items-end justify-center" style={{ height: "88px" }}>
                       <div
                         className="w-full max-w-[28px] rounded-t-lg bg-gradient-to-t from-primary/40 to-primary transition-all duration-500"
                         style={{ height: `${Math.max(3, (d.cost / maxDayCost) * 100)}%` }}
@@ -215,11 +215,11 @@ export function StatsPage() {
             </Card>
 
             {/* 阶段 F2：按模型成本（drill-down 展开角色拆分）*/}
-            <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 shadow-xl">
-              <div className="flex items-center gap-3 pb-6 border-b border-white/10">
-                <Cpu className="w-5 h-5 text-primary" />
-                <h2 className="text-lg font-bold dark:text-white">{t("stats.byModelTitle")}</h2>
-                <span className="text-[9px] text-muted-foreground/60 italic">
+            <Card className="panel-card">
+              <div className="panel-title-row">
+                <Cpu className="w-4 h-4 text-primary" />
+                <h2 className="panel-title">{t("stats.byModelTitle")}</h2>
+                <span className="text-[9px] text-muted-foreground/60">
                   {t("stats.byModelDrilldownHint")}
                 </span>
               </div>
@@ -265,10 +265,10 @@ export function StatsPage() {
             </Card>
 
             {/* 模型表现（SmartRouter 评分数据） */}
-            <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 shadow-xl">
-              <div className="flex items-center gap-3 pb-6 border-b border-white/10">
-                <Activity className="w-5 h-5 text-amber-500" />
-                <h2 className="text-lg font-bold dark:text-white">{t("stats.perfTitle")}</h2>
+            <Card className="panel-card">
+              <div className="panel-title-row">
+                <Activity className="w-4 h-4 text-amber-500" />
+                <h2 className="panel-title">{t("stats.perfTitle")}</h2>
               </div>
               {perf.length === 0 ? (
                 <p className="text-sm text-muted-foreground pt-6">{t("stats.perfEmpty")}</p>
@@ -287,10 +287,10 @@ export function StatsPage() {
             </Card>
 
             {/* AI 工具操作记录（透明化：用户看清 AI 读/改/跑了什么） */}
-            <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 shadow-xl">
-              <div className="flex items-center gap-3 pb-6 border-b border-white/10">
-                <Wrench className="w-5 h-5 text-primary" />
-                <h2 className="text-lg font-bold dark:text-white">{t("stats.toolsTitle")}</h2>
+            <Card className="panel-card">
+              <div className="panel-title-row">
+                <Wrench className="w-4 h-4 text-primary" />
+                <h2 className="panel-title">{t("stats.toolsTitle")}</h2>
               </div>
               {toolExecs.length === 0 ? (
                 <p className="text-sm text-muted-foreground pt-6">{t("stats.toolsEmpty")}</p>
@@ -336,9 +336,9 @@ function PerformanceCard({
   const latency = formatLatency(stat.avgLatencyMs, t);
 
   return (
-    <div className="rounded-2xl bg-white/5 border border-white/10 p-4 space-y-4">
+    <div className="rounded-2xl bg-white/5 border border-white/10 px-3.5 py-3 space-y-3">
       <div className="min-w-0">
-        <div className="font-bold text-sm dark:text-white truncate">{modelName}</div>
+        <div className="font-bold text-[13px] dark:text-white truncate">{modelName}</div>
         <div className="text-[10px] text-muted-foreground mt-1 truncate">
           {providerName
             ? t("stats.perfProviderLine", { provider: providerName, model: model?.name ?? modelName })
@@ -346,7 +346,7 @@ function PerformanceCard({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 text-xs">
+      <div className="grid grid-cols-2 gap-2 text-[11px]">
         <MetricPill
           icon={<Layers3 className="w-3.5 h-3.5" />}
           label={t("stats.perfTaskType")}
@@ -400,12 +400,12 @@ function SavingsRow({
   }
 
   return (
-    <div className="rounded-2xl bg-white/5 border border-white/10 p-4 space-y-2 text-sm">
+    <div className="rounded-2xl bg-white/5 border border-white/10 px-3.5 py-3 space-y-1.5 text-[13px]">
       <div className="flex items-center justify-between gap-3">
         <div className="font-bold dark:text-white">{t(`stats.savingsKinds.${row.kind}`)}</div>
         <div className="font-bold text-emerald-500 tabular-nums">{fmtCost(row.savedCost)}</div>
       </div>
-      <div className="text-xs text-muted-foreground">
+      <div className="text-[11px] text-muted-foreground">
         {t("stats.savingsExplain", { baseline: fmtCost(row.baselineCost), actual: fmtCost(row.actualCost) })}
       </div>
       <div className="text-[11px] text-muted-foreground/80">
@@ -454,7 +454,7 @@ function MetricPill({
   valueClassName?: string;
 }) {
   return (
-    <div className="rounded-xl bg-black/10 border border-white/5 p-3 space-y-1">
+    <div className="rounded-xl bg-black/10 border border-white/5 px-3 py-2 space-y-1">
       <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
         {icon}
         {label}
@@ -504,7 +504,7 @@ function ModelRoleBreakdown({
 
   if (groups.length === 0) {
     return (
-      <div className="px-4 py-3 text-[10px] text-muted-foreground/50 italic border-t border-white/5">
+      <div className="px-4 py-3 text-[10px] text-muted-foreground/50 border-t border-white/5">
         {t("stats.actorRoleEmptyHint")}
       </div>
     );
@@ -512,7 +512,7 @@ function ModelRoleBreakdown({
 
   return (
     <div className="px-3 py-3 space-y-2 border-t border-white/5 bg-black/10" data-testid={`byModel-breakdown-${modelId}`}>
-      <div className="text-[9px] text-muted-foreground/60 italic px-1">
+      <div className="text-[9px] text-muted-foreground/60 px-1">
         {t("stats.byModelDrilldownTitle")}
       </div>
       {groups.map((g) => {
@@ -601,12 +601,12 @@ function getRoleColor(roleKind: string | null): string {
 
 function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
-    <Card className="glass border-white/15 dark:border-white/5 rounded-2xl p-5 shadow-lg space-y-2">
-      <div className="flex items-center gap-2 text-muted-foreground text-[10px] font-bold uppercase tracking-wider">
+    <Card className="metric-card">
+      <div className="metric-label">
         {icon}
         {label}
       </div>
-      <div className="text-2xl font-black dark:text-white tabular-nums">{value}</div>
+      <div className="metric-value">{value}</div>
     </Card>
   );
 }

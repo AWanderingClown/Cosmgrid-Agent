@@ -16,7 +16,7 @@ const components: Components = {
   ol: (p) => <ol className="my-1.5 ml-4 list-decimal space-y-0.5" {...p} />,
   li: (p) => <li className="leading-relaxed" {...p} />,
   strong: (p) => <strong className="font-semibold" {...p} />,
-  em: (p) => <em className="italic" {...p} />,
+  em: (p) => <em className="font-medium not-italic" {...p} />,
   a: (p) => <a className="text-primary underline underline-offset-2 hover:opacity-80" target="_blank" rel="noreferrer" {...p} />,
   hr: () => <hr className="my-3 border-white/10" />,
   blockquote: (p) => <blockquote className="my-2 pl-3 border-l-2 border-primary/30 text-muted-foreground" {...p} />,

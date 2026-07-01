@@ -1,7 +1,7 @@
-// TemplatesPage - 只保留默认 8 角色体系；旧内置模板由 db.list() 隐藏，不删库。
+// TemplatesPage - 只保留默认角色体系；旧内置模板由 db.list() 隐藏，不删库。
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Copy, LayoutTemplate, Plus, Settings2, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
+import { LayoutTemplate, Plus, Settings2, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -76,7 +76,6 @@ export function TemplatesPage() {
   }, [selectedId]);
 
   const selected = templates.find((tpl) => tpl.id === selectedId) ?? null;
-  const builtInDef = selected ? BUILT_IN_TEMPLATES.find((b) => b.name === selected.name) : null;
 
   async function loadRoles(templateId: string) {
     setRoles(await dbTemplateRoles.listByTemplate(templateId));
@@ -106,7 +105,7 @@ export function TemplatesPage() {
     try {
       const tpl = await dbTemplates.create({
         name,
-        description: t("templates.customTemplateDesc"),
+        description: "",
         icon: "Users",
         isBuiltIn: false,
         isDefault: false,
@@ -114,36 +113,6 @@ export function TemplatesPage() {
       await ensureEightRoleRows(tpl.id, []);
       setCreateOpen(false);
       setTemplateName("");
-      await load(tpl.id);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function copySelectedTemplate() {
-    if (!selected) return;
-    setSaving(true);
-    try {
-      const sourceRows = await dbTemplateRoles.listByTemplate(selected.id);
-      const tpl = await dbTemplates.create({
-        name: t("templates.copyName", { name: displayTemplateName(selected) }),
-        description: selected.description || t("templates.customTemplateDesc"),
-        icon: selected.icon || "Users",
-        isBuiltIn: false,
-        isDefault: false,
-      });
-      for (let i = 0; i < ROLE_IDS.length; i++) {
-        const role = ROLE_IDS[i]!;
-        const source = sourceRows.find((row) => row.workRole === role);
-        await dbTemplateRoles.create({
-          templateId: tpl.id,
-          workRole: role,
-          modelId: source?.modelId ?? "",
-          fallbackModelId: source?.fallbackModelId ?? null,
-          order: i,
-          enabled: source?.enabled ?? true,
-        });
-      }
       await load(tpl.id);
     } finally {
       setSaving(false);
@@ -166,16 +135,51 @@ export function TemplatesPage() {
     if (!selected || models.length === 0) return;
     setSaving(true);
     try {
-      await ensureEightRoleRows(selected.id, roles);
+      if (selected.isBuiltIn) await ensureEightRoleRows(selected.id, roles);
       const latestRows = await dbTemplateRoles.listByTemplate(selected.id);
-      const map = autoAssignModels(ROLE_IDS.map((role) => ROLE_TO_WORK_ROLE[role]), models);
-      for (const role of ROLE_IDS) {
+      const targetRoles = selected.isBuiltIn
+        ? [...ROLE_IDS]
+        : latestRows
+          .map((row) => row.workRole)
+          .filter((role): role is (typeof ROLE_IDS)[number] => (ROLE_IDS as readonly string[]).includes(role));
+      const map = autoAssignModels(targetRoles.map((role) => ROLE_TO_WORK_ROLE[role]), models);
+      for (const role of targetRoles) {
         const modelId = map.get(ROLE_TO_WORK_ROLE[role]);
         if (!modelId) continue;
         const existing = latestRows.find((r) => r.workRole === role);
         if (existing) await dbTemplateRoles.update(existing.id, { modelId });
         else await dbTemplateRoles.create({ templateId: selected.id, workRole: role, modelId });
       }
+      setRoles(await dbTemplateRoles.listByTemplate(selected.id));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function addRole(role: string) {
+    if (!selected || selected.isBuiltIn || !role) return;
+    if (roleAssignment(role)) return;
+    setSaving(true);
+    try {
+      const maxOrder = roles.reduce((max, row) => Math.max(max, row.order ?? 0), -1);
+      await dbTemplateRoles.create({
+        templateId: selected.id,
+        workRole: role,
+        modelId: "",
+        fallbackModelId: null,
+        order: maxOrder + 1,
+      });
+      setRoles(await dbTemplateRoles.listByTemplate(selected.id));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteRole(row: ProjectTemplateRole) {
+    if (!selected || selected.isBuiltIn) return;
+    setSaving(true);
+    try {
+      await dbTemplateRoles.delete(row.id);
       setRoles(await dbTemplateRoles.listByTemplate(selected.id));
     } finally {
       setSaving(false);
@@ -215,20 +219,20 @@ export function TemplatesPage() {
   }
 
   return (
-    <div className="h-full w-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
-      <div className="space-y-10 pb-20">
-        <header className="space-y-3 border-l-4 border-primary pl-6 py-2">
-          <div className="flex items-center gap-2 text-primary font-bold">
-            <Settings2 className="w-5 h-5" />
-            <span className="text-xs uppercase tracking-widest">{t("templates.sectionLabel")}</span>
+    <div className="app-page">
+      <div className="app-section">
+        <header className="app-page-header">
+          <div className="app-eyebrow">
+            <Settings2 className="w-4 h-4" />
+            <span>{t("templates.sectionLabel")}</span>
           </div>
-          <h1 className="text-4xl font-black tracking-tight dark:text-white">{t("templates.title")}</h1>
-          <p className="text-muted-foreground dark:text-muted-foreground/80 text-sm max-w-2xl leading-relaxed">
+          <h1 className="app-page-title">{t("templates.title")}</h1>
+          <p className="app-page-desc">
             {t("templates.desc")}
           </p>
         </header>
 
-        <div className="flex flex-col xl:flex-row gap-8 items-start">
+        <div className="flex flex-col xl:flex-row gap-6 items-start">
           <aside className="w-full xl:w-72 shrink-0 space-y-3">
             <div className="flex items-center justify-between px-4 mb-4">
               <div className="text-[10px] font-black text-muted-foreground/40 uppercase tracking-[0.2em]">{t("templates.available")}</div>
@@ -250,7 +254,7 @@ export function TemplatesPage() {
                 key={tpl.id}
                 onClick={() => setSelectedId(tpl.id)}
                 className={cn(
-                  "w-full text-left p-5 rounded-2xl border transition-all duration-300 group relative",
+                  "w-full text-left px-4 py-3.5 rounded-2xl border transition-all duration-300 group relative",
                   selectedId === tpl.id
                     ? "bg-primary text-primary-foreground border-transparent shadow-xl shadow-primary/20 translate-x-2"
                     : "glass border-white/10 hover:border-white/30 text-muted-foreground hover:text-foreground dark:bg-zinc-900/40",
@@ -264,7 +268,7 @@ export function TemplatesPage() {
                     {tpl.isBuiltIn && <Badge className="text-[9px] bg-white/20 text-white border-none">{t("templates.builtIn")}</Badge>}
                   </div>
                   <div className={cn("text-[10px] font-medium opacity-60", selectedId === tpl.id ? "text-white" : "")}>
-                    {t("templates.rolesCount", { count: ROLE_IDS.length })}
+                    {t("templates.rolesCount", { count: tpl.id === selectedId ? roles.length : ROLE_IDS.length })}
                   </div>
                 </div>
               </button>
@@ -273,17 +277,12 @@ export function TemplatesPage() {
 
           <div className="flex-1 min-w-0 w-full">
             {selected ? (
-              <Card className="glass border-white/15 dark:border-white/5 rounded-[2.5rem] p-8 space-y-8 animate-in fade-in zoom-in-95 duration-500 shadow-2xl">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 pb-6 border-b border-white/10">
+              <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] px-6 py-5 space-y-3 animate-in fade-in zoom-in-95 duration-500 shadow-2xl">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                   <div className="space-y-1">
-                    <h2 className="text-2xl font-black tracking-tight dark:text-white">
+                    <h2 className="text-[24px] leading-tight font-black tracking-tight dark:text-white">
                       {displayTemplateName(selected)}
                     </h2>
-                    <p className="text-sm font-medium text-muted-foreground">
-                      {builtInDef
-                        ? t(`builtinTemplates.${builtInDef.descriptionKey}.desc`)
-                        : selected.description || t("templates.customTemplateDesc")}
-                    </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button
@@ -294,22 +293,15 @@ export function TemplatesPage() {
                     >
                       <Sparkles className="w-4 h-4" /> {t("templates.smartAssign")}
                     </Button>
-                    <Button
-                      variant="ghost"
-                      onClick={() => void copySelectedTemplate()}
-                      disabled={saving}
-                      className="rounded-xl h-10 px-4 text-xs font-bold bg-white/5 hover:bg-white/10 border border-white/5 gap-2 dark:text-white"
-                    >
-                      <Copy className="w-4 h-4" /> {t("templates.copyTemplate")}
-                    </Button>
                     {!selected.isBuiltIn && (
                       <Button
                         variant="ghost"
                         onClick={() => void deleteSelectedTemplate()}
                         disabled={saving}
-                        className="rounded-xl h-10 px-4 text-xs font-bold bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white border border-red-500/10 gap-2"
+                        title={t("templates.deleteTemplate")}
+                        className="rounded-xl h-10 w-10 p-0 bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white border border-red-500/10"
                       >
-                        <Trash2 className="w-4 h-4" /> {t("templates.deleteTemplate")}
+                        <Trash2 className="w-4 h-4" />
                       </Button>
                     )}
                   </div>
@@ -322,28 +314,30 @@ export function TemplatesPage() {
                   </div>
                 )}
 
-                <div className="space-y-4">
-                  <div className="text-[10px] font-black text-muted-foreground/40 uppercase tracking-[0.2em] px-1">
-                    {t("templates.eightRolesBinding")}
-                  </div>
-                  {ROLE_IDS.map((role) => {
+                <div className="space-y-2.5">
+                  {(selected.isBuiltIn
+                    ? [...ROLE_IDS]
+                    : roles
+                      .map((row) => row.workRole)
+                      .filter((role): role is (typeof ROLE_IDS)[number] => (ROLE_IDS as readonly string[]).includes(role))
+                  ).map((role) => {
                     const a = roleAssignment(role);
                     return (
                       <div
                         key={role}
-                        className="flex flex-col lg:flex-row lg:items-center gap-6 bg-white/5 dark:bg-zinc-900/30 border border-white/5 hover:border-primary/20 rounded-2xl p-6 transition-all duration-300"
+                        className="flex flex-col lg:flex-row lg:items-center gap-3 bg-white/5 dark:bg-zinc-900/30 border border-white/5 hover:border-primary/20 rounded-xl px-4 py-3 transition-all duration-300"
                       >
                         <div className="w-44 shrink-0">
                           <div className="text-sm font-black tracking-tight text-primary">
                             {t(`chat.orchestrator.roles.${role}`)}
                           </div>
-                          <p className="text-[10px] text-muted-foreground/60 mt-1 font-bold tracking-wider">
+                          <p className="text-[10px] text-muted-foreground/60 mt-0.5 font-bold tracking-wider">
                             {t(`templates.eightRole.${role}_desc`, { defaultValue: "" })}
                           </p>
                         </div>
-                        <div className="flex-1">
-                          <div className="space-y-2">
-                            <label className="text-[10px] font-black text-muted-foreground/40 uppercase px-1">
+                        <div className="flex-1 min-w-0 flex items-end gap-2">
+                          <div className="flex-1 space-y-1">
+                            <label className="text-[9px] font-black text-muted-foreground/40 uppercase px-1">
                               {t("templates.primaryModel")}
                             </label>
                             <Select
@@ -351,7 +345,7 @@ export function TemplatesPage() {
                               onValueChange={(v) => void assignModel(role, v)}
                               disabled={saving}
                             >
-                              <SelectTrigger className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-xs font-bold dark:text-white">
+                              <SelectTrigger className="rounded-lg border-white/10 bg-white/5 dark:bg-black/20 h-9 text-xs font-bold dark:text-white">
                                 <SelectValue placeholder={t("templates.primaryModelPlaceholder")} />
                               </SelectTrigger>
                               <SelectContent className="glass border-white/10 rounded-xl">
@@ -363,10 +357,41 @@ export function TemplatesPage() {
                               </SelectContent>
                             </Select>
                           </div>
+                          {!selected.isBuiltIn && a && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => void deleteRole(a)}
+                              disabled={saving}
+                              title={t("templates.deleteRole")}
+                              className="h-9 w-9 rounded-lg text-muted-foreground/45 bg-muted/30 hover:bg-red-500/10 hover:text-red-500 border border-white/5 shrink-0"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          )}
                         </div>
                       </div>
                     );
                   })}
+                  {!selected.isBuiltIn && (
+                    <div className="pt-1">
+                      <Select onValueChange={(role) => void addRole(role)} disabled={saving || roles.length >= ROLE_IDS.length}>
+                        <SelectTrigger className="w-full rounded-xl border-dashed border-primary/25 bg-primary/5 h-10 text-xs font-bold text-primary justify-center text-center [&>svg]:absolute [&>svg]:right-4">
+                          <SelectValue placeholder={t("templates.addRole")} />
+                        </SelectTrigger>
+                        <SelectContent className="glass border-white/10 rounded-xl">
+                          {ROLE_IDS
+                            .filter((role) => !roleAssignment(role))
+                            .map((role) => (
+                              <SelectItem key={role} value={role} className="rounded-lg">
+                                {t(`chat.orchestrator.roles.${role}`)}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                 </div>
               </Card>
             ) : (

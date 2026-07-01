@@ -59,11 +59,11 @@
     "noCredential": "未找到 API 凭证",
     "noApiKey": "API Key 缺失",
     "constructError": "构造失败",
-    "switchedTo": "切换至 {{name}}",
+    "switchedTo": "已切换备用模型继续回复：{{name}}",
     "recovery": {
       "native_resume": "系统已用 CLI 官方会话原生续跑",
       "context_replay": "系统已从中断处继续，不会重复前面内容",
-      "fallback_handoff": "系统已把已完成内容交给下一个模型接力"
+      "fallback_handoff": "当前模型中断，已改用备用模型接着回复"
     },
     "cacheHit": "命中缓存 · {{days}} 天前回答过",
     "contextTrimmed": "[较早的 {{count}} 条消息已省略以节省 token]",
@@ -92,6 +92,7 @@
     "working": {
       "idle": "空闲，等你发话",
       "working": "正在工作",
+      "replying": "模型正在回复",
       "done": "执行完毕",
       "awaitingApproval": "等待你确认"
     },
@@ -439,8 +440,8 @@
   },
   "builtinTemplates": {
     "default_eight_roles": {
-      "name": "默认 8 角色",
-      "desc": "给 8 个团队角色（团队负责人 / 架构评审 / 前端工程师 / 后端工程师 / 运行执行员 / 测试工程师 / 审查工程师 / 安全工程师）每个单独绑一个模型。主对话未绑定项目时使用这套。"
+      "name": "默认角色",
+      "desc": ""
     }
   },
   "handoffMarkdown": {
@@ -452,28 +453,26 @@
   "templates": {
     "sectionLabel": "流水线配置架构师",
     "title": "角色模板",
-    "desc": "默认 8 角色是主协作方案。你可以给每个角色绑定最合适的模型，之后再复制成自己的自定义模板。",
+    "desc": "你可以给每个角色绑定最合适的模型，也可以直接添加自己的自定义模板。",
     "available": "可用方案模板",
     "builtIn": "内置",
     "rolesCount": "共包含 {{count}} 个协作节点",
     "addTemplate": "添加模板",
-    "copyTemplate": "复制模板",
     "deleteTemplate": "删除模板",
     "createTemplate": "创建模板",
     "templateName": "模板名称",
     "templateNamePlaceholder": "例如：我的日常开发模板",
-    "newTemplateDefaultName": "我的 8 角色模板",
-    "customTemplateDesc": "自定义 8 角色模板，可按你的工作习惯绑定模型。",
-    "copyName": "{{name}} 副本",
+    "newTemplateDefaultName": "我的角色模板",
     "deleteConfirm": "确定删除这个自定义模板？内置默认模板不会被删除。",
     "smartAssign": "智能一键分配",
+    "addRole": "添加角色",
+    "deleteRole": "删除角色",
     "noModels": "未检测到已连接的 AI 模型。请先前往「模型供应商」页面添加配置。",
     "primaryModel": "首选专家模型",
     "primaryModelPlaceholder": "请选择主模型",
     "fallbackModel": "故障自动切换模型",
     "fallbackModelPlaceholder": "无备用方案",
     "fallbackDisabled": "不启用备用方案",
-    "eightRolesBinding": "默认 8 角色 · 每个角色绑一个模型",
     "eightRole": {
       "leader_desc": "拆任务、控节奏、日常答疑",
       "architect_desc": "方案设计与架构取舍",
@@ -750,8 +749,8 @@
         "desc": "至少 2 个模型才能体现「多 AI 协作」——主对话用 Opus、写代码用 Gemini、测试用 Haiku 这种组合。"
       },
       "browseTemplates": {
-        "title": "看看默认 8 角色",
-        "desc": "默认 8 角色是主协作方案：团队负责人、架构、前端、后端、运行执行员、测试、审查、安全。后续你可以复制成自己的模板。"
+        "title": "看看默认角色",
+        "desc": "默认角色包含团队负责人、架构、前端、后端、运行执行员、测试、审查、安全。后续你可以添加自己的模板。"
       },
       "bindWorkspace": {
         "title": "回到对话，绑定工作文件夹",
@@ -794,7 +793,7 @@
       "recovery": {
         "native_resume": "系统已用 CLI 官方会话原生续跑",
         "context_replay": "系统已从中断处继续，不会重复前面内容",
-        "fallback_handoff": "系统已把已完成内容交给下一个模型接力"
+        "fallback_handoff": "当前模型中断，已改用备用模型接着回复"
       },
       "apiKeyMissing": "API Key 缺失",
       "initFailed": "初始化失败",
