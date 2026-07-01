@@ -7,6 +7,11 @@ import { buildCrossProjectMemoryPreamble } from "@/lib/llm/context-preamble";
 import type { EmbeddingProvider } from "@/lib/llm/embedding";
 import { cosineSimilarity } from "@/lib/llm/similarity";
 import { getProjectMemoryEmbeddingProvider } from "./embedding-provider";
+import {
+  DEFAULT_PROJECT_MEMORY_RETRIEVAL_TUNING,
+  scoreLexicalFallbackHit,
+  scoreProjectMemoryHit,
+} from "./retrieval-tuning";
 
 export interface ProjectMemorySearchHit extends ProjectMemory {
   score: number;
@@ -25,12 +30,6 @@ export interface SearchAcrossProjectsHybridOptions {
   backfillLimit?: number;
 }
 
-const DEFAULT_LIMIT = 3;
-const DEFAULT_PER_PROJECT_LIMIT = 1;
-const DEFAULT_MIN_IMPORTANCE = 60;
-const DEFAULT_MIN_SCORE = 0.52;
-const DEFAULT_BACKFILL_LIMIT = 50;
-
 function hashText(text: string): string {
   let h = 2166136261;
   for (let i = 0; i < text.length; i++) {
@@ -38,10 +37,6 @@ function hashText(text: string): string {
     h = Math.imul(h, 16777619);
   }
   return (h >>> 0).toString(16);
-}
-
-function normalizeImportance(importance: number): number {
-  return Math.max(0, Math.min(1, importance / 100));
 }
 
 export function buildProjectMemoryEmbeddingSource(memory: Pick<ProjectMemory, "kind" | "title" | "content" | "tags">): string {
@@ -83,7 +78,7 @@ export async function backfillProjectMemoryVectors(options: {
   minImportance?: number;
   allowRemote?: boolean;
 } = {}): Promise<number> {
-  const limit = options.limit ?? DEFAULT_BACKFILL_LIMIT;
+  const limit = options.limit ?? DEFAULT_PROJECT_MEMORY_RETRIEVAL_TUNING.hotBackfillLimit;
   const provider = await getProjectMemoryEmbeddingProvider();
   if (!provider.supportsHotBackfill && !options.allowRemote) return 0;
   const [memories, vectors] = await Promise.all([
@@ -130,15 +125,18 @@ export async function searchAcrossProjectsHybrid(
   const q = query.trim();
   if (!q) return [];
 
-  const limit = options.limit ?? DEFAULT_LIMIT;
-  const perProjectLimit = Math.max(1, options.perProjectLimit ?? DEFAULT_PER_PROJECT_LIMIT);
-  const minImportance = Math.max(0, options.minImportance ?? DEFAULT_MIN_IMPORTANCE);
-  const minScore = options.minScore ?? DEFAULT_MIN_SCORE;
+  const limit = options.limit ?? DEFAULT_PROJECT_MEMORY_RETRIEVAL_TUNING.limit;
+  const perProjectLimit = Math.max(1, options.perProjectLimit ?? DEFAULT_PROJECT_MEMORY_RETRIEVAL_TUNING.perProjectLimit);
+  const minImportance = Math.max(0, options.minImportance ?? DEFAULT_PROJECT_MEMORY_RETRIEVAL_TUNING.minImportance);
+  const minScore = options.minScore ?? DEFAULT_PROJECT_MEMORY_RETRIEVAL_TUNING.minScore;
   const lexicalPromise = options.fallbackToLike === false
     ? Promise.resolve<ProjectMemory[]>([])
     : projectMemories.searchAcrossProjects(q, {
         excludeProjectId: options.excludeProjectId,
-        limit: Math.max(limit * 4, 12),
+        limit: Math.max(
+          limit * DEFAULT_PROJECT_MEMORY_RETRIEVAL_TUNING.lexicalSearchMultiplier,
+          DEFAULT_PROJECT_MEMORY_RETRIEVAL_TUNING.lexicalSearchMinLimit,
+        ),
         perProjectLimit: Math.max(2, perProjectLimit),
         minImportance,
       });
@@ -147,7 +145,7 @@ export async function searchAcrossProjectsHybrid(
     const provider = await getProjectMemoryEmbeddingProvider();
     if (provider.supportsHotBackfill) {
       await backfillProjectMemoryVectors({
-        limit: options.backfillLimit ?? DEFAULT_BACKFILL_LIMIT,
+        limit: options.backfillLimit ?? DEFAULT_PROJECT_MEMORY_RETRIEVAL_TUNING.hotBackfillLimit,
         excludeProjectId: options.excludeProjectId,
         minImportance,
       });
@@ -173,13 +171,16 @@ export async function searchAcrossProjectsHybrid(
           ? cosineSimilarity(queryEmbedding, row.embedding)
           : 0;
         const lexicalScore = lexicalRank.get(row.id) ?? 0;
-        const importanceScore = normalizeImportance(row.importance);
         return {
           ...row,
           providerName: row.providerName,
           semanticScore,
           lexicalScore,
-          score: semanticScore * 0.65 + lexicalScore * 0.2 + importanceScore * 0.15,
+          score: scoreProjectMemoryHit({
+            semanticScore,
+            lexicalScore,
+            importance: row.importance,
+          }),
         };
       })
       .filter((row) => row.score >= minScore || row.lexicalScore > 0)
@@ -192,7 +193,10 @@ export async function searchAcrossProjectsHybrid(
       providerName: "lexical-fallback",
       semanticScore: 0,
       lexicalScore: 1 - index / Math.max(lexicalHits.length, 1),
-      score: 0.2 + normalizeImportance(hit.importance) * 0.15,
+      score: scoreLexicalFallbackHit({
+        lexicalScore: 1 - index / Math.max(lexicalHits.length, 1),
+        importance: hit.importance,
+      }),
     }));
   } catch {
     const lexicalHits = await lexicalPromise;
@@ -201,7 +205,10 @@ export async function searchAcrossProjectsHybrid(
       providerName: "lexical-fallback",
       semanticScore: 0,
       lexicalScore: 1 - index / Math.max(lexicalHits.length, 1),
-      score: 0.2 + normalizeImportance(hit.importance) * 0.15,
+      score: scoreLexicalFallbackHit({
+        lexicalScore: 1 - index / Math.max(lexicalHits.length, 1),
+        importance: hit.importance,
+      }),
     }));
   }
 }
@@ -213,10 +220,10 @@ export async function retrieveCrossProjectMemoriesForPrompt(
 ): Promise<{ hits: ProjectMemorySearchHit[]; preamble: string | null }> {
   const hits = await searchAcrossProjectsHybrid(userText, {
     excludeProjectId: projectId,
-    limit: options.limit ?? DEFAULT_LIMIT,
-    perProjectLimit: options.perProjectLimit ?? DEFAULT_PER_PROJECT_LIMIT,
-    minImportance: options.minImportance ?? DEFAULT_MIN_IMPORTANCE,
-    minScore: options.minScore ?? DEFAULT_MIN_SCORE,
+    limit: options.limit ?? DEFAULT_PROJECT_MEMORY_RETRIEVAL_TUNING.limit,
+    perProjectLimit: options.perProjectLimit ?? DEFAULT_PROJECT_MEMORY_RETRIEVAL_TUNING.perProjectLimit,
+    minImportance: options.minImportance ?? DEFAULT_PROJECT_MEMORY_RETRIEVAL_TUNING.minImportance,
+    minScore: options.minScore ?? DEFAULT_PROJECT_MEMORY_RETRIEVAL_TUNING.minScore,
     fallbackToLike: options.fallbackToLike,
     backfillLimit: options.backfillLimit,
   });
