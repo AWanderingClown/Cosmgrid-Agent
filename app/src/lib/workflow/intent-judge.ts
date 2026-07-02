@@ -12,6 +12,9 @@ import {
   type SemanticIntentRoute,
 } from "./semantic-intent-router";
 import type { TurnIntentDecision, WorkflowSnapshot } from "./types";
+// 5.1 修复（2026-07-02）：import classifyMessageComplexity 把难度档位合并到
+// classifyTurnIntentWithJudge 返回值，message-router.ts 降级为兜底而不是另开一次独立判断。
+import { classifyMessageComplexity } from "@/lib/llm/message-router";
 
 const judgeSchema = z.object({
   action: z.enum([
@@ -200,7 +203,9 @@ export async function classifyTurnIntentWithJudge(args: {
   learnedExamples?: IntentExample[];
 }): Promise<TurnIntentDecision> {
   const fallback = classifyTurnIntent(args);
-  if (fallback.action === "cancel_run" || fallback.action === "pause_run") return fallback;
+  // 5.1 修复：统一算一次复杂度，所有 return path 都带上
+  const complexity = classifyMessageComplexity(args.text) as "simple" | "standard" | "hard";
+  if (fallback.action === "cancel_run" || fallback.action === "pause_run") return { ...fallback, complexity };
   const semanticExamples = args.learnedExamples?.length
     ? [...BUILTIN_INTENT_EXAMPLES, ...args.learnedExamples]
     : BUILTIN_INTENT_EXAMPLES;
@@ -215,7 +220,7 @@ export async function classifyTurnIntentWithJudge(args: {
       text: args.text,
     })
     : null;
-  if (!args.model) return semanticDecision ?? fallback;
+  if (!args.model) return { ...(semanticDecision ?? fallback), complexity };
 
   try {
     const judged = await judgeTurnIntent({
@@ -225,15 +230,18 @@ export async function classifyTurnIntentWithJudge(args: {
       recentTurnIds: args.recentTurnIds,
       semanticRoute,
     });
-    if (judged.confidence < 0.65) return semanticDecision ?? fallback;
-    return toDecision({
-      judged,
-      activeRun: args.activeRun,
-      recentTurnIds: args.recentTurnIds,
-      fallback,
-      text: args.text,
-    });
+    if (judged.confidence < 0.65) return { ...(semanticDecision ?? fallback), complexity };
+    return {
+      ...toDecision({
+        judged,
+        activeRun: args.activeRun,
+        recentTurnIds: args.recentTurnIds,
+        fallback,
+        text: args.text,
+      }),
+      complexity,
+    };
   } catch {
-    return fallback;
+    return { ...fallback, complexity };
   }
 }

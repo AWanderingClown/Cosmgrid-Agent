@@ -24,19 +24,23 @@ export function formatDebateResultMessage(args: {
     { inputTokens: 0, outputTokens: 0 },
   );
 
+  // UI 修复（2026-07-02，用户反馈）：博弈的中间产物（每个参与者的完整 solver/critic/judge
+  // 输出）不该跟"最终判断"平铺在一起刷屏——包进 <debate_process> 标签，parse-thinking.ts
+  // 识别后渲染成默认折叠的小字块（跟 <think> 思考过程同一套折叠机制），只有"最终判断"
+  // 直接展示在正文里。
   const content = [
     args.participantCount === 1
       ? args.t("chat.debate.singleModelNotice")
       : args.t("chat.debate.completed", { count: args.participantCount }),
     "",
-    "## 最终判断",
     args.result.finalSolution,
     "",
-    "## 博弈过程",
+    "<debate_process>",
     ...args.result.rounds.map((round, index) => [
       `### ${index + 1}. ${args.modelNameFor(round.modelId)} · ${round.role}`,
       round.content,
     ].join("\n")),
+    "</debate_process>",
   ].join("\n");
 
   return { content, usage };

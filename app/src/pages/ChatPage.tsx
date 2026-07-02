@@ -28,7 +28,8 @@ import { shouldAutoRunChain, shouldRunBackgroundOrchestration } from "@/lib/llm/
 import { routeMessage } from "@/lib/llm/smart-router";
 import { buildRolePerformanceScoresFromUsageRows } from "@/lib/llm/model-performance-scoring";
 import { isPureSingleModelModeEnabled, isSmartRoutingEnabled, usePermissionModeSetting } from "@/lib/app-settings";
-import { shouldExposeWriteTools } from "@/lib/llm/tool-permission-policy";
+import { shouldExposeWriteTools, impliesWriteIntent } from "@/lib/llm/tool-permission-policy";
+import { enableWorkspaceProtection } from "@/lib/llm/tools/git-snapshot";
 import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
 import { buildProjectMemoryPreamble } from "@/lib/llm/context-preamble";
 import { buildWorkspacePreamble } from "@/lib/llm/workspace-context";
@@ -60,6 +61,7 @@ import {
   parseOrchestration,
   computeChain,
   withChainPlan,
+  shouldSkipOrchestrationUpdate,
   type OrchestrationState,
   type OrchestrationTurn,
 } from "@/lib/llm/orchestrator";
@@ -67,7 +69,6 @@ import { getLanguageModel } from "@/lib/llm/provider-factory";
 import { ChatTranscript } from "@/pages/chat/ChatTranscript";
 import { ChatHeader } from "@/pages/chat/ChatHeader";
 import { ChatInputDock } from "@/pages/chat/ChatInputDock";
-import { ToolConfirmCard } from "@/pages/chat/ToolConfirmCard";
 import { ChatWorkPanel } from "@/pages/chat/ChatWorkPanel";
 import {
   applyChainHarnessWarnings,
@@ -127,6 +128,12 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
   // 工作文件夹 + 工具权限档（产品真北：让主对话能在本地真干活，不只是聊天）。
   // permissionMode：read=只读(读/搜/git-read) | confirm=写操作逐个确认 | auto=写操作不弹窗。
   const [workspacePath, setWorkspacePath] = useState<string | null>(null);
+  // 2.1 步骤2/3 修复（2026-07-02，代码审查发现）：protectState 原来是 ToolCallCard
+  // 组件内部的 useState——每张工具卡片是独立实例，用户在一张卡片上点了"开启保护"，
+  // 同一 workspace 下其他卡片（旧的、以及点击后新产生的）完全不知道，UI 上仍然显示
+  // "不可撤销 + 开启按钮"，用户会以为没生效。改成在 ChatPage 用一个 Set 记录"这一轮
+  // 会话里已经点过开启保护的 workspace 路径"，所有 ToolCallCard 共享同一个来源。
+  const [protectedWorkspaces, setProtectedWorkspaces] = useState<Set<string>>(new Set());
   /** 右侧工作面板的产出物工件——从 tool_executions 派生，回答完成后刷新 */
   const [artifacts, setArtifacts] = useState<WorkArtifact[]>([]);
   const [toolCallViews, setToolCallViews] = useState<ToolCallView[]>([]);
@@ -438,7 +445,13 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
   } = useChatAttachments({ t, bindWorkspace, setStreamError });
 
   async function handleNewChat() {
-    if (isStreaming) return;
+    // 修复（2026-07-03，用户反馈"点新建对话没反应"）：这里原来是 isStreaming 时直接
+    // return，如果 isStreaming 因为任何原因卡在 true（比如底层 provider 卡死不理
+    // AbortSignal，或者本轮还没走到统一安全网 finally），用户会永远点不动"新建对话"，
+    // 且没有任何提示——跟 handleStop（停止键）"权威停止：不管底层卡没卡死，直接把 UI
+    // 拉回空闲态"是同一个思路：新建对话本身就是"我要放弃当前这轮，另起一个"的明确意图，
+    // 应该强制中断当前流，而不是被它卡住拒绝响应。
+    if (isStreaming) handleStop();
     try {
       const conv = await dbConversations.create({ title: t("chat.untitledChat"), defaultModelId: selectedModelId || null, projectId: null });
       setConversationList((prev) => [conv, ...prev]);
@@ -460,7 +473,10 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
   }
 
   async function switchConversation(id: string) {
-    if (id === conversationId || isStreaming) return;
+    if (id === conversationId) return;
+    // 修复（2026-07-03）：同 handleNewChat——切换对话也是"放弃当前这轮"的明确意图，
+    // isStreaming 卡住时应该强制停止而不是拒绝响应。
+    if (isStreaming) handleStop();
     const nextConv = conversationList.find((c) => c.id === id) ?? null;
     setConversationId(id);
     setWorkspacePath(nextConv?.workspacePath ?? null);
@@ -714,6 +730,11 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     let turnWorkflowRunId: string | null = turnWorkflowSnapshot?.runId ?? null;
     let shouldCompleteWorkflowNode = false;
     let turnIntentDecision: TurnIntentDecision | null = null;
+    // 5.2 修复补丁（2026-07-02）：显式标记"意图裁判 LLM 这轮是否已经调用过"，
+    // 不再靠 turnIntentDecision 是否为 null 隐式推断——用显式布尔量替代隐式契约，
+    // 防止未来有人改出"turnIntentDecision 为 null 但其实已经调过判断"的中间状态，
+    // 让下面的短路逻辑不再依赖对 turnIntentDecision 生命周期的记忆。
+    let intentJudgeCalledThisTurn = false;
     let workflowAdvancedThisTurn = false;
     // 纯净模式：跳过意图裁判整个环节（不建/续 workflow run，也不真调那次判断用的 LLM），
     // turnIntentDecision 保持 null，下面 cacheIntent 会兜底成固定的 answer_only。
@@ -768,6 +789,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           learnedExamples,
         });
         turnIntentDecision = decision;
+        intentJudgeCalledThisTurn = true;
 
         if (decision.action === "start_run") {
           const currentConversation = conversationList.find((c) => c.id === convId) ?? null;
@@ -869,6 +891,24 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       }
 
       const assistantId = crypto.randomUUID();
+      // 6.3.1 修复（2026-07-02）：触发对弈前先推一条成本预警，让用户心理有数。
+      // 2026-07-02 代码审查发现：原先假设"调用次数 = 参与者数"在边界情况下是错的——
+      // 真实规则见 debate-engine.ts runDynamicDebate：只有 1 个参与者时是纯自审（1 次调用，
+      // 不是"1 主答+0 评审+1 裁判"算出来的数字）；正好 2 个参与者时 proposer 会被再调一次
+      // 当 judge（3 次调用，不是 2 次）；3 个及以上才是"1 主答+(N-2)评审+1 裁判=N 次"这个公式。
+      // 这里按真实规则算，不再套用同一个公式硬算所有分支。
+      const estimatedParticipants = Math.min(Math.max(availableModels.length, 1), 4);
+      const estimatedCallCount =
+        estimatedParticipants <= 1 ? 1 : estimatedParticipants === 2 ? 3 : estimatedParticipants;
+      const costNoteId = crypto.randomUUID();
+      const costNoteMsg: ChatMessage = {
+        id: costNoteId,
+        role: "assistant",
+        content: t("chat.debate.costWarning", { count: estimatedCallCount }),
+        createdAt: new Date().toISOString(),
+        modelLabel: t("chat.workPanel.dynamicModelPool"),
+        kind: "system-notice",
+      };
       const debateMsg: ChatMessage = {
         id: assistantId,
         role: "assistant",
@@ -878,7 +918,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       };
       stickToBottomRef.current = true;
       setPanelOpen(true);
-      setMessages([...newMessages, debateMsg]);
+      setMessages([...newMessages, costNoteMsg, debateMsg]);
       setIsStreaming(true);
       setStreamError(null);
       setSwitchNotice(null);
@@ -1010,9 +1050,17 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     // 只有「什么是 X / 为什么 Y」这类纯知识问答才缓存，省 token 又不会乱命中。
     const cacheWorkspace = folderAtt?.path ?? workspacePath;
     // 纯净模式：不再真调一次意图裁判 LLM，直接给固定的 answer_only 兜底（跟真裁判的降级路径一致）。
-    const cacheIntent: TurnIntentDecision = pureMode
-      ? { action: "answer_only", targetRunId: null, confidence: 1, reason: "pure-single-model-mode", evidenceTurnIds: [] }
-      : (turnIntentDecision ?? await classifyTurnIntentWithJudge({ text, activeRun: workflowSnapshotRef.current, model: intentJudgeModel }));
+    // 5.2 修复补丁（2026-07-02）：防重复调用意图裁判 LLM 的判断从隐式的 `turnIntentDecision ?? ...`
+    // 改成显式检查 intentJudgeCalledThisTurn——上文异步初始化阶段（约 764 行）已经调过
+    // classifyTurnIntentWithJudge 时会把这个标记设为 true，这里读它决定要不要复用而不是重新调用。
+    // 好处：即使以后 turnIntentDecision 的类型/生命周期变了（比如允许它合法地保持 null 但已调用过），
+    // 这条短路依然正确，不用再靠"记住 turnIntentDecision 是否为 null"这种隐式契约。
+    const cacheIntent: TurnIntentDecision =
+      pureMode
+        ? { action: "answer_only", targetRunId: null, confidence: 1, reason: "pure-single-model-mode", evidenceTurnIds: [] }
+        : intentJudgeCalledThisTurn && turnIntentDecision
+          ? turnIntentDecision
+          : await classifyTurnIntentWithJudge({ text, activeRun: workflowSnapshotRef.current, model: intentJudgeModel });
     const cacheEligible = !pureMode && smart && !cacheWorkspace && cacheIntent.action === "answer_only";
 
     // v0.9 阶段7：纯问答先查语义缓存——命中则秒回、0 成本、跳过 LLM
@@ -1068,6 +1116,34 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       permissionMode,
       decision: cacheIntent,
     });
+
+    // V2 修复（2026-07-02）：消息明明想写/改文件，但没有任何工具能落地（没绑工作文件夹）
+    // 或者写工具被权限档拦住（权限="read"）——这两种情况下 AI 要么只能干说做不了，要么
+    // 会被 harness 抓包"编了一次工具调用"再重答一次（用户看到的就是"回答两遍"）。
+    // 显式插一条产品自己生成的引导消息，不让 AI 自己装傻，也不指望用户自己发现暗门。
+    // 注意：判断依据是 impliesWriteIntent（跟 shouldExposeWriteTools 用的同一套逻辑，
+    // 只是不看 permissionMode），不是简单正则——跟真正决定"要不要给写工具"的信号一致，
+    // 不会比系统自己更容易误判。
+    if (
+      impliesWriteIntent({ text, decision: cacheIntent }) &&
+      (!effectiveWorkspace || permissionMode === "read")
+    ) {
+      const noticeMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: !effectiveWorkspace
+          ? t("chat.writeGuardNotice.noWorkspace")
+          : t("chat.writeGuardNotice.readOnly"),
+        createdAt: new Date().toISOString(),
+        modelLabel: t("chat.workPanel.dynamicModelPool"),
+        kind: "system-notice",
+      };
+      setMessages((prev) => {
+        const idx = prev.findIndex((m) => m.id === assistantId);
+        if (idx === -1) return [...prev, noticeMsg];
+        return [...prev.slice(0, idx), noticeMsg, ...prev.slice(idx)];
+      });
+    }
 
     if (effectiveWorkspace) {
       // 有写工具时才需要知道桌面在哪——"保存/导出到桌面"靠模型自己用 write 工具办，
@@ -1346,20 +1422,12 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       const chainPlan = computeChain(plan);
       const nextWithChain = withChainPlan(next, chainPlan);
       const change = diffOrchestration(prev, next);
-      const onlyLeaderIdlePlan =
-        chainPlan.length === 0 &&
-        nextWithChain.nodes.length === 1 &&
-        nextWithChain.nodes[0]?.role === "leader";
-      // prev 是不是本来就已经是"闲置 leader"——只有这种情况下跳过才是真的无事发生。
-      // 否则（prev 还停在 architect/frontend 等专业节点）跳过会让 orchestrationRef 卡死在
-      // 旧节点上：用户下一句换成简单任务（比如"保存到桌面"），currentNode() 读到的还是
-      // 旧的专业节点，handleSend 就会一直沿用那个节点绑的重模型，不会跟着新意图切回来。
-      const prevWasAlreadyIdleLeader =
-        (prev?.chainPlan?.length ?? 0) === 0 &&
-        prev?.nodes.length === 1 &&
-        prev.nodes[0]?.role === "leader";
-
-      if (onlyLeaderIdlePlan && prevWasAlreadyIdleLeader) return;
+      // 6.2 修复（2026-07-02）：把"是否要跳过更新"的隐式判断换成纯函数 shouldSkipOrchestrationUpdate。
+      // 之前的两个布尔变量 onlyLeaderIdlePlan + prevWasAlreadyIdleLeader 不覆盖
+      // prev=stuck_recoverable 的情况——prev 卡在专业节点 + chainPlan 空时跳过会让
+      // orchestrationRef 永远停在旧节点（用户下一切简单任务也不会切回 leader）。
+      // shouldSkipOrchestrationUpdate 把这个边界条件封装进去：stuck_recoverable 状态一律 false。
+      if (shouldSkipOrchestrationUpdate(prev, nextWithChain, chainPlan)) return;
 
       // E2a：通知调用方 chain 接力计划（让 ChatPage 决定是否触发 watch 接力执行）
       const effectiveChainBindings = new Map(roleBindings);
@@ -1767,14 +1835,11 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
   return (
     <div className="flex h-full w-full">
       <div className="relative flex flex-col h-full flex-1 min-w-0 rounded-3xl overflow-hidden glass">
-      {/* 写操作确认弹窗：只做审批，不展示工作内容；详情放右侧工作面板。 */}
-      {pendingConfirm && (
-        <ToolConfirmCard request={pendingConfirm} onResolve={resolveConfirm} />
-      )}
+      {/* 写操作确认：只做审批，不展示工作内容；详情放右侧工作面板。
+          UI 修复（2026-07-02）：从独立悬浮卡片改成贴着输入框的小提示条，渲染挪到 ChatInputDock 内部。 */}
       <ChatHeader
         conversations={conversationList}
         conversationId={conversationId}
-        isStreaming={isStreaming}
         selectedModelId={selectedModelId}
         availableModels={availableModels}
         panelOpen={panelOpen}
@@ -1805,6 +1870,14 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           streamElapsedMs={streamElapsedMs}
           toolCallsByMessage={toolCallsByMessage}
           streamError={streamError}
+          onEnableWorkspaceProtection={
+            workspacePath && !protectedWorkspaces.has(workspacePath)
+              ? async () => {
+                  await enableWorkspaceProtection(workspacePath);
+                  setProtectedWorkspaces((prev) => new Set(prev).add(workspacePath));
+                }
+              : undefined
+          }
         />
       </div>
 
@@ -1836,6 +1909,8 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         onRemoveAttachment={removeAttachment}
         selectedModelName={selectedModel ? selectedModel.displayName || selectedModel.name : null}
         onStop={handleStop}
+        pendingConfirm={pendingConfirm}
+        onResolveConfirm={resolveConfirm}
       />
       </div>
 

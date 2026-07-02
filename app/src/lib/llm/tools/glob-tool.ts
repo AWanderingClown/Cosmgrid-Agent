@@ -22,7 +22,7 @@ export const globTool: ToolDefinition<GlobParams> = {
   readOnly: true,
   async execute(input, ctx): Promise<ToolResult> {
     const base = input.path ?? ".";
-    const check = checkPath(ctx.workspacePath, base);
+    const check = await checkPath(ctx.workspacePath, base);
     if (!check.ok) return { status: "denied", output: check.reason ?? "路径不允许" };
 
     const re = globToRegExp(input.pattern);

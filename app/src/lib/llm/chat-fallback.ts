@@ -603,7 +603,8 @@ export async function streamWithFallback(
         if ((err as { name?: string })?.name === "AbortError" || options.signal?.aborted) {
           return { usedModelId: target.modelId, switched: usedIndex !== 0 };
         }
-        const classified = classifyLlmError(err);
+        // 1.2 修复：传 providerType 让 classifyLlmError 按国产 provider 专属规则匹配（中文错误体）
+        const classified = classifyLlmError(err, undefined, target.providerType);
 
         recordUsageEventOnly({
           target,

@@ -35,7 +35,7 @@ beforeEach(() => {
   files = m.files;
   setFsAdapter(m.fs);
   // 默认 git 快照成功（可回滚）；个别用例可覆盖
-  setGitSnapshot({ commitFile: async () => true });
+  setGitSnapshot({ commitFile: async () => true, initShadowRepo: async () => {} });
 });
 
 describe("computeDiff", () => {
@@ -106,7 +106,7 @@ describe("write 工具", () => {
   });
 
   it("非 git 仓库（快照失败）仍写盘成功，reversible=false", async () => {
-    setGitSnapshot({ commitFile: async () => false });
+    setGitSnapshot({ commitFile: async () => false, initShadowRepo: async () => {} });
     const r = await writeTool.execute({ file_path: "src/new.ts", content: "x" }, ctxWith(vi.fn().mockResolvedValue(true)));
     expect(r.status).toBe("success");
     expect(r.reversible).toBe(false);

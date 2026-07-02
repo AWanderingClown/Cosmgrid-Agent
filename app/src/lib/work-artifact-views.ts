@@ -13,6 +13,13 @@ export interface ToolCallView {
   detailFull: string;
   createdAt: string;
   durationMs: number;
+  /**
+   * 2.1 修复（2026-07-02）：写/改工具成功后是否已 git 快照可回滚。
+   * - true  → ✅ 可撤销（用户能看到"已 git 快照可回滚"标记）
+   * - false → ⚠️ 无法自动撤销（非 git 仓库 / git 失败，用户必须自己知道这次没保护）
+   * - undefined → 该工具无快照概念（read/glob/grep/git_read 等只读工具）
+   */
+  reversible?: boolean;
 }
 
 function safeParseJson(input: string): Record<string, unknown> {
@@ -124,6 +131,8 @@ export function deriveToolCallViews(rows: ToolExecutionRow[]): ToolCallView[] {
       detailFull,
       createdAt: row.createdAt,
       durationMs: row.durationMs,
+      // 2.1 修复：把 row.reversible 透传到 UI（write/edit 工具的成功结果才有值）
+      reversible: row.reversible,
     };
   });
 }

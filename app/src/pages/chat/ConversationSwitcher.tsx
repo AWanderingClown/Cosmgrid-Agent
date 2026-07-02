@@ -7,7 +7,6 @@ import type { Conversation } from "@/lib/db";
 export function ConversationSwitcher({
   conversations,
   activeId,
-  disabled,
   onSwitch,
   onNew,
   onDelete,
@@ -15,7 +14,6 @@ export function ConversationSwitcher({
 }: {
   conversations: Conversation[];
   activeId: string | null;
-  disabled: boolean;
   onSwitch: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
@@ -71,16 +69,24 @@ export function ConversationSwitcher({
       </button>
 
       {open && (
-        <div className="absolute top-full left-0 mt-2 w-72 max-h-[26rem] overflow-hidden rounded-2xl glass border border-white/10 shadow-2xl z-50 flex flex-col">
+        // UI 修复（2026-07-02，用户反馈）：这里原来用 `glass`（bg-background/80 + 模糊），
+        // 80% 不透明度对一个浮在消息列表上方、承载可点击列表项的下拉菜单来说不够——
+        // 底下的对话文字会透出来，跟菜单项文字重叠混在一起看不清。`glass` 适合头部/输入框
+        // 这种常驻的背景元素（本来就该让底下内容透出一点营造层次感），但不适合这种浮层菜单，
+        // 换成完全不透明的 bg-popover（shadcn 的标准弹层背景色，跟 Select 下拉菜单一致）。
+        <div className="absolute top-full left-0 mt-2 w-72 max-h-[26rem] overflow-hidden rounded-2xl bg-popover border border-white/10 shadow-2xl z-50 flex flex-col">
           <div className="p-2 border-b border-white/10">
+            {/* 修复（2026-07-03，用户反馈"点新建对话没反应"）：这里原来 disabled={isStreaming}，
+                如果 isStreaming 卡在 true 用户永远点不动这个按钮、也没有任何提示。现在
+                handleNewChat 内部会在 isStreaming 时先强制停止当前流再新建，所以这个按钮
+                不再需要 disabled——见 ChatPage.tsx 的 handleNewChat。 */}
             <button
               type="button"
-              disabled={disabled}
               onClick={() => {
                 onNew();
                 setOpen(false);
               }}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 disabled:opacity-50 transition-colors"
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-colors"
             >
               <Plus className="w-4 h-4" />
               {t("chat.newChat")}

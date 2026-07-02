@@ -33,7 +33,7 @@ export const writeTool: ToolDefinition<WriteParams> = {
   parameters: paramsSchema,
   readOnly: false,
   async execute(input, ctx): Promise<ToolResult> {
-    const check = checkWritePath(ctx.workspacePath, input.file_path);
+    const check = await checkWritePath(ctx.workspacePath, input.file_path);
     if (!check.ok) return { status: "denied", output: check.reason ?? "路径不允许" };
 
     const fs = getFsAdapter();

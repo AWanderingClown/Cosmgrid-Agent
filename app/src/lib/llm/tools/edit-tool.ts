@@ -38,7 +38,7 @@ export const editTool: ToolDefinition<EditParams> = {
   parameters: paramsSchema,
   readOnly: false,
   async execute(input, ctx): Promise<ToolResult> {
-    const check = checkWritePath(ctx.workspacePath, input.file_path);
+    const check = await checkWritePath(ctx.workspacePath, input.file_path);
     if (!check.ok) return { status: "denied", output: check.reason ?? "路径不允许" };
     if (input.old_string === input.new_string) {
       return { status: "error", output: "old_string 与 new_string 相同，无需修改。" };

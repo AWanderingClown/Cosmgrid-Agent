@@ -10,7 +10,6 @@ import { ConversationSwitcher } from "./ConversationSwitcher";
 interface ChatHeaderProps {
   conversations: Conversation[];
   conversationId: string | null;
-  isStreaming: boolean;
   selectedModelId: string;
   availableModels: ModelListItem[];
   panelOpen: boolean;
@@ -30,7 +29,6 @@ interface ChatHeaderProps {
 export function ChatHeader({
   conversations,
   conversationId,
-  isStreaming,
   selectedModelId,
   availableModels,
   panelOpen,
@@ -54,7 +52,6 @@ export function ChatHeader({
         <ConversationSwitcher
           conversations={conversations}
           activeId={conversationId}
-          disabled={isStreaming}
           onSwitch={onSwitchConversation}
           onNew={onNewChat}
           onDelete={onDeleteConversation}

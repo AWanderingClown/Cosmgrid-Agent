@@ -117,6 +117,56 @@ export interface OrchestrationState {
 export const ORCHESTRATION_VERSION = 2;
 
 /**
+ * 6.2 修复（2026-07-02）：编排宏观状态（派生字段，不入 schema 避免双源漂移）。
+ * - `idle`：state 为 null / 只有 leader 节点 / chainPlan 为空 → 无接力任务，闲着
+ * - `chaining`：state 有非 leader 节点且 chainPlan 非空 → 正在/即将接力
+ * - `stuck_recoverable`：state 有非 leader 节点但 chainPlan 为空 → 卡死了（prev 还在专业节点，
+ *   但 chainPlan 已空，无法接力），下次编排**必须**强制更新覆盖，不能跳过（避免卡死在旧节点）
+ *
+ * 派生自 nodes / chainPlan / currentNodeId，不入 OrchestrationState 持久化字段，
+ * 延续 activatedRoles 那种"派生不单存"的哲学。
+ */
+export type OrchestrationPhase = "idle" | "chaining" | "stuck_recoverable";
+
+export function derivePhase(state: OrchestrationState | null): OrchestrationPhase {
+  if (!state || state.nodes.length === 0) return "idle";
+  const hasNonLeaderNodes = state.nodes.some((n) => n.role !== "leader");
+  const chainLen = state.chainPlan?.length ?? 0;
+  if (hasNonLeaderNodes && chainLen > 0) return "chaining";
+  if (hasNonLeaderNodes && chainLen === 0) return "stuck_recoverable";
+  return "idle";
+}
+
+/**
+ * 6.2 修复：判断新 plan 是否值得更新到 orchestrationRef。
+ *
+ * 关键规则（坑.md 6.2 描述）：
+ * - prev=idle + next=idle → true（无事发生，跳过）
+ * - prev=chaining + next=idle → false（之前在跑接力，现在没事了，必须更新）
+ * - prev=chaining + next=chaining → 看 diff（这块原逻辑由 diffOrchestration 处理）
+ * - prev=stuck_recoverable → 一律 false（强制走完整流程，避免卡死）
+ * - prev=null + next=anything → false（首次规划必须落库）
+ *
+ * 新 plan 是否 idle 的判断：chainPlan.length === 0 && nodes.length === 1 && nodes[0].role === "leader"
+ */
+export function shouldSkipOrchestrationUpdate(
+  prev: OrchestrationState | null,
+  next: OrchestrationState,
+  nextChainPlan: RoleId[],
+): boolean {
+  // 强制更新场景（绝不能跳过）
+  if (!prev) return false; // 首次规划
+  const prevPhase = derivePhase(prev);
+  if (prevPhase === "stuck_recoverable") return false; // 卡死状态必须恢复
+  // next 不是 idle（要切到 chaining/新规划）→ 必须更新
+  const nextIsIdle =
+    nextChainPlan.length === 0 && next.nodes.length === 1 && next.nodes[0]?.role === "leader";
+  if (!nextIsIdle) return false;
+  // 双向都 idle：无事发生，可以跳过
+  return prevPhase === "idle";
+}
+
+/**
  * 阶段 E1：watch 订阅图（硬编码，**不扩 schema**）。
  * 语义：A.watch = [B1, B2, ...] 表示「A 听 B1/B2 的产出」(MetaGPT role.py:410 cause_by∈watch)。
  * 接力顺序由 plan.nodes 数组顺序（LLM 排的 topological）+ watch 图约束共同决定。

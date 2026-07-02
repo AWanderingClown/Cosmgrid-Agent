@@ -20,6 +20,8 @@ import {
   computeChain,
   withChainPlan,
   deriveChainProgress,
+  derivePhase,
+  shouldSkipOrchestrationUpdate,
   ROLE_WATCH_GRAPH,
   MAX_CHAIN_LENGTH,
   ROLE_IDS,
@@ -815,5 +817,70 @@ describe("deriveChainProgress（阶段 E2b：进度条单一来源）", () => {
     expect(p.states.architect).toBe("done");
     expect(p.states.frontend).toBe("skipped");
     expect(p.states.tester).toBe("executing"); // 跳过 frontend 后，下一个 tester 变成 executing
+  });
+});
+
+describe("6.2 修复：derivePhase + shouldSkipOrchestrationUpdate", () => {
+  // 辅助函数：构造测试用 OrchestrationState
+  function stateOf(nodes: Array<{ role: RoleId; id?: string }>, chainPlan?: RoleId[]): OrchestrationState {
+    return {
+      version: 2,
+      nodes: nodes.map((n, i) => ({
+        id: n.id ?? `n-${i}`,
+        role: n.role,
+        title: n.role,
+        status: "active" as const,
+        modelId: null,
+        pinned: false,
+      })),
+      currentNodeId: nodes.length > 0 ? (nodes[0]?.id ?? "n-0") : null,
+      updatedAt: "2026-07-02T00:00:00.000Z",
+      ...(chainPlan ? { chainPlan } : {}),
+    };
+  }
+  const idleLeader = stateOf([{ role: "leader" }]);
+  const chainingArchitect = stateOf(
+    [{ role: "leader" }, { role: "architect" }],
+    ["architect"],
+  );
+  const stuckRecoverable = stateOf(
+    [{ role: "leader" }, { role: "architect" }], // 有专业节点但 chainPlan 空 → 卡死
+    [],
+  );
+
+  describe("derivePhase", () => {
+    it("null → idle", () => {
+      expect(derivePhase(null)).toBe("idle");
+    });
+    it("只有 leader → idle", () => {
+      expect(derivePhase(idleLeader)).toBe("idle");
+    });
+    it("非 leader 节点 + chainPlan 非空 → chaining", () => {
+      expect(derivePhase(chainingArchitect)).toBe("chaining");
+    });
+    it("非 leader 节点 + chainPlan 空 → stuck_recoverable（卡死状态）", () => {
+      expect(derivePhase(stuckRecoverable)).toBe("stuck_recoverable");
+    });
+  });
+
+  describe("shouldSkipOrchestrationUpdate", () => {
+    it("prev=null + next=idle leader → 不跳过（首次规划）", () => {
+      expect(shouldSkipOrchestrationUpdate(null, idleLeader, [])).toBe(false);
+    });
+    it("prev=idle + next=idle leader → 跳过（无事发生）", () => {
+      expect(shouldSkipOrchestrationUpdate(idleLeader, idleLeader, [])).toBe(true);
+    });
+    it("prev=chaining + next=idle leader → 不跳过（之前在跑接力，要更新状态）", () => {
+      expect(shouldSkipOrchestrationUpdate(chainingArchitect, idleLeader, [])).toBe(false);
+    });
+    it("prev=stuck_recoverable + next=idle leader → 一律 false（强制恢复，避免卡死）", () => {
+      // 坑.md 6.2 关键场景：prev 卡在 architect 但 chainPlan 空，
+      // 下一句用户问"保存到桌面"，新 plan 是 idle leader，必须更新 orchestrationRef，
+      // 不能跳过——否则 handleSend 会一直沿用 prev 绑的 architect 重模型
+      expect(shouldSkipOrchestrationUpdate(stuckRecoverable, idleLeader, [])).toBe(false);
+    });
+    it("prev=idle + next=chaining → 不跳过（要切到接力）", () => {
+      expect(shouldSkipOrchestrationUpdate(idleLeader, chainingArchitect, ["architect"])).toBe(false);
+    });
   });
 });

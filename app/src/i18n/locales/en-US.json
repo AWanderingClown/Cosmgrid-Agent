@@ -26,6 +26,7 @@
     "stream_stalled": "The model's response stalled (it may have finished but didn't close properly) — switching to the next model to continue",
     "network": "Network connection failed — check network or Base URL config",
     "web_content_unavailable": "External link content could not be loaded. WeChat articles often require login or block scraping. Paste the article text, send screenshots, or export the file, and I can rewrite from those references.",
+    "tool_budget_exhausted": "This task needed more steps than the budget allowed. Try breaking it into smaller steps, or switch to a different model.",
     "unknown": "Conversation failed — please try again later"
   },
   "app": {
@@ -68,6 +69,10 @@
     },
     "cacheHit": "Cache hit · answered {{days}}d ago",
     "contextTrimmed": "[{{count}} earlier messages omitted to save tokens]",
+    "writeGuardNotice": {
+      "noWorkspace": "⚠️ This looks like a file-editing request, but no folder is bound to this chat — the AI has no read/write tools, so the reply below may just be discussion, not an actual edit. Click \"Choose Folder\" next to the input box to bind a working folder, then send this again.",
+      "readOnly": "⚠️ This looks like a file-editing request, but the current permission is \"Read-only\" — the AI can look but can't change anything. If you really want it to edit files, switch the permission to \"Confirm before editing\" or \"Auto-edit\" and send this again."
+    },
     "harnessRetry": "Possible fabrication · asking the model to self-check and redo",
       "intentNudgeRetry": "Said you'd act but didn't call any tool · asking again…",
     "smartPick": "Smart Pick",
@@ -108,7 +113,12 @@
       "glob": "Find files: {{pattern}}",
       "grep": "Search text: {{pattern}}",
       "git_read": "Read Git status",
-      "unknown": "{{tool}}"
+      "unknown": "{{tool}}",
+      "reversible": "Reversible",
+      "notReversible": "Not reversible",
+      "protectHint": "This folder has no undo protection — if the AI writes something wrong, it can't be reverted",
+      "enableProtection": "Enable undo protection",
+      "enableProtectionFailed": "Failed to enable — you may need to install git first, then retry"
     },
     "smartPickResult": {
       "title": "Smart Pick",
@@ -138,7 +148,9 @@
       "completed": "Debate completed with {{count}} available models.",
       "singleModelNotice": "Only 1 model is currently available, so this is not a true multi-model PK. Below is a single-model self-review.",
       "noParticipants": "No model is available for debate. Check model and API key settings first.",
-      "failed": "Model debate failed. Check model settings and retry."
+      "failed": "Model debate failed. Check model settings and retry.",
+      "costWarning": "Starting multi-model debate — will use about {{count}} model calls.",
+      "processLabel": "View debate process"
     },
     "attachments": {
       "dropHere": "Drop files or images",
@@ -172,7 +184,7 @@
       "changeNodeModel": "Change model for {{step}}",
       "dynamicModelPool": "Dynamic pool",
       "chainSteps": {
-        "leader": "Main Chat",
+        "leader": "Leader",
         "architect": "Plan",
         "frontend": "Frontend Build",
         "backend": "Backend Build",
@@ -405,7 +417,7 @@
     "rollbackFailed": "Rollback failed"
   },
   "workRoles": {
-    "main_chat": "Main Chat",
+    "main_chat": "Leader",
     "main_chat_desc": "Direct conversation with the user",
     "planning": "Planning",
     "planning_desc": "Task breakdown and architecture design",
@@ -661,7 +673,7 @@
       "simple": "Simple question",
       "standard": "Standard task",
       "hard": "Complex task",
-      "main_chat": "Main chat"
+      "main_chat": "Leader"
     },
     "toolsTitle": "AI tool activity",
     "toolsEmpty": "The AI hasn't touched files or commands yet. Once a project has a workspace path, its reads/edits/commands show up here.",
@@ -695,23 +707,23 @@
     "pureMode": {
       "title": "Pure Single-Model Mode",
       "toggleTitle": "Debug: single-model chat only",
-      "toggleDesc": "When on, the main chat skips the intent judge, background auto-orchestration/model switching, auto debate triggering, semantic cache, project memory retrieval, and the self-check retry loop — leaving only the most basic path: send a message, get a reply from the model you picked. Use it to check whether single-model chat itself works. Doesn't affect other settings; toggle off anytime."
+      "toggleDesc": "When on, it skips the intent judge, background auto-orchestration/model switching, auto debate triggering, semantic cache, project memory retrieval, and the self-check retry loop — leaving only the most basic path: send a message, get a reply from the model you picked. Use it to check whether single-model chat itself works. Doesn't affect other settings; toggle off anytime."
     },
     "memoryEmbedding": {
-      "title": "Project Memory Search",
-      "modeTitle": "Memory embedding mode",
-      "modeDesc": "Local mode is fastest and free. Real embeddings call your configured embedding model for better cross-project memory matching, but require a manual index sync.",
-      "local": "Local fast search",
-      "remote": "Real embedding search",
-      "credential": "API Credential",
+      "title": "Cross-Project Memory Search",
+      "modeTitle": "How AI finds relevant memories",
+      "modeDesc": "Fast mode: no setup, works immediately, keyword-based, no extra cost. Precise mode: lets AI connect decisions and lessons from your other projects more accurately, but needs an embedding-capable model account configured, and you must click \"Update Memory Index\" for it to take effect.",
+      "local": "Fast mode (default, no setup)",
+      "remote": "Precise mode (needs setup)",
+      "credential": "Account to use for matching",
       "credentialPlaceholder": "Choose a credential with embedding support",
       "model": "Embedding Model",
-      "sync": "Sync Memory Index",
-      "syncing": "Syncing...",
-      "syncDone": "Synced {{count}} project memories.",
-      "syncFailed": "Sync failed. Check the API key, Base URL, and embedding model name.",
-      "noCredential": "No OpenAI / OpenAI-compatible credential is available yet. Add a provider that supports embeddings first.",
-      "remoteHint": "Remote real embeddings do not batch-index during chat, avoiding unexpected slowdowns or extra cost."
+      "sync": "Update Memory Index",
+      "syncing": "Updating...",
+      "syncDone": "Updated the index for {{count}} project memories.",
+      "syncFailed": "Update failed. Check the API key, Base URL, and embedding model name.",
+      "noCredential": "No OpenAI / OpenAI-compatible credential is available yet. Add a provider that supports embeddings first to enable precise mode.",
+      "remoteHint": "After enabling precise mode, click \"Update Memory Index\" above for it to take effect. It won't auto-update during chat, to avoid slowdowns or extra cost."
     },
     "projectAssets": {
       "title": "Project Assets (Advanced)",
@@ -756,7 +768,7 @@
       },
       "addSecondModel": {
         "title": "Add a Second Model (Recommended)",
-        "desc": "At least 2 models are needed to showcase multi-AI collaboration — e.g. Opus for chat, Gemini for coding, Haiku for testing."
+        "desc": "At least 2 models are needed to showcase multi-AI collaboration — e.g. Opus as the leader, Gemini for coding, Haiku for testing."
       },
       "browseTemplates": {
         "title": "Review the Default Roles",

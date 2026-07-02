@@ -1,39 +1,45 @@
-/** 把模型正文切成「可折叠块（思考 / 工具调用）」和「正文」。
+/** 把模型正文切成「可折叠块（思考 / 工具调用 / 博弈过程）」和「正文」。
  *  很多模型会把非正文内容直接吐在 content 里，不切出来就刷屏：
  *  - 推理过程：<think>…</think> / 限流…<thinking>（agnes / MiniMax / GLM 等）
  *  - 假工具调用：{"name":"run_command","arguments":{…}} 这类裸 JSON 文本
  *    （模型不走结构化 tool_calls、凭训练记忆在正文里"演" agent 循环，吐的工具名
  *    如 run_command/view_file/update_plan 往往根本不是本应用真有的工具——纯垃圾文本）
+ *  - 多模型对弈过程：<debate_process>…</debate_process>（debate-result.ts 主动包裹，
+ *    见坑.md用户反馈——博弈的中间产物 solver/critic/judge 完整输出不该平铺刷屏，
+ *    默认折叠，只有"最终判断"直接展示）
  *  这些都折叠成一行可点的小字，正文照常显示。流式时未闭合的 think 块视为"进行中"。 */
 
 // 伪工具标签名单复用 harness/detect-pseudo-tools（单一来源：检测什么就折叠什么，加标签只改一处）
 import { PSEUDO_TOOL_TAGS } from "@/lib/llm/harness/detect-pseudo-tools";
 
-export type SegmentType = "think" | "tool" | "text";
+export type SegmentType = "think" | "tool" | "debate" | "text";
 export type ContentSegment = { type: SegmentType; content: string; closed: boolean };
 
 // 思考类标签
 const THINK_TAGS = ["think", "thinking"] as const;
+// 博弈过程标签（debate-result.ts 主动包裹，不是模型自己吐的）
+const DEBATE_TAGS = ["debate_process"] as const;
 
-// 标签名（小写）→ 折叠块类型。思考标签 → think；所有伪工具标签 → tool。
-const COLLAPSE_TAGS: Record<string, "think" | "tool"> = {
+// 标签名（小写）→ 折叠块类型。思考标签 → think；所有伪工具标签 → tool；博弈过程 → debate。
+const COLLAPSE_TAGS: Record<string, "think" | "tool" | "debate"> = {
   think: "think",
   thinking: "think",
+  debate_process: "debate",
 };
 for (const t of PSEUDO_TOOL_TAGS) COLLAPSE_TAGS[t] = "tool";
 
 // 阶段一：按 <think>/<thinking>/<tool_call> 等标签切成 think / tool / text 粗段
 function splitByThinkingTags(text: string): ContentSegment[] {
   const segments: ContentSegment[] = [];
-  // 开/闭标签成对匹配，覆盖思考 + 伪工具调用两类。\b[^>]* 兼容 <run_command foo="x"> 带属性
+  // 开/闭标签成对匹配，覆盖思考 + 伪工具调用 + 博弈过程三类。\b[^>]* 兼容 <run_command foo="x"> 带属性
   const tagRe = new RegExp(
-    `<(\\/?)(${[...THINK_TAGS, ...PSEUDO_TOOL_TAGS].join("|")})\\b[^>]*>`,
+    `<(\\/?)(${[...THINK_TAGS, ...PSEUDO_TOOL_TAGS, ...DEBATE_TAGS].join("|")})\\b[^>]*>`,
     "gi",
   );
   let cursor = 0;
   let depth = 0;
   let blockStart = 0;
-  let blockType: "think" | "tool" = "think";
+  let blockType: "think" | "tool" | "debate" = "think";
   let m: RegExpExecArray | null;
   while ((m = tagRe.exec(text)) !== null) {
     const isClose = m[1] === "/";

@@ -36,7 +36,8 @@ describe("createDefaultToolRegistry", () => {
 describe("buildAiSdkTools", () => {
   it("每个工具转成带 description 的 AI SDK tool", () => {
     const tools = buildAiSdkTools(createDefaultToolRegistry(), ctx);
-    expect(Object.keys(tools).sort()).toEqual(["git_read", "glob", "grep", "read"]);
+    // remember（3.1 修复）始终注册，不分只读/写——它自己走 confirm 审批，不受权限档位过滤。
+    expect(Object.keys(tools).sort()).toEqual(["git_read", "glob", "grep", "read", "remember"]);
     expect(tools.read!.description).toContain("读取");
     expect(tools.git_read!.description).toContain("git");
   });

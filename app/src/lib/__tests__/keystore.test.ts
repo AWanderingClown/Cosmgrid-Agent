@@ -29,7 +29,13 @@ vi.mock("@tauri-apps/plugin-store", () => ({
   },
 }));
 
-import { deleteApiKey, getApiKey, migrateLegacyApiKeys, saveApiKey } from "../keystore";
+import {
+  __clearApiKeyMemoryCacheForTests,
+  deleteApiKey,
+  getApiKey,
+  migrateLegacyApiKeys,
+  saveApiKey,
+} from "../keystore";
 
 describe("keystore", () => {
   beforeEach(() => {
@@ -41,6 +47,9 @@ describe("keystore", () => {
     mocks.store.keys.mockClear();
     mocks.store.save.mockClear();
     mocks.load.mockClear();
+    // 修复（2026-07-02）：getApiKey 现在有内存缓存，模块级 Map 会跨用例残留，
+    // 每个用例开始前清空，避免上一个用例写的 key 污染下一个用例的断言。
+    __clearApiKeyMemoryCacheForTests();
   });
 
   it("saves new API keys to the system credential store and clears legacy plaintext", async () => {
@@ -104,5 +113,52 @@ describe("keystore", () => {
 
     expect(mocks.invoke).toHaveBeenCalledWith("delete_api_key", { credentialId: "cred-1" });
     expect(mocks.store.delete).toHaveBeenCalledWith("apiKey:cred-1");
+  });
+
+  // 修复（2026-07-02）：用户反馈每次切模型/发消息/新建对话都弹一次 macOS 钥匙串授权框——
+  // 根因是 getApiKey 完全不缓存，每次都真打一次 Keychain。这几个用例锁定"同一次运行内
+  // 一个 credential 只真正问一次钥匙串"这个行为，防止以后有人无意间把缓存去掉。
+  describe("内存缓存（防止每次都真打一次 Keychain）", () => {
+    it("同一 credentialId 连续调用两次 getApiKey，只真正调用一次 invoke", async () => {
+      mocks.invoke.mockResolvedValueOnce("sk-keychain");
+
+      await expect(getApiKey("cred-1")).resolves.toBe("sk-keychain");
+      await expect(getApiKey("cred-1")).resolves.toBe("sk-keychain");
+
+      expect(mocks.invoke).toHaveBeenCalledTimes(1);
+    });
+
+    it("saveApiKey 之后立刻 getApiKey 同一 credentialId，直接读内存不再调用 invoke 的 get_api_key", async () => {
+      await saveApiKey("cred-1", "sk-new");
+      mocks.invoke.mockClear();
+
+      await expect(getApiKey("cred-1")).resolves.toBe("sk-new");
+      expect(mocks.invoke).not.toHaveBeenCalled();
+    });
+
+    it("deleteApiKey 之后再 getApiKey 同一 credentialId，缓存已清，会重新真打一次 Keychain", async () => {
+      mocks.invoke.mockResolvedValueOnce("sk-keychain");
+      await getApiKey("cred-1");
+
+      await deleteApiKey("cred-1");
+      mocks.invoke.mockClear();
+      mocks.invoke.mockResolvedValueOnce(null);
+
+      await getApiKey("cred-1");
+      expect(mocks.invoke).toHaveBeenCalledWith("get_api_key", { credentialId: "cred-1" });
+    });
+
+    it("不同 credentialId 各自独立缓存，互不影响", async () => {
+      mocks.invoke.mockResolvedValueOnce("sk-a").mockResolvedValueOnce("sk-b");
+
+      await expect(getApiKey("cred-a")).resolves.toBe("sk-a");
+      await expect(getApiKey("cred-b")).resolves.toBe("sk-b");
+      expect(mocks.invoke).toHaveBeenCalledTimes(2);
+
+      // 再各自查一次，都应该走缓存，不再新增 invoke 调用
+      await getApiKey("cred-a");
+      await getApiKey("cred-b");
+      expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    });
   });
 });

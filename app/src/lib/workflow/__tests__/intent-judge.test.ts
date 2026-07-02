@@ -155,4 +155,51 @@ describe("classifyTurnIntentWithJudge", () => {
     expect(decision.patch?.debateRequested).not.toBe(true);
     expect(decision.reason).toContain("语义样例路由");
   });
+
+  // ============ 5.1 修复：complexity 字段合并到 classifyTurnIntentWithJudge 返回 ============
+
+  it("返回 decision 包含 complexity 字段（按 message 内容推断）", async () => {
+    mocks.generateObject.mockResolvedValue({
+      object: {
+        action: "answer_only",
+        confidence: 0.9,
+        reason: "简单问题。",
+      },
+    });
+
+    const simple = await classifyTurnIntentWithJudge({
+      text: "你好",
+      activeRun: null,
+      model,
+    });
+    expect(simple.complexity).toBe("simple");
+
+    const hard = await classifyTurnIntentWithJudge({
+      text: "帮我设计一个新架构，包含多个模块的拆分和性能优化方案",
+      activeRun: null,
+      model,
+    });
+    expect(hard.complexity).toBe("hard");
+  });
+
+  it("裁判失败 catch 路径也带 complexity 字段（不能漏）", async () => {
+    mocks.generateObject.mockRejectedValue(new Error("judge failed"));
+
+    const fallback = await classifyTurnIntentWithJudge({
+      text: "帮我设计一个架构方案",
+      activeRun: null,
+      model,
+    });
+    // 就算裁判模型炸了，complexity 也要算出来（让 message-router 不用再跑一次 classifyMessageComplexity）
+    expect(fallback.complexity).toBeDefined();
+  });
+
+  it("无 judge model 走纯语义路由路径也带 complexity", async () => {
+    const noModel = await classifyTurnIntentWithJudge({
+      text: "翻译一下",
+      activeRun: null,
+      model: null,
+    });
+    expect(noModel.complexity).toBe("simple");
+  });
 });

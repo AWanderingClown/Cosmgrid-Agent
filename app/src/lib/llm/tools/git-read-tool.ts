@@ -75,7 +75,7 @@ export const gitReadTool: ToolDefinition<GitReadParams> = {
     let pathspec: string | null = null;
     const trimmedPath = input.path?.trim();
     if (trimmedPath) {
-      const check = checkPath(ctx.workspacePath, trimmedPath);
+      const check = await checkPath(ctx.workspacePath, trimmedPath);
       if (!check.ok) {
         return { status: "denied", output: check.reason ?? "路径不允许" };
       }

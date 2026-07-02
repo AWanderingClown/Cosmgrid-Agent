@@ -40,9 +40,18 @@ describe("formatDebateResultMessage", () => {
 
     expect(formatted.usage).toEqual({ inputTokens: 40, outputTokens: 60 });
     expect(formatted.content).toContain("2 个模型博弈已完成");
-    expect(formatted.content).toContain("## 最终判断\n先低风险按职责拆。");
+    // UI 修复（2026-07-02，用户反馈）：最终判断直接展示在正文里，不再用 "## 最终判断" 标题；
+    // 博弈过程（各参与者完整输出）包进 <debate_process> 标签，parse-thinking.ts 识别后
+    // 折叠渲染，不再平铺刷屏。
+    expect(formatted.content).toContain("先低风险按职责拆。");
+    expect(formatted.content).toContain("<debate_process>");
+    expect(formatted.content).toContain("</debate_process>");
     expect(formatted.content).toContain("### 1. MiniMax · Solver\n可以拆。");
     expect(formatted.content).toContain("### 2. Kimi · Critic\n不要顺手改行为。");
+    // 最终判断必须在 <debate_process> 标签之外（折叠块之前），不能被一起折叠掉
+    expect(formatted.content.indexOf("先低风险按职责拆。")).toBeLessThan(
+      formatted.content.indexOf("<debate_process>"),
+    );
   });
 
   it("uses the single-model notice when only one participant is available", () => {

@@ -1,8 +1,14 @@
 import { ShieldAlert } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { Button } from "@/components/ui/button";
 import type { ToolConfirmRequest } from "@/lib/llm/tools";
 
+/**
+ * UI 修复（2026-07-02，用户反馈两轮迭代）：
+ * 第一轮从独立悬浮的三段式深色大卡片改成贴输入框的小提示条，用户又反馈"没必要专门起一行，
+ * 直接长在'空闲，等你发话'那一行就行"——现在直接替换掉 WorkingStatusBar 那一行的内容，
+ * 不额外占地方、不撑高输入框。样式上不再自带边框/背景/内边距（那是独立卡片才需要的），
+ * 跟 WorkingStatusBar 的其他状态行（正在工作/执行完毕/空闲）用完全一样的极简单行风格。
+ */
 export function ToolConfirmCard({
   request,
   onResolve,
@@ -12,26 +18,25 @@ export function ToolConfirmCard({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="absolute top-5 right-5 z-50 w-[24rem] max-w-[calc(100%-2.5rem)]">
-      <div className="glass border border-white/15 rounded-[1.75rem] overflow-hidden shadow-2xl shadow-black/35">
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-white/10 bg-black/20">
-          <ShieldAlert className="w-4 h-4 text-amber-500" />
-          <span className="font-bold text-sm">{t("chat.tools.confirmTitle")}</span>
-          <span className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500 uppercase">{request.toolName}</span>
-        </div>
-        <div className="px-4 py-3 space-y-3">
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            {t("chat.tools.confirmHint")}
-          </p>
-        </div>
-        <div className="flex justify-end gap-2 px-4 py-3 border-t border-white/10 bg-black/10">
-          <Button variant="outline" size="sm" className="rounded-xl" onClick={() => onResolve(false)}>
-            {t("chat.tools.reject")}
-          </Button>
-          <Button size="sm" className="rounded-xl bg-emerald-600 hover:bg-emerald-700" onClick={() => onResolve(true)}>
-            {t("chat.tools.approve")}
-          </Button>
-        </div>
+    <div className="flex min-w-0 items-center gap-2 text-[11px] text-amber-500">
+      <ShieldAlert className="h-3 w-3 shrink-0" />
+      <span className="font-semibold shrink-0">{t("chat.tools.confirmHint")}</span>
+      <span className="truncate text-muted-foreground">{request.toolName}</span>
+      <div className="ml-auto flex items-center gap-1 shrink-0">
+        <button
+          type="button"
+          onClick={() => onResolve(false)}
+          className="rounded-md px-2 py-0.5 font-medium text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] transition-colors"
+        >
+          {t("chat.tools.reject")}
+        </button>
+        <button
+          type="button"
+          onClick={() => onResolve(true)}
+          className="rounded-md px-2 py-0.5 font-semibold bg-emerald-500/90 text-white hover:bg-emerald-500 transition-colors"
+        >
+          {t("chat.tools.approve")}
+        </button>
       </div>
     </div>
   );

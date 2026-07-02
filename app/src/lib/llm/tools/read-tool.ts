@@ -31,7 +31,7 @@ export const readTool: ToolDefinition<ReadParams> = {
   parameters: paramsSchema,
   readOnly: true,
   async execute(input, ctx): Promise<ToolResult> {
-    const check = checkPath(ctx.workspacePath, input.file_path);
+    const check = await checkPath(ctx.workspacePath, input.file_path);
     if (!check.ok) {
       return { status: "denied", output: check.reason ?? "路径不允许" };
     }

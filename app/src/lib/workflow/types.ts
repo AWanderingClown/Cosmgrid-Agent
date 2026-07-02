@@ -37,6 +37,12 @@ export interface TurnIntentDecision {
   reason: string;
   evidenceTurnIds: string[];
   patch?: Partial<WorkflowIntent>;
+  /**
+   * 5.1 修复（2026-07-02）：消息难度档位（simple/standard/hard）。
+   * 与 lib/llm/message-router.ts 的 MessageComplexity 保持一致，但这里内联定义避免循环依赖。
+   * 调用方（如 message-router.ts）可以用此字段而不再独立跑一次 classifyMessageComplexity。
+   */
+  complexity?: "simple" | "standard" | "hard";
 }
 
 export type WorkflowPhase =

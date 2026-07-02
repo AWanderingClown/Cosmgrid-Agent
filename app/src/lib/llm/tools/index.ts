@@ -14,6 +14,7 @@ import { gitReadTool } from "./git-read-tool";
 import { writeTool } from "./write-tool";
 import { editTool } from "./edit-tool";
 import { bashTool } from "./bash-tool";
+import { rememberTool } from "./memory-tool"; // 3.1 修复：AI 写入记忆工具
 
 export * from "./types";
 export { ToolRegistry } from "./registry";
@@ -22,10 +23,11 @@ export { ToolRegistry } from "./registry";
  * 工具集。默认只含只读工具（read/glob/grep/git_read）。
  * 传 includeWrite=true 才加入写工具（edit/write）——它们运行时仍强制走 ctx.confirm，
  * 没有确认通道会自我拒绝（双保险）。
+ * 3.1 修复：remember 工具始终可用（不分只读/写），因为记忆写入本身已经走 confirm 审批。
  */
 export function createDefaultToolRegistry(opts: { includeWrite?: boolean } = {}): ToolRegistry {
   const registry = new ToolRegistry();
-  registry.registerAll([readTool, globTool, grepTool, gitReadTool]);
+  registry.registerAll([readTool, globTool, grepTool, gitReadTool, rememberTool]);
   if (opts.includeWrite) registry.registerAll([writeTool, editTool, bashTool]);
   return registry;
 }

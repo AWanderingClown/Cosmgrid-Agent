@@ -18,6 +18,7 @@ export function ChatTranscript({
   streamElapsedMs,
   toolCallsByMessage,
   streamError,
+  onEnableWorkspaceProtection,
 }: {
   availableModelCount: number;
   messages: ChatMessage[];
@@ -27,6 +28,8 @@ export function ChatTranscript({
   streamElapsedMs: number;
   toolCallsByMessage: Map<string, ToolCallView[]>;
   streamError: string | null;
+  /** 2.1 步骤2/3 修复：非 git 工作文件夹时，工具卡片上"开启修改保护"按钮的回调 */
+  onEnableWorkspaceProtection?: () => Promise<void>;
 }) {
   const { t } = useTranslation();
   return (
@@ -78,6 +81,7 @@ export function ChatTranscript({
                 chainDone={m.chainDone}
                 toolCalls={showToolCalls}
                 modelLabel={m.modelLabel}
+                onEnableWorkspaceProtection={onEnableWorkspaceProtection}
               />
             );
           })}
@@ -88,7 +92,10 @@ export function ChatTranscript({
       )}
 
       {streamError && (
-        <div className="px-6 py-4">
+        // UI修复（2026-07-02）：这块原来没有跟消息列表共享 paddingBottom: inputAreaH+16，
+        // 滚动到底部时正好卡在悬浮输入框（ChatInputDock）后面被完全遮挡，用户看不到报错内容。
+        // 补上同样的底部留白，跟消息列表的可见区域对齐。
+        <div className="px-6 py-4" style={{ paddingBottom: inputAreaH + 16 }}>
           <Alert variant="destructive" className="bg-red-500/10 border-red-500/20">
             <AlertDescription className="text-xs font-medium">{streamError}</AlertDescription>
           </Alert>

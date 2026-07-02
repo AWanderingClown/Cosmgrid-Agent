@@ -5,13 +5,13 @@ const WRITE_OR_EXECUTE_RE =
 
 const ARTICLE_WRITING_RE = /(软文|公众号|推广文|文章|文案|帖子|推文|营销文案|宣传文案)/i;
 
-export function shouldExposeWriteTools(args: {
-  text: string;
-  permissionMode: "read" | "confirm" | "auto";
-  decision: TurnIntentDecision;
-}): boolean {
-  if (args.permissionMode === "read") return false;
-
+/**
+ * V2 修复（2026-07-02）：判断这轮消息本身"是不是想干写类的活"，不考虑权限档位。
+ * 从 shouldExposeWriteTools 里拆出来，供 ChatPage 在"没给写工具"时区分两种情况：
+ * ①消息本来就不需要写（正常，什么都不用提示）②消息明明想写，但权限档/没绑文件夹把它挡住了
+ * （这种要显式告诉用户，不能让 AI 自己装傻或被 harness 抓到"编了工具调用"）。
+ */
+export function impliesWriteIntent(args: { text: string; decision: TurnIntentDecision }): boolean {
   const text = args.text.trim();
   if (ARTICLE_WRITING_RE.test(text) && !WRITE_OR_EXECUTE_RE.test(text)) return false;
 
@@ -21,4 +21,13 @@ export function shouldExposeWriteTools(args: {
   if (args.decision.patch?.verificationRequired) return true;
 
   return false;
+}
+
+export function shouldExposeWriteTools(args: {
+  text: string;
+  permissionMode: "read" | "confirm" | "auto";
+  decision: TurnIntentDecision;
+}): boolean {
+  if (args.permissionMode === "read") return false;
+  return impliesWriteIntent(args);
 }

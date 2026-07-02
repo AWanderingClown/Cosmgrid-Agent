@@ -1,5 +1,5 @@
 import { Suspense, lazy, memo, useEffect, useState } from "react";
-import { Brain, Check, ChevronDown, FolderOpen, Paperclip, Sparkles, Terminal, User } from "lucide-react";
+import { Brain, Check, ChevronDown, FolderOpen, Paperclip, Sparkles, Swords, Terminal, User } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { parseThinking } from "@/lib/parse-thinking";
@@ -13,6 +13,8 @@ import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 
 const MarkdownText = lazy(() => import("@/components/chat/MarkdownText").then((m) => ({ default: m.MarkdownText })));
 
+const COLLAPSIBLE_ICON = { think: Brain, tool: Terminal, debate: Swords } as const;
+
 const CollapsibleBlock = memo(function CollapsibleBlock({
   content,
   closed,
@@ -22,16 +24,16 @@ const CollapsibleBlock = memo(function CollapsibleBlock({
   content: string;
   closed: boolean;
   streaming: boolean;
-  variant: "think" | "tool";
+  variant: "think" | "tool" | "debate";
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const body = content.trim();
   if (!body && closed) return null;
   const live = streaming && !closed;
-  const Icon = variant === "think" ? Brain : Terminal;
-  const labelLive = variant === "think" ? t("chat.thinking") : t("chat.toolCall");
-  const labelDone = variant === "think" ? t("chat.thinkingDone") : t("chat.toolCallDone");
+  const Icon = COLLAPSIBLE_ICON[variant];
+  const labelLive = variant === "think" ? t("chat.thinking") : variant === "debate" ? t("chat.debate.processLabel") : t("chat.toolCall");
+  const labelDone = variant === "think" ? t("chat.thinkingDone") : variant === "debate" ? t("chat.debate.processLabel") : t("chat.toolCallDone");
   return (
     <div className="my-1">
       <button
@@ -64,6 +66,7 @@ export const MessageItem = memo(function MessageItem({
   chainDone,
   toolCalls,
   modelLabel,
+  onEnableWorkspaceProtection,
 }: {
   role: "user" | "assistant";
   text: string;
@@ -76,6 +79,8 @@ export const MessageItem = memo(function MessageItem({
   chainDone?: boolean;
   toolCalls?: ToolCallView[];
   modelLabel?: string;
+  /** 2.1 步骤2/3 修复：非 git 工作文件夹时，工具卡片上"开启修改保护"按钮的回调 */
+  onEnableWorkspaceProtection?: () => Promise<void>;
 }) {
   const { t } = useTranslation();
   const isAssistant = role === "assistant";
@@ -149,7 +154,7 @@ export const MessageItem = memo(function MessageItem({
               {stepsOpen && (
                 <div className="space-y-1">
                   {toolCalls.slice(-20).map((call) => (
-                    <ToolCallCard key={call.id} call={call} />
+                    <ToolCallCard key={call.id} call={call} onEnableProtection={onEnableWorkspaceProtection} />
                   ))}
                 </div>
               )}
@@ -165,7 +170,7 @@ export const MessageItem = memo(function MessageItem({
                   ) : (
                     <CollapsibleBlock
                       key={i}
-                      variant={s.type === "think" ? "think" : "tool"}
+                      variant={s.type === "think" ? "think" : s.type === "debate" ? "debate" : "tool"}
                       content={s.content}
                       closed={s.closed}
                       streaming={isStreaming}

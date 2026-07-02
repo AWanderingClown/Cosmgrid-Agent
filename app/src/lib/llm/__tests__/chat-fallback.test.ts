@@ -228,6 +228,65 @@ describe("streamWithFallback - 网络/超时错误", () => {
   });
 });
 
+describe("streamWithFallback - partial 文本 + 不同错误分类的 fallback 行为", () => {
+  // 1.1 关键场景：主模型流出部分文本后被服务端拒（429/401/5xx），
+  // 必须切 fallback 且把 partial 塞回 + onSwitched category 正确分类
+  it.each<[number, string]>([
+    [429, "rate_limit"],
+    [401, "auth_invalid"],
+    [500, "server_error"],
+  ])(
+    "partial 文本 + HTTP %i → 切 fallback + 上下文带 partial + onSwitched(category=%s)",
+    async (status, label) => {
+      mocks.streamText.mockReturnValueOnce(
+        makePartialFailingStream(["主模型已输出片段。"], {
+          statusCode: status,
+          message: `HTTP ${status}`,
+        }),
+      );
+      mocks.streamText.mockReturnValueOnce(makeSuccessStream(["fallback 续写。"]));
+
+      const deltas: string[] = [];
+      const switched: Array<{ from: string; to: string; reason: SwitchReason }> = [];
+      const cbs: StreamCallbacks = {
+        onDelta: (d) => deltas.push(d),
+        onSwitched: (f, t, r) => switched.push({ from: f.modelId, to: t.modelId, reason: r }),
+      };
+
+      const result = await streamWithFallback(
+        [primary, fallback],
+        [{ role: "user", content: "完整任务" }],
+        cbs,
+      );
+
+      expect(result).toEqual({ usedModelId: "m-fallback", switched: true });
+      expect(deltas.join("")).toBe("主模型已输出片段。fallback 续写。");
+      expect(switched).toHaveLength(1);
+      expect(switched[0]!.reason).toEqual({ kind: "error", category: label });
+      const fallbackCall = mocks.streamText.mock.calls[1]![0] as {
+        messages: Array<{ role: string; content: string }>;
+      };
+      expect(fallbackCall.messages.some((m) => m.role === "assistant" && m.content === "主模型已输出片段。")).toBe(true);
+      expect(fallbackCall.messages.at(-1)?.content).toContain("不要重复已经完成的内容");
+    },
+  );
+
+  it("链上所有模型 partial 后都失败 → 抛错且 partial 不被吞", async () => {
+    mocks.streamText
+      .mockReturnValueOnce(makePartialFailingStream(["主模型片段。"], { statusCode: 429, message: "HTTP 429" }))
+      .mockReturnValueOnce(makePartialFailingStream(["fallback 片段。"], { statusCode: 429, message: "HTTP 429" }));
+
+    await expect(
+      streamWithFallback(
+        [primary, fallback],
+        [{ role: "user", content: "x" }],
+        { onDelta: () => {} },
+      ),
+    ).rejects.toBeDefined();
+    expect(mocks.streamText).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("streamWithFallback - 非用户中断自动恢复", () => {
   it("finishReason=length 时自动让同一模型从中断处续写，不把截断当完成", async () => {
     mocks.streamText

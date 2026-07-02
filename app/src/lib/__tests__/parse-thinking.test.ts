@@ -38,6 +38,18 @@ describe("parseThinking", () => {
     ]);
   });
 
+  // UI 修复（2026-07-02，用户反馈）：博弈过程不该跟最终判断平铺刷屏，debate-result.ts
+  // 主动包 <debate_process> 标签，这里验证能正确识别并折叠。
+  it("<debate_process> 标签 → debate 段，最终判断（标签外的正文）保持展开", () => {
+    const segs = parseThinking(
+      "最终判断：先低风险按职责拆。\n\n<debate_process>\n### 1. MiniMax · Solver\n可以拆。\n</debate_process>",
+    );
+    expect(segs).toEqual([
+      { type: "text", content: "最终判断：先低风险按职责拆。\n\n", closed: true },
+      { type: "debate", content: "\n### 1. MiniMax · Solver\n可以拆。\n", closed: true },
+    ]);
+  });
+
   it("裸 JSON 式伪工具调用 → tool 段", () => {
     const segs = parseThinking('{"name":"run_command","arguments":{"command":"pwd"}}');
     expect(segs).toEqual([

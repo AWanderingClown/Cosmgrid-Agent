@@ -26,6 +26,7 @@
     "stream_stalled": "当前模型响应中断（可能已完成但未正常结束），正在自动切换模型继续",
     "network": "网络连接失败，请检查网络或 Base URL 配置",
     "web_content_unavailable": "外部链接内容读取失败。微信文章这类页面经常需要登录或被防抓取，请把正文粘贴进来，或截图/导出后发给我，我再按参考文章重写。",
+    "tool_budget_exhausted": "这轮任务需要的步骤比较多，没能在预算内跑完。建议把任务拆成更小的步骤分开说，或者换个模型试试",
     "unknown": "对话失败，请稍后重试"
   },
   "app": {
@@ -68,6 +69,10 @@
     },
     "cacheHit": "命中缓存 · {{days}} 天前回答过",
     "contextTrimmed": "[较早的 {{count}} 条消息已省略以节省 token]",
+    "writeGuardNotice": {
+      "noWorkspace": "⚠️ 这句话听起来是要改动文件，但当前对话没有绑定文件夹，AI 没有任何读写工具，接下来的回复可能只是在讨论、无法真正动手。先点输入框旁边的「选择文件夹」绑定一个工作目录，再重新发一次这句话。",
+      "readOnly": "⚠️ 这句话听起来是要改动文件，但当前权限档位是「只读」，AI 只能看不能改。如果确实要改文件，把权限档位切到「确认后修改」或「自动修改」再重新发一次这句话。"
+    },
     "harnessRetry": "检测到可能编造 · 正在让模型自查重答",
       "intentNudgeRetry": "上条说要做但没真调工具 · 自动催一次…",
     "smartPick": "智能推荐",
@@ -108,7 +113,12 @@
       "glob": "查找文件：{{pattern}}",
       "grep": "搜索文本：{{pattern}}",
       "git_read": "读取 Git 状态",
-      "unknown": "{{tool}}"
+      "unknown": "{{tool}}",
+      "reversible": "可撤销",
+      "notReversible": "无法撤销",
+      "protectHint": "这个文件夹没开启修改保护，AI 写的内容改坏了也回不去",
+      "enableProtection": "开启修改保护",
+      "enableProtectionFailed": "开启失败，可能是本机没装 git，请先安装后重试"
     },
     "smartPickResult": {
       "title": "智能推荐",
@@ -138,7 +148,9 @@
       "completed": "已用 {{count}} 个可用模型完成博弈。",
       "singleModelNotice": "当前只有 1 个可用模型，无法进行真正的多模型 PK；下面是单模型自审结果。",
       "noParticipants": "当前没有可用于博弈的模型，请先检查模型和 API Key 配置。",
-      "failed": "模型博弈失败，请检查模型配置后重试。"
+      "failed": "模型博弈失败，请检查模型配置后重试。",
+      "costWarning": "即将开始多模型对弈，预计消耗约 {{count}} 次模型调用。",
+      "processLabel": "查看博弈过程"
     },
     "attachments": {
       "dropHere": "拖入文件或图片",
@@ -172,7 +184,7 @@
       "changeNodeModel": "更换 {{step}} 的模型",
       "dynamicModelPool": "动态分配",
       "chainSteps": {
-        "leader": "主对话",
+        "leader": "团队负责人",
         "architect": "计划方案",
         "frontend": "前端工程师执行",
         "backend": "后端工程师执行",
@@ -405,7 +417,7 @@
     "rollbackFailed": "回滚失败"
   },
   "workRoles": {
-    "main_chat": "主对话",
+    "main_chat": "团队负责人",
     "main_chat_desc": "用户跟 AI 的直接对话",
     "planning": "计划阶段",
     "planning_desc": "任务分解、架构设计",
@@ -661,7 +673,7 @@
       "simple": "简单问题",
       "standard": "普通任务",
       "hard": "复杂任务",
-      "main_chat": "主对话"
+      "main_chat": "团队负责人"
     },
     "toolsTitle": "AI 工具操作记录",
     "toolsEmpty": "AI 还没动过文件或命令。在项目里给它工作区路径后，它读/改文件、跑命令都会记在这里。",
@@ -695,23 +707,23 @@
     "pureMode": {
       "title": "纯净单模型模式",
       "toggleTitle": "调试用：只留单模型对话",
-      "toggleDesc": "开启后，主对话会跳过意图裁判、后台自动编排/切模型、对弈自动触发、语义缓存、项目记忆检索和自查重答闭环，只保留「发消息 → 你选的模型直接回复」这条最基础的链路。用于排查单模型对话本身是否正常，不影响其他设置，随时可关。"
+      "toggleDesc": "开启后会跳过意图裁判、后台自动编排/切模型、对弈自动触发、语义缓存、项目记忆检索和自查重答闭环，只保留「发消息 → 你选的模型直接回复」这条最基础的链路。用于排查单模型对话本身是否正常，不影响其他设置，随时可关。"
     },
     "memoryEmbedding": {
-      "title": "项目记忆检索",
-      "modeTitle": "记忆向量方式",
-      "modeDesc": "本地模式速度最快、零成本；真实向量会调用你配置的 embedding 模型，跨项目记忆匹配更准，但需要手动同步索引。",
-      "local": "本地快速检索",
-      "remote": "真实向量检索",
-      "credential": "API 凭据",
+      "title": "跨项目记忆检索",
+      "modeTitle": "AI怎么找到相关记忆",
+      "modeDesc": "快速模式：免设置，立刻能用，靠关键词匹配，不产生额外费用。精准模式：让AI更准确地联系你以前其他项目里的决策和教训，但需要你配置一个支持embedding的模型账号，并且要手动点「更新记忆索引」才会生效。",
+      "local": "快速模式（默认，免设置）",
+      "remote": "精准模式（需配置）",
+      "credential": "用哪个账号做匹配",
       "credentialPlaceholder": "选择一个支持 embedding 的凭据",
       "model": "Embedding 模型",
-      "sync": "同步记忆索引",
-      "syncing": "同步中...",
-      "syncDone": "已同步 {{count}} 条项目记忆。",
-      "syncFailed": "同步失败，请检查 API Key、Base URL 和 embedding 模型名。",
-      "noCredential": "还没有可用的 OpenAI / OpenAI 兼容凭据。先到「模型供应商」添加一个支持 embedding 的服务。",
-      "remoteHint": "远程真实向量不会在聊天时自动批量补索引，避免突然变慢或产生额外费用。"
+      "sync": "更新记忆索引",
+      "syncing": "更新中...",
+      "syncDone": "已更新 {{count}} 条项目记忆的索引。",
+      "syncFailed": "更新失败，请检查 API Key、Base URL 和 embedding 模型名是否正确。",
+      "noCredential": "还没有可用的 OpenAI / OpenAI 兼容凭据。先到「模型供应商」添加一个支持 embedding 的服务，才能开启精准模式。",
+      "remoteHint": "开启精准模式后，还需要点上面的「更新记忆索引」才会真正生效；不会在聊天时自动更新，避免变慢或产生额外费用。"
     },
     "projectAssets": {
       "title": "项目资产（高级）",
@@ -756,7 +768,7 @@
       },
       "addSecondModel": {
         "title": "再添加一个模型（推荐）",
-        "desc": "至少 2 个模型才能体现「多 AI 协作」——主对话用 Opus、写代码用 Gemini、测试用 Haiku 这种组合。"
+        "desc": "至少 2 个模型才能体现「多 AI 协作」——团队负责人用 Opus、写代码用 Gemini、测试用 Haiku 这种组合。"
       },
       "browseTemplates": {
         "title": "看看默认角色",

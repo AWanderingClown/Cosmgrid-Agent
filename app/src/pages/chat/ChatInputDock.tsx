@@ -3,9 +3,11 @@ import { FolderOpen, Lock, Paperclip, Send, ShieldCheck, Square, X, Zap } from "
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { WorkingStatusBar } from "@/components/chat/WorkingStatusBar";
+import { ToolConfirmCard } from "@/pages/chat/ToolConfirmCard";
 import { cn } from "@/lib/utils";
 import type { Attachment } from "@/lib/llm/attachments";
 import type { ToolCallView } from "@/lib/work-artifact-views";
+import type { ToolConfirmRequest } from "@/lib/llm/tools";
 
 type PermissionMode = "read" | "confirm" | "auto";
 
@@ -25,6 +27,9 @@ interface ChatInputDockProps {
   onRemoveAttachment: (id: string) => void;
   selectedModelName: string | null;
   onStop: () => void;
+  /** UI 修复（2026-07-02）：写操作确认从独立悬浮卡片改成贴着输入框的小提示条 */
+  pendingConfirm: ToolConfirmRequest | null;
+  onResolveConfirm: (ok: boolean) => void;
 }
 
 export function ChatInputDock({
@@ -43,6 +48,8 @@ export function ChatInputDock({
   onRemoveAttachment,
   selectedModelName,
   onStop,
+  pendingConfirm,
+  onResolveConfirm,
 }: ChatInputDockProps) {
   const { t } = useTranslation();
 
@@ -55,7 +62,13 @@ export function ChatInputDock({
       >
         <div className="flex-1 relative flex flex-col">
           <div className="px-6 pt-2">
-            <WorkingStatusBar activeCall={activeToolCall} running={isStreaming} />
+            {/* UI 修复（2026-07-02，用户反馈）：确认提示直接长在这一行（跟"空闲，等你发话"
+                同一行），不再另起一行撑高输入框，也不再单独悬浮成一张卡片。 */}
+            {pendingConfirm ? (
+              <ToolConfirmCard request={pendingConfirm} onResolve={onResolveConfirm} />
+            ) : (
+              <WorkingStatusBar activeCall={activeToolCall} running={isStreaming} />
+            )}
           </div>
           {workspacePath ? (
             <div className="flex items-center gap-2 flex-wrap px-6 pt-2">
