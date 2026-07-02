@@ -19,6 +19,15 @@ export interface ModelPriceCatalogEntry {
   updatedAt: string;
 }
 
+export interface ModelPriceCatalogVersion {
+  source: "builtin" | "remote" | "manual";
+  version: string;
+  entryCount: number;
+  enabledCount: number;
+  firstUpdatedAt: string;
+  lastUpdatedAt: string;
+}
+
 interface ModelPriceCatalogRow {
   id: string;
   model_name: string;
@@ -33,6 +42,15 @@ interface ModelPriceCatalogRow {
   version: string;
   enabled: number;
   updated_at: string;
+}
+
+interface ModelPriceCatalogVersionRow {
+  source: "builtin" | "remote" | "manual";
+  version: string;
+  entry_count: number;
+  enabled_count: number;
+  first_updated_at: string;
+  last_updated_at: string;
 }
 
 function rowToModelPriceCatalogEntry(r: ModelPriceCatalogRow): ModelPriceCatalogEntry {
@@ -50,6 +68,17 @@ function rowToModelPriceCatalogEntry(r: ModelPriceCatalogRow): ModelPriceCatalog
     version: r.version,
     enabled: r.enabled === 1,
     updatedAt: r.updated_at,
+  };
+}
+
+function rowToModelPriceCatalogVersion(r: ModelPriceCatalogVersionRow): ModelPriceCatalogVersion {
+  return {
+    source: r.source,
+    version: r.version,
+    entryCount: r.entry_count,
+    enabledCount: r.enabled_count,
+    firstUpdatedAt: r.first_updated_at,
+    lastUpdatedAt: r.last_updated_at,
   };
 }
 
@@ -120,6 +149,23 @@ export const modelPriceCatalog = {
       "SELECT * FROM model_price_catalog WHERE enabled = 1 ORDER BY updated_at DESC, model_name ASC",
     );
     return rows.map(rowToModelPriceCatalogEntry);
+  },
+
+  async listVersions(): Promise<ModelPriceCatalogVersion[]> {
+    const db = await getDb();
+    const rows = await db.select<ModelPriceCatalogVersionRow[]>(
+      `SELECT
+         source,
+         version,
+         COUNT(*) AS entry_count,
+         SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END) AS enabled_count,
+         MIN(updated_at) AS first_updated_at,
+         MAX(updated_at) AS last_updated_at
+       FROM model_price_catalog
+       GROUP BY source, version
+       ORDER BY enabled_count DESC, last_updated_at DESC, source ASC, version DESC`,
+    );
+    return rows.map(rowToModelPriceCatalogVersion);
   },
 
   async lookupActive(
@@ -313,6 +359,18 @@ export interface SavingsEventRow {
   createdAt: string;
 }
 
+export interface SavingsEventSummary {
+  eventCount: number;
+  totalSavedCost: number;
+  traceableEventCount: number;
+  missingPriceCatalogEventCount: number;
+  byKind: Array<{
+    kind: "cache" | "routing" | "compression";
+    eventCount: number;
+    totalSavedCost: number;
+  }>;
+}
+
 interface SavingsEventDbRow {
   id: string;
   usage_event_id: string | null;
@@ -412,6 +470,42 @@ export const savingsEvents = {
           "SELECT * FROM savings_events ORDER BY created_at DESC",
         );
     return rows.map(rowToSavingsEvent);
+  },
+
+  async summary(sinceTs?: string): Promise<SavingsEventSummary> {
+    const rows = await this.list(sinceTs);
+    const byKind = new Map<"cache" | "routing" | "compression", { eventCount: number; totalSavedCost: number }>();
+    let totalSavedCost = 0;
+    let traceableEventCount = 0;
+    let missingPriceCatalogEventCount = 0;
+
+    for (const row of rows) {
+      totalSavedCost += row.savedCost;
+      const current = byKind.get(row.kind) ?? { eventCount: 0, totalSavedCost: 0 };
+      current.eventCount += 1;
+      current.totalSavedCost += row.savedCost;
+      byKind.set(row.kind, current);
+
+      if (row.actualPriceCatalogId && row.baselinePriceCatalogId) {
+        traceableEventCount += 1;
+      } else {
+        missingPriceCatalogEventCount += 1;
+      }
+    }
+
+    return {
+      eventCount: rows.length,
+      totalSavedCost: Math.round(totalSavedCost * 10_000) / 10_000,
+      traceableEventCount,
+      missingPriceCatalogEventCount,
+      byKind: Array.from(byKind.entries())
+        .map(([kind, value]) => ({
+          kind,
+          eventCount: value.eventCount,
+          totalSavedCost: Math.round(value.totalSavedCost * 10_000) / 10_000,
+        }))
+        .sort((a, b) => b.totalSavedCost - a.totalSavedCost || a.kind.localeCompare(b.kind)),
+    };
   },
 };
 

@@ -15,7 +15,8 @@ import { Card } from "@/components/ui/card";
 import {
   usageEvents, semanticCache, modelPerformanceStats, savingsEvents, toolExecutions,
   models as dbModels,
-  type Model, type ModelPerformanceStatRow, type ToolExecutionRow, type UsageEventRow,
+  type Model, type ModelPerformanceStatRow, type SavingsEventRow, type SavingsEventSummary,
+  type ToolExecutionRow, type UsageEventRow,
 } from "@/lib/db";
 import {
   aggregateUsage,
@@ -37,15 +38,8 @@ export function StatsPage() {
   const [cache, setCache] = useState<{ entries: number; totalHits: number }>({ entries: 0, totalHits: 0 });
   const [perf, setPerf] = useState<ModelPerformanceStatRow[]>([]);
   const [modelList, setModelList] = useState<Model[]>([]);
-  const [savings, setSavings] = useState<Array<{
-    id: string;
-    kind: "cache" | "routing" | "compression";
-    savedCost: number;
-    baselineCost: number;
-    actualCost: number;
-    explainJson: string;
-    createdAt: string;
-  }>>([]);
+  const [savings, setSavings] = useState<SavingsEventRow[]>([]);
+  const [savingsTrace, setSavingsTrace] = useState<SavingsEventSummary | null>(null);
   const [toolExecs, setToolExecs] = useState<ToolExecutionRow[]>([]);
   const [loading, setLoading] = useState(true);
   // 阶段 F2：byModel 行点击展开角色拆分（drill-down）
@@ -57,13 +51,14 @@ export function StatsPage() {
     try {
       void cleanupExpiredCache();
       const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
-      const [rowsRes, cacheStats, perfRows, execs, modelRows, savingsRows] = await Promise.all([
+      const [rowsRes, cacheStats, perfRows, execs, modelRows, savingsRows, savingsSummaryRows] = await Promise.all([
         usageEvents.list(since),
         semanticCache.stats(),
         modelPerformanceStats.list(),
         toolExecutions.list(30),
         dbModels.list(),
         savingsEvents.list(since),
+        savingsEvents.summary(since),
       ]);
       setSummary(aggregateUsage(rowsRes));
       setRows(rowsRes);  // ★ 保留 rows 给 F2 byActorRole 派生（零额外 SQL）
@@ -72,6 +67,7 @@ export function StatsPage() {
       setModelList(modelRows);
       setToolExecs(execs);
       setSavings(savingsRows);
+      setSavingsTrace(savingsSummaryRows);
     } catch (err) {
       // 阶段 I 修（铁律 4：静默吞错）：原 `} catch {` 没打日志，失败用户完全无感
       // 加 console.error 让 dev/QA 能看到；用户也至少在 devtools 看到 [StatsPage] 前缀
@@ -81,6 +77,7 @@ export function StatsPage() {
       setRows([]);
       setModelList([]);
       setSavings([]);
+      setSavingsTrace(null);
     } finally {
       setLoading(false);
     }
@@ -178,6 +175,15 @@ export function StatsPage() {
                   <StatCard icon={<Cpu className="w-4 h-4" />} label={t("stats.savingsKinds.routing")} value={fmtCost(savingsSummary.byKind.routing)} />
                   <StatCard icon={<Layers3 className="w-4 h-4" />} label={t("stats.savingsKinds.compression")} value={fmtCost(savingsSummary.byKind.compression)} />
                 </div>
+                {savingsTrace && savingsTrace.eventCount > 0 && (
+                  <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-3 py-2 text-[11px] text-emerald-700 dark:text-emerald-300">
+                    {t("stats.savingsTraceSummary", {
+                      traceable: savingsTrace.traceableEventCount,
+                      total: savingsTrace.eventCount,
+                      missing: savingsTrace.missingPriceCatalogEventCount,
+                    })}
+                  </div>
+                )}
                 {savings.length === 0 ? (
                   <p className="text-sm text-muted-foreground">{t("stats.savingsEmpty")}</p>
                 ) : (
@@ -387,7 +393,10 @@ function SavingsRow({
     savedCost: number;
     baselineCost: number;
     actualCost: number;
+    formulaVersion: string;
     explainJson: string;
+    actualPriceCatalogId: string | null;
+    baselinePriceCatalogId: string | null;
     createdAt: string;
   };
   t: (k: string, opts?: Record<string, unknown>) => string;
@@ -410,6 +419,17 @@ function SavingsRow({
       </div>
       <div className="text-[11px] text-muted-foreground/80">
         {formatSavingsExplain(row.kind, explain, t)}
+      </div>
+      <div className="flex flex-wrap gap-1.5 text-[10px] text-muted-foreground/70">
+        <span className="rounded-full bg-black/5 dark:bg-white/5 px-2 py-0.5">
+          {t("stats.savingsFormula", { version: row.formulaVersion })}
+        </span>
+        <span className="rounded-full bg-black/5 dark:bg-white/5 px-2 py-0.5">
+          {t("stats.savingsPriceTrace", {
+            actual: row.actualPriceCatalogId ?? "—",
+            baseline: row.baselinePriceCatalogId ?? "—",
+          })}
+        </span>
       </div>
       <div className="text-[10px] text-muted-foreground/60">
         {new Date(row.createdAt).toLocaleString()}

@@ -601,6 +601,7 @@
     "priceCatalog": "Price Catalog",
     "priceUpdatedAt": "Last synced: {{time}}",
     "priceNeverSynced": "Remote prices have not been synced yet. Using built-in prices or your manual overrides for now.",
+    "priceVersionSummary": "Current price version: {{version}} · enabled {{enabled}} / {{total}} entries · {{history}} historical versions",
     "priceSyncNow": "Refresh Prices",
     "priceSyncing": "Refreshing…",
     "priceSyncFailed": "Last refresh failed: {{reason}}"
@@ -620,6 +621,9 @@
     "savingsTotal": "Total Saved",
     "savingsEmpty": "No explainable savings yet. Cache hits, smart model picks, and context compression will show up here with details.",
     "savingsExplain": "Would have been about {{baseline}}, actually about {{actual}}",
+    "savingsTraceSummary": "{{traceable}} / {{total}} records trace back to price rows; {{missing}} records are missing price references",
+    "savingsFormula": "Formula {{version}}",
+    "savingsPriceTrace": "Price refs: actual {{actual}} / baseline {{baseline}}",
     "savingsCacheDetail": "Cache hit {{tokens}} tokens, full input {{input}} / 1M, cache read {{cache}} / 1M",
     "savingsRoutingDetail": "Using {{baseline}} would have cost more; this run actually used {{actual}}",
     "savingsCompressionDetail": "Before compression about {{before}} tokens, after compression about {{after}} tokens",

@@ -511,6 +511,51 @@ describe("modelPriceCatalog + priceSyncStatus", () => {
       catalogVersion: "models.dev:2026-06-28",
     });
   });
+
+  it("价格目录可按版本汇总，保留历史版本和当前启用版本", async () => {
+    await db.modelPriceCatalog.create({
+      modelName: "old-model-a",
+      providerType: "openai",
+      inputPer1m: 1,
+      outputPer1m: 2,
+      source: "remote",
+      version: "models.dev:old",
+      enabled: false,
+    });
+    await db.modelPriceCatalog.create({
+      modelName: "new-model-a",
+      providerType: "openai",
+      inputPer1m: 1.5,
+      outputPer1m: 2.5,
+      source: "remote",
+      version: "models.dev:new",
+      enabled: true,
+    });
+    await db.modelPriceCatalog.create({
+      modelName: "new-model-b",
+      providerType: "anthropic",
+      inputPer1m: 3,
+      outputPer1m: 15,
+      source: "remote",
+      version: "models.dev:new",
+      enabled: true,
+    });
+
+    await expect(db.modelPriceCatalog.listVersions()).resolves.toEqual([
+      expect.objectContaining({
+        source: "remote",
+        version: "models.dev:new",
+        entryCount: 2,
+        enabledCount: 2,
+      }),
+      expect.objectContaining({
+        source: "remote",
+        version: "models.dev:old",
+        entryCount: 1,
+        enabledCount: 0,
+      }),
+    ]);
+  });
 });
 
 describe("savingsEvents", () => {
@@ -545,6 +590,46 @@ describe("savingsEvents", () => {
         baselinePriceCatalogId: "price-baseline",
       },
     ]);
+  });
+
+  it("省钱汇总会标出可追溯覆盖率和缺价格引用的记录", async () => {
+    await db.savingsEvents.create({
+      usageEventId: "usage-1",
+      kind: "cache",
+      baselineModelId: "claude-sonnet",
+      actualModelId: "claude-sonnet",
+      baselineCost: 0.05,
+      actualCost: 0.02,
+      savedCost: 0.03,
+      formulaVersion: "cache-v1",
+      actualPriceCatalogId: "price-actual",
+      baselinePriceCatalogId: "price-baseline",
+      explainJson: JSON.stringify({ cacheHitTokens: 1000 }),
+    });
+    await db.savingsEvents.create({
+      usageEventId: "usage-2",
+      kind: "routing",
+      baselineModelId: "gpt-5",
+      actualModelId: "gpt-5-mini",
+      baselineCost: 0.10,
+      actualCost: 0.04,
+      savedCost: 0.06,
+      formulaVersion: "routing-v1",
+      actualPriceCatalogId: null,
+      baselinePriceCatalogId: "price-baseline",
+      explainJson: JSON.stringify({ baselineModelId: "gpt-5", actualModelId: "gpt-5-mini" }),
+    });
+
+    await expect(db.savingsEvents.summary()).resolves.toEqual({
+      eventCount: 2,
+      totalSavedCost: 0.09,
+      traceableEventCount: 1,
+      missingPriceCatalogEventCount: 1,
+      byKind: [
+        { kind: "routing", eventCount: 1, totalSavedCost: 0.06 },
+        { kind: "cache", eventCount: 1, totalSavedCost: 0.03 },
+      ],
+    });
   });
 });
 

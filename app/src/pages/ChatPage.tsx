@@ -9,7 +9,7 @@ import { desktopDir } from "@tauri-apps/api/path";
 import { deriveArtifacts, type WorkArtifact } from "@/lib/work-artifacts";
 import { deriveToolCallViews, type ToolCallView } from "@/lib/work-artifact-views";
 import { deriveChainNodeGraph } from "@/components/work-panel/derive-chain-node-graph";
-import { ensureModelLimitsLoaded, resolveContextBudget } from "@/lib/llm/model-limits";
+import { ensureModelLimitsLoaded } from "@/lib/llm/model-limits";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
 import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, toolExecutions, workflowRuns, intentLearning, getRoleBindingsForConversation, projects as dbProjects, projectMemories as dbProjectMemories, usageEvents, type Conversation, type ToolExecutionRow } from "@/lib/db";
 import { type ToolConfirmRequest } from "@/lib/llm/tools";
@@ -30,9 +30,7 @@ import { buildRolePerformanceScoresFromUsageRows } from "@/lib/llm/model-perform
 import { isPureSingleModelModeEnabled, isSmartRoutingEnabled, usePermissionModeSetting } from "@/lib/app-settings";
 import { shouldExposeWriteTools } from "@/lib/llm/tool-permission-policy";
 import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
-import { compressHistory, type ChatMsg } from "@/lib/llm/context-compressor";
-import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble, buildProjectMemoryPreamble } from "@/lib/llm/context-preamble";
-import { buildCorePreamble } from "@/lib/llm/cosmgrid-rules";
+import { buildProjectMemoryPreamble } from "@/lib/llm/context-preamble";
 import { buildWorkspacePreamble } from "@/lib/llm/workspace-context";
 import { createCodeTaskWorkflowSnapshot } from "@/lib/workflow/code-task-template";
 import { classifyTurnIntentWithJudge } from "@/lib/workflow/intent-judge";
@@ -41,12 +39,12 @@ import { detectIntentCorrection, intentActionLabel } from "@/lib/workflow/intent
 import type { IntentExample } from "@/lib/workflow/semantic-intent-router";
 import { applyTurnIntentDecision, completeCurrentWorkflowNode } from "@/lib/workflow/reducer";
 import type { TurnIntentDecision, WorkflowSnapshot } from "@/lib/workflow/types";
-import { evaluateHarness, isClean, buildCorrectionPrompt, detectIntentNoToolCall, buildIntentNudgePrompt, type HarnessVerdict } from "@/lib/llm/harness/feedback";
+import { evaluateHarness, isClean, detectIntentNoToolCall, type HarnessVerdict } from "@/lib/llm/harness/feedback";
 import { runChain as runChainImpl } from "@/lib/llm/chain-runner";
 import { type RoleId } from "@/lib/llm/orchestrator";
 
 import { classifyLlmError } from "@/lib/llm/error-classifier";
-import { toUserCoreMessage, type Attachment } from "@/lib/llm/attachments";
+import { type Attachment } from "@/lib/llm/attachments";
 import { retrieveCrossProjectMemoriesForPrompt } from "@/lib/memory/retrieval";
 import { createOptimisticUserTurn } from "@/pages/chat/optimistic-turn";
 import { getActiveAssistantModelLabel } from "@/pages/chat/streaming-status";
@@ -85,6 +83,10 @@ import { buildDebateParticipants } from "@/pages/chat/debate-participants";
 import { buildDebateTopic, formatDebateResultMessage } from "@/pages/chat/debate-result";
 import { buildMainChatModelChain } from "@/pages/chat/model-chain";
 import { buildOrchestrationReceipt } from "@/pages/chat/orchestration-receipt";
+import { applyPromptCompression } from "@/pages/chat/prompt-compression";
+import { buildChatPromptMessages } from "@/pages/chat/prompt-messages";
+import { decideStreamRetry } from "@/pages/chat/stream-retry";
+import { createStreamingTurnCallbacks, createStreamingTurnState } from "@/pages/chat/streaming-callbacks";
 import type { ChatMessage, PendingSend } from "@/pages/chat/types";
 import { useChatAttachments } from "@/pages/chat/useChatAttachments";
 
@@ -1113,60 +1115,33 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     // v0.9 阶段7：智能路由开启时，超长历史先抽取式裁剪省 token（system 与最近消息保留）
     // 注意：编排者折叠回执（kind==="receipt"）绝不进 prompt——它是给用户看的工作记录，不是对话内容。
     const tooLargeNotice = (name: string) => t("chat.attachments.fileTooLarge", { name });
-    let outgoing: ChatMsg[] = [
-      // CosmGrid 核心规则（灵魂）放最前：用户画像 + 输出风格 + 工具纪律 + 环境。所有模型先读这条。
-      { role: "system", content: buildCorePreamble(effectiveWorkspace) },
-      { role: "system", content: buildTimePreamble() },
-      ...(projectMemoryPreamble ? [{ role: "system" as const, content: projectMemoryPreamble }] : []),
-      ...(crossProjectPreamble ? [{ role: "system" as const, content: crossProjectPreamble }] : []),
-      ...(workspacePreamble ? [{ role: "system" as const, content: workspacePreamble }] : []),
-      // 阶段 H：绑工作区时塞图片守卫 preamble——防止模型先 read 二进制图再编造幻觉
-      ...(effectiveWorkspace ? [{ role: "system" as const, content: buildImageGuardPreamble() }] : []),
-      // 没绑工作区 + 非 CLI 引擎 → 这次没给模型挂工具。塞「无工具约束」防止 M3 等模型
-      // 在无 tools 时幻觉式吐 <run_command>{...}</run_command> 等伪工具调用文本刷屏。
-      // 绑了工作区的正常工具路径有 tools，CLI 引擎自带工具，都不走这条。
-      ...(!effectiveWorkspace && !primaryIsCli
-        ? [{ role: "system" as const, content: buildNoToolsPreamble() }]
-        : []),
-      ...newMessages.filter((m) => m.kind !== "receipt").map((m): ChatMsg =>
-        m.role === "user" && m.attachments && m.attachments.length > 0
-          ? toUserCoreMessage(m.content, m.attachments, { tooLargeNotice })
-          : { role: m.role, content: m.content }
-      ),
-    ];
-    let compressionStats: { beforeTokens: number; afterTokens: number } | null = null;
-    if (smart) {
-      const compressed = compressHistory(outgoing, {
-        // 压缩预算跟着当前选中的模型走，不再写死 12000——大上下文模型不该被提前裁掉，
-        // 小上下文模型也该按它自己真实能装多少来算。
-        maxTokens: resolveContextBudget(model.name, model.contextWindow),
-        noticeText: (n) => t("chat.contextTrimmed", { count: n }),
-      });
-      outgoing = compressed.messages;
-      if (compressed.compressed) {
-        compressionStats = {
-          beforeTokens: compressed.beforeTokens,
-          afterTokens: compressed.afterTokens,
-        };
-      }
-    }
+    let outgoing = buildChatPromptMessages({
+      messages: newMessages,
+      effectiveWorkspace,
+      primaryIsCli,
+      projectMemoryPreamble,
+      crossProjectPreamble,
+      workspacePreamble,
+      tooLargeNotice,
+    });
+    const compressedPrompt = applyPromptCompression({
+      enabled: smart,
+      messages: outgoing,
+      modelName: model.name,
+      contextWindow: model.contextWindow,
+      noticeText: (n) => t("chat.contextTrimmed", { count: n }),
+    });
+    outgoing = compressedPrompt.messages;
+    const compressionStats = compressedPrompt.compressionStats;
 
     // Harness 闭环：回答完后评估是否在编造；编了就回填一条纠正指令让模型自查重答（封顶 1 次，防造假死循环）。
     // 只有真检测到违规才会多花一次调用；重答后仍不干净就标黄提示用户、不再重试。
     const MAX_HARNESS_RETRY = 1;
-    let fullContent = "";
+    const streamingState = createStreamingTurnState(model.id);
     let convo = outgoing;
-    let lastUsage: ChatUsage | undefined;
-    let lastModelId: string | null = model.id;
-    let lastResultModelId: string | undefined;
-    let lastResolvedModelLabel: string | undefined;
-    // 阶段 H：本轮真实工具调用次数。nudge 触发条件之一（0 + 动手意图 → 催一次）
-    let lastToolCallCount = 0;
-    // 阶段 H：本轮 finishReason。nudge 触发条件之一（必须是 "stop"，abort/tool-error 不催）
-    let lastFinishReason = "stop";
     try {
       for (let attempt = 0; ; attempt++) {
-        fullContent = "";
+        streamingState.fullContent = "";
         // 重答：清空气泡 + 清旧标黄，让新答覆盖（只给用户看最终版）
         if (attempt > 0) {
           setMessages((prev) =>
@@ -1176,51 +1151,15 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         const result = await streamWithFallback(
           chain,
           convo,
-          {
-            onDelta: (delta) => {
-              // 用户已喊停：丢弃后续增量。防止「卡死 provider 不理 abort、还在吐字」时
-              // 点了停止气泡仍继续刷新（handleStop 已把 UI 拉回空闲态）。
-              if (controller.signal.aborted) return;
-              fullContent += delta;
-              setMessages((prev) =>
-                prev.map((m) => (m.id === assistantId ? { ...m, content: fullContent } : m))
-              );
-            },
-            onSwitched: (_from, to) => {
-              const label = to.displayLabel ?? to.modelName;
-              setSwitchNotice(t("chat.switchedTo", { name: label }));
-              setMessages((prev) =>
-                prev.map((m) => (m.id === assistantId ? { ...m, switched: true, switchedTo: label, modelLabel: label } : m)),
-              );
-            },
-            onRecovered: (mode) => {
-              setSwitchNotice(t(`chat.recovery.${mode}`));
-            },
-            onStatus: (status) => {
-              setSwitchNotice(status);
-            },
-            onResolvedModel: (actualModelName) => {
-              lastResolvedModelLabel = actualModelName;
-              setMessages((prev) =>
-                prev.map((m) => (m.id === assistantId ? { ...m, modelLabel: actualModelName } : m)),
-              );
-            },
-            onUsage: (usage, usedModel, finishReason) => {
-              // 不在此落库——闭环可能重答，只落最终版（循环结束后统一 persist）
-              lastUsage = {
-                inputTokens: usage.inputTokens,
-                outputTokens: usage.outputTokens,
-                toolCallCount: usage.toolCallCount,
-              };
-              lastModelId = usedModel.modelId ?? null;
-              lastToolCallCount = usage.toolCallCount;
-              lastFinishReason = finishReason;
-              setLastUsage(lastUsage ?? null);
-              setMessages((prev) =>
-                prev.map((m) => (m.id === assistantId ? { ...m, usage: lastUsage, modelLabel: lastResolvedModelLabel ?? usedModel.displayLabel ?? usedModel.modelName } : m)),
-              );
-            },
-          },
+          createStreamingTurnCallbacks({
+            assistantId,
+            controller,
+            state: streamingState,
+            t,
+            setMessages,
+            setSwitchNotice,
+            setLastUsage,
+          }),
           // role = 这条消息的难度桶，落 UsageEvent 供 v0.9 SmartRouter 按 taskType 滚动统计
           // actorRole = 阶段 F1：哪个 actor 跑的（leader 主对话 → 'leader'，chain → role: RoleId，stage → 'stage'）
           // tools：绑了工作文件夹才传，开启多步工具循环（maxToolSteps 防死循环）
@@ -1234,32 +1173,38 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
             ...(tools ? { tools, maxToolSteps: 12 } : {}),
           },
         );
-        lastResultModelId = result.usedModelId;
+        streamingState.lastResultModelId = result.usedModelId;
         if (controller.signal.aborted) break;
 
         // 闭环评估（两阶段合并，**共用一个 attempt 守门，**别叠加**）：
         //  P1: harness 违规（伪工具 / 声称读过文件但实际没读）→ 更严重，先判
         //  P2: nudge 兜底（finishReason=stop + 绑了工具 + 0 个真 tool_call + 文本含动手意图）→ 弱信号
-        const verdict = await evalHarnessForConversation(convId, fullContent, turnStartedAt);
+        const verdict = await evalHarnessForConversation(convId, streamingState.fullContent, turnStartedAt);
         const harnessDirty = !!(verdict && !isClean(verdict));
         const nudgeNeeded =
           !harnessDirty &&
           !!tools &&
-          lastFinishReason === "stop" &&
-          lastToolCallCount === 0 &&
-          detectIntentNoToolCall(fullContent);
+          streamingState.lastFinishReason === "stop" &&
+          streamingState.lastToolCallCount === 0 &&
+          detectIntentNoToolCall(streamingState.fullContent);
 
         // 任一触发 + 还有重答预算 → 回填纠正指令 + continue（attempt++ 守门）
         // 纯净模式下不重答，只留一次真实模型调用，方便单独判断"这条回复本身对不对"。
-        if (!pureMode && (harnessDirty || nudgeNeeded) && attempt < MAX_HARNESS_RETRY) {
-          const retryPrompt = harnessDirty
-            ? buildCorrectionPrompt(verdict!, { hasTools: !!tools })
-            : buildIntentNudgePrompt();
-          setHarnessNotice(harnessDirty ? t("chat.harnessRetry") : t("chat.intentNudgeRetry"));
+        const retryDecision = decideStreamRetry({
+          pureMode,
+          harnessDirty,
+          nudgeNeeded,
+          attempt,
+          maxRetry: MAX_HARNESS_RETRY,
+          hasTools: !!tools,
+          verdict,
+        });
+        if (retryDecision.shouldRetry) {
+          setHarnessNotice(retryDecision.notice === "harness" ? t("chat.harnessRetry") : t("chat.intentNudgeRetry"));
           convo = [
             ...convo,
-            { role: "assistant" as const, content: fullContent },
-            { role: "user" as const, content: retryPrompt },
+            { role: "assistant" as const, content: streamingState.fullContent },
+            { role: "user" as const, content: retryDecision.retryPrompt },
           ];
           continue;
         }
@@ -1277,12 +1222,12 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         break;
       }
       // 最终答案统一落库（闭环只落最终版，不重复落被纠正掉的首版）
-      persistAssistant(fullContent, lastModelId, lastUsage);
-      if (convId && shouldCompleteWorkflowNode && turnWorkflowSnapshot && turnWorkflowRunId && fullContent && !controller.signal.aborted) {
+      persistAssistant(streamingState.fullContent, streamingState.lastModelId, streamingState.lastUsage);
+      if (convId && shouldCompleteWorkflowNode && turnWorkflowSnapshot && turnWorkflowRunId && streamingState.fullContent && !controller.signal.aborted) {
         try {
           const nextWorkflow = completeCurrentWorkflowNode({
             snapshot: turnWorkflowSnapshot,
-            summary: fullContent.slice(0, 1200),
+            summary: streamingState.fullContent.slice(0, 1200),
           });
           await workflowRuns.saveSnapshot({
             runId: turnWorkflowRunId,
@@ -1290,7 +1235,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
             eventType: "workflow.node_completed",
             eventPayload: {
               nodeId: turnWorkflowSnapshot.currentNodeId,
-              summaryPreview: fullContent.slice(0, 240),
+              summaryPreview: streamingState.fullContent.slice(0, 240),
             },
           });
           applyWorkflowSnapshot(nextWorkflow);
@@ -1301,15 +1246,15 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       setHarnessNotice(null);
       // v0.9 阶段7：成功回答写入语义缓存。准入门已挡掉绑文件夹/干活类请求，
       // 这里只会写纯问答；isCacheable 再过滤时间敏感/含代码答案。
-      if (cacheEligible && fullContent && !controller.signal.aborted) {
-        void writeCache(text, fullContent, lastResultModelId, taskRole).catch(() => {});
+      if (cacheEligible && streamingState.fullContent && !controller.signal.aborted) {
+        void writeCache(text, streamingState.fullContent, streamingState.lastResultModelId, taskRole).catch(() => {});
       }
     } catch (err) {
       // 不丢已经流式出来的半个回答（停止/中断都保留并落库）
-      persistAssistant(fullContent, model.id);
+      persistAssistant(streamingState.fullContent, model.id);
       setHarnessNotice(null);
       if ((err as Error).name === "AbortError") {
-        if (!fullContent) {
+        if (!streamingState.fullContent) {
           setMessages((prev) =>
             prev.map((m) => (m.id === assistantId ? { ...m, content: t("chat.stopped") } : m)),
           );
@@ -1332,7 +1277,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     // E2a：编排算完 chainPlan 后通过 onChainPlan 回调触发 watch 接力执行（最多 3 跳，每跳真调模型）。
     if (
       convId &&
-      fullContent &&
+      streamingState.fullContent &&
       !pureMode &&
       !controller.signal.aborted &&
       shouldRunBackgroundOrchestration({
@@ -1342,7 +1287,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         intentAction: (turnIntentDecision ?? cacheIntent).action,
       })
     ) {
-      void runBackgroundOrchestration(convId, [...newMessages, { ...assistantMsg, content: fullContent }], {
+      void runBackgroundOrchestration(convId, [...newMessages, { ...assistantMsg, content: streamingState.fullContent }], {
         onChainPlan: ({ chain, roleBindings: bindings }) => {
           if (chain.length === 0 || controller.signal.aborted) return;
           if (!shouldAutoRunChain({ text, chain, decision: turnIntentDecision ?? cacheIntent })) return;

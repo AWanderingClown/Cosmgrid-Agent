@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Activity, Gauge, RefreshCw, DatabaseZap, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { priceSyncStatus, type PriceSyncStatus } from "@/lib/db";
+import { modelPriceCatalog, priceSyncStatus, type ModelPriceCatalogVersion, type PriceSyncStatus } from "@/lib/db";
 import { syncModelPrices } from "@/lib/llm/price-catalog";
 
 type UsageTab = "plans" | "details";
@@ -24,10 +24,16 @@ export function UsageMonitorPage() {
   const { t } = useTranslation();
   const [tab, setTab] = useState<UsageTab>("details");
   const [status, setStatus] = useState<PriceSyncStatus | null>(null);
+  const [priceVersions, setPriceVersions] = useState<ModelPriceCatalogVersion[]>([]);
   const [syncing, setSyncing] = useState(false);
 
   async function loadStatus() {
-    setStatus(await priceSyncStatus.get());
+    const [nextStatus, nextVersions] = await Promise.all([
+      priceSyncStatus.get(),
+      modelPriceCatalog.listVersions(),
+    ]);
+    setStatus(nextStatus);
+    setPriceVersions(nextVersions);
   }
 
   useEffect(() => {
@@ -43,6 +49,8 @@ export function UsageMonitorPage() {
       setSyncing(false);
     }
   }
+
+  const activePriceVersion = priceVersions.find((version) => version.enabledCount > 0) ?? null;
 
   return (
     <div className="h-full w-full overflow-hidden bg-background/30 backdrop-blur-sm flex flex-col">
@@ -62,6 +70,16 @@ export function UsageMonitorPage() {
               <div className="flex items-center gap-2 text-xs text-amber-500">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                 {t("usageMonitor.priceSyncFailed", { reason: status.lastError })}
+              </div>
+            ) : null}
+            {activePriceVersion ? (
+              <div className="text-xs text-muted-foreground">
+                {t("usageMonitor.priceVersionSummary", {
+                  version: activePriceVersion.version,
+                  enabled: activePriceVersion.enabledCount,
+                  total: activePriceVersion.entryCount,
+                  history: Math.max(0, priceVersions.length - 1),
+                })}
               </div>
             ) : null}
           </div>

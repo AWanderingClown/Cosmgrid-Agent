@@ -15,8 +15,10 @@ export { cliSessions, modelPriceCatalog, priceSyncStatus, savingsEvents } from "
 export type {
   CliSessionRow,
   ModelPriceCatalogEntry,
+  ModelPriceCatalogVersion,
   PriceSyncStatus,
   SavingsEventRow,
+  SavingsEventSummary,
 } from "./db/billing";
 export { conversations, intentLearning, messages, workflowRuns } from "./db/conversations";
 export type {

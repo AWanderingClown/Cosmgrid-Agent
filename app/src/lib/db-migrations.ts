@@ -30,21 +30,70 @@ async function ensureMigrationTable(db: DatabaseLike): Promise<void> {
       applied_at TEXT NOT NULL
     )
   `);
+  await addColumnIfMissing(db, "schema_migrations", "status", "TEXT NOT NULL DEFAULT 'applied'");
+  await addColumnIfMissing(db, "schema_migrations", "error_message", "TEXT");
+  await addColumnIfMissing(db, "schema_migrations", "started_at", "TEXT");
+  await addColumnIfMissing(db, "schema_migrations", "finished_at", "TEXT");
+}
+
+function migrationErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function recordMigrationStatus(
+  db: DatabaseLike,
+  migration: SchemaMigration,
+  status: "running" | "applied" | "failed",
+  errorMessage: string | null = null,
+): Promise<void> {
+  const now = new Date().toISOString();
+  await db.execute(
+    `
+      INSERT INTO schema_migrations (
+        version,
+        description,
+        applied_at,
+        status,
+        error_message,
+        started_at,
+        finished_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+      ON CONFLICT(version) DO UPDATE SET
+        description=excluded.description,
+        applied_at=excluded.applied_at,
+        status=excluded.status,
+        error_message=excluded.error_message,
+        started_at=COALESCE(schema_migrations.started_at, excluded.started_at),
+        finished_at=excluded.finished_at
+    `,
+    [
+      migration.version,
+      migration.description,
+      now,
+      status,
+      errorMessage,
+      now,
+      status === "running" ? null : now,
+    ],
+  );
 }
 
 export async function runMigrations(db: DatabaseLike, migrations: SchemaMigration[]): Promise<void> {
   await ensureMigrationTable(db);
   const appliedRows = await db.select<Array<{ version: string }>>(
-    "SELECT version FROM schema_migrations",
+    "SELECT version FROM schema_migrations WHERE status = 'applied'",
   );
   const applied = new Set(appliedRows.map((row) => row.version));
 
   for (const migration of migrations) {
     if (applied.has(migration.version)) continue;
-    await migration.up(db);
-    await db.execute(
-      "INSERT INTO schema_migrations (version, description, applied_at) VALUES ($1,$2,$3)",
-      [migration.version, migration.description, new Date().toISOString()],
-    );
+    await recordMigrationStatus(db, migration, "running");
+    try {
+      await migration.up(db);
+      await recordMigrationStatus(db, migration, "applied");
+    } catch (err) {
+      await recordMigrationStatus(db, migration, "failed", migrationErrorMessage(err));
+      throw err;
+    }
   }
 }

@@ -601,6 +601,7 @@
     "priceCatalog": "价格目录",
     "priceUpdatedAt": "最近同步：{{time}}",
     "priceNeverSynced": "还没同步过远程价格，当前先用内置价格或你手动补的价格。",
+    "priceVersionSummary": "当前价格版本：{{version}} · 启用 {{enabled}} / {{total}} 条 · 历史版本 {{history}} 个",
     "priceSyncNow": "更新价格表",
     "priceSyncing": "更新中…",
     "priceSyncFailed": "最近一次更新失败：{{reason}}"
@@ -620,6 +621,9 @@
     "savingsTotal": "累计省下",
     "savingsEmpty": "还没有可解释的省钱记录。出现缓存命中、智能挑模型或上下文压缩后，这里会显示明细。",
     "savingsExplain": "原本约 {{baseline}}，实际约 {{actual}}",
+    "savingsTraceSummary": "可追溯记录 {{traceable}} / {{total}} 条；缺价格引用 {{missing}} 条",
+    "savingsFormula": "公式 {{version}}",
+    "savingsPriceTrace": "价格引用：实际 {{actual}} / 基线 {{baseline}}",
     "savingsCacheDetail": "缓存命中 {{tokens}} token，原价 {{input}} / 1M，缓存读价 {{cache}} / 1M",
     "savingsRoutingDetail": "如果沿用 {{baseline}}，这次会更贵；实际用了 {{actual}}",
     "savingsCompressionDetail": "压缩前约 {{before}} token，压缩后约 {{after}} token",
