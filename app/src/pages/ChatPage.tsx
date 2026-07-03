@@ -6,15 +6,12 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { usePanelResize } from "@/components/ui/resize-handle";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { desktopDir } from "@tauri-apps/api/path";
-import { deriveArtifacts, type WorkArtifact } from "@/lib/work-artifacts";
-import { deriveToolCallViews, type ToolCallView } from "@/lib/work-artifact-views";
+import { type ToolCallView } from "@/lib/work-artifact-views";
 import { deriveChainNodeGraph } from "@/components/work-panel/derive-chain-node-graph";
 import { ensureModelLimitsLoaded } from "@/lib/llm/model-limits";
 import { type ModelListItem } from "@/lib/api";
-import { conversations as dbConversations, messages as dbMessages, toolExecutions, workflowRuns, intentLearning, getRoleBindingsForConversation, projects as dbProjects, projectMemories as dbProjectMemories, usageEvents, type Conversation, type ToolExecutionRow } from "@/lib/db";
-import { type ToolConfirmRequest } from "@/lib/llm/tools";
+import { conversations as dbConversations, messages as dbMessages, toolExecutions, workflowRuns, intentLearning, getRoleBindingsForConversation, projects as dbProjects, projectMemories as dbProjectMemories, usageEvents, type Conversation } from "@/lib/db";
 import { prepareWorkspaceToolRuntime, type WorkspaceToolRuntime } from "@/lib/llm/workspace-tool-runtime";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getApiKey } from "@/lib/keystore";
 import { streamWithFallback, toModelEndpoint, type ModelEndpoint, type StreamUsage } from "@/lib/llm/chat-fallback";
 import { runDynamicDebate } from "@/lib/llm/debate-engine";
@@ -88,6 +85,7 @@ import type { ChatMessage, PendingSend } from "@/pages/chat/types";
 import { useChatAttachments } from "@/pages/chat/useChatAttachments";
 import { useChatInput } from "@/pages/chat/useChatInput";
 import { useModelSelection } from "@/pages/chat/useModelSelection";
+import { useWorkPanel } from "@/pages/chat/useWorkPanel";
 
 type ChatUsage = StreamUsage;
 
@@ -117,24 +115,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
   const [harnessNotice, setHarnessNotice] = useState<string | null>(null);
   const [lastUsage, setLastUsage] = useState<ChatUsage | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  // 右侧工作面板默认收起（内容偏重；实时动作已内联在对话流，不靠右侧展示）。
-  const [panelOpen, setPanelOpen] = useState(false);
-
-  // 工作文件夹 + 工具权限档（产品真北：让主对话能在本地真干活，不只是聊天）。
-  // permissionMode：read=只读(读/搜/git-read) | confirm=写操作逐个确认 | auto=写操作不弹窗。
-  const [workspacePath, setWorkspacePath] = useState<string | null>(null);
-  // 2.1 步骤2/3 修复（2026-07-02，代码审查发现）：protectState 原来是 ToolCallCard
-  // 组件内部的 useState——每张工具卡片是独立实例，用户在一张卡片上点了"开启保护"，
-  // 同一 workspace 下其他卡片（旧的、以及点击后新产生的）完全不知道，UI 上仍然显示
-  // "不可撤销 + 开启按钮"，用户会以为没生效。改成在 ChatPage 用一个 Set 记录"这一轮
-  // 会话里已经点过开启保护的 workspace 路径"，所有 ToolCallCard 共享同一个来源。
-  const [protectedWorkspaces, setProtectedWorkspaces] = useState<Set<string>>(new Set());
-  /** 右侧工作面板的产出物工件——从 tool_executions 派生，回答完成后刷新 */
-  const [artifacts, setArtifacts] = useState<WorkArtifact[]>([]);
-  const [toolCallViews, setToolCallViews] = useState<ToolCallView[]>([]);
   const [permissionMode, setPermissionMode] = usePermissionModeSetting();
-  const [pendingConfirm, setPendingConfirm] = useState<ToolConfirmRequest | null>(null);
-  const confirmResolverRef = useRef<((ok: boolean) => void) | null>(null);
   // 编排者节点状态（后台滚动更新）。用 ref 镜像最新值，供 handleSend 闭包同步读取（避免 stale state）。
   const [orchestration, setOrchestration] = useState<OrchestrationState | null>(null);
   const orchestrationRef = useRef<OrchestrationState | null>(null);
@@ -154,16 +135,6 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
   function applyWorkflowSnapshot(next: WorkflowSnapshot | null) {
     workflowSnapshotRef.current = next;
     setWorkflowSnapshot(next);
-  }
-
-  function applyToolExecutionRows(rows: ToolExecutionRow[]) {
-    setArtifacts(deriveArtifacts(rows));
-    setToolCallViews(deriveToolCallViews(rows));
-  }
-
-  function clearToolExecutionViews() {
-    setArtifacts([]);
-    setToolCallViews([]);
   }
 
   async function loadWorkflowForConversation(id: string) {
@@ -308,8 +279,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         try {
           applyToolExecutionRows(await toolExecutions.listByConversation(activeConv.id));
         } catch {
-          setArtifacts([]);
-          setToolCallViews([]);
+          clearToolExecutionViews();
         }
         try {
           applyOrchestration(parseOrchestration(await dbConversations.getOrchestration(activeConv.id)));
@@ -324,67 +294,35 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     })();
   }, []);
 
-  // 写操作确认通道：工具运行到写/执行时调 requestConfirm，弹窗等用户按下确认/拒绝。
-  function requestConfirm(req: ToolConfirmRequest): Promise<boolean> {
-    return new Promise((resolve) => {
-      setPendingConfirm(req);
-      confirmResolverRef.current = resolve;
-    });
-  }
-  function resolveConfirm(ok: boolean) {
-    confirmResolverRef.current?.(ok);
-    confirmResolverRef.current = null;
-    setPendingConfirm(null);
-  }
-
-  useEffect(() => {
-    if (!pendingConfirm) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        resolveConfirm(false);
-      } else if (event.key === "Enter") {
-        event.preventDefault();
-        resolveConfirm(true);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [pendingConfirm]);
-
-  // 绑定工作文件夹到当前会话并落库（选择器选中 / 拖入文件夹都走这里，单一来源）。
-  async function bindWorkspace(path: string) {
-    setWorkspacePath(path);
-    setConversationList((prev) => prev.map((c) => (c.id === conversationId ? { ...c, workspacePath: path } : c)));
-    if (conversationId) {
-      try {
-        await dbConversations.setWorkspacePath(conversationId, path);
-      } catch {
-        // 落库失败不阻断（内存态已更新）
-      }
-    }
-  }
-
-  // 选/换工作文件夹（系统原生目录选择器）。
-  async function chooseWorkspace() {
-    if (isStreaming) return;
-    try {
-      const picked = await openDialog({ directory: true, multiple: false, title: t("chat.workspace.pickTitle") });
-      if (typeof picked !== "string") return; // 用户取消
-      await bindWorkspace(picked);
-    } catch {
-      // 选择器异常/取消不阻断对话
-    }
-  }
-
-  // 解绑工作文件夹，权限退回最安全的只读。
-  async function clearWorkspace() {
-    if (isStreaming) return;
-    setWorkspacePath(null);
-    // 权限档不重置——用户的习惯（confirm/auto）跨会话保留，重启也不丢
-    setConversationList((prev) => prev.map((c) => (c.id === conversationId ? { ...c, workspacePath: null } : c)));
-    if (conversationId) await dbConversations.setWorkspacePath(conversationId, null);
-  }
+  // hook E：右侧工作面板（workspace + 工具确认流 + artifacts/toolCallViews/panelOpen）
+  const {
+    panelOpen,
+    workspacePath,
+    protectedWorkspaces,
+    artifacts,
+    toolCallViews,
+    pendingConfirm,
+    setPanelOpen,
+    setWorkspacePath,
+    setProtectedWorkspaces,
+    applyToolExecutionRows,
+    clearToolExecutionViews,
+    requestConfirm,
+    resolveConfirm,
+    bindWorkspace,
+    chooseWorkspace,
+    clearWorkspace,
+  } = useWorkPanel({
+    conversationId,
+    // 改会话工作文件夹时同步 conversationList（不写库，hook E 内部写）
+    onConversationWorkspaceChanged: (path) => {
+      setConversationList((prev) =>
+        prev.map((c) => (c.id === conversationId ? { ...c, workspacePath: path } : c)),
+      );
+    },
+    isStreaming,
+    t,
+  });
 
   const {
     draftAttachments,
@@ -444,8 +382,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     try {
       applyToolExecutionRows(await toolExecutions.listByConversation(id));
     } catch {
-      setArtifacts([]);
-      setToolCallViews([]);
+      clearToolExecutionViews();
     }
     try {
       applyOrchestration(parseOrchestration(await dbConversations.getOrchestration(id)));
@@ -471,8 +408,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       setWorkspacePath(null);
       setSelectedModelId(pickConversationModelId(conv, availableModels, selectedModelId));
       setMessages([]);
-      setArtifacts([]);
-      setToolCallViews([]);
+      clearToolExecutionViews();
       applyOrchestration(null);
       applyWorkflowSnapshot(null);
       return;
@@ -492,8 +428,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       try {
         applyToolExecutionRows(await toolExecutions.listByConversation(next.id));
       } catch {
-        setArtifacts([]);
-        setToolCallViews([]);
+        clearToolExecutionViews();
       }
       try {
         applyOrchestration(parseOrchestration(await dbConversations.getOrchestration(next.id)));

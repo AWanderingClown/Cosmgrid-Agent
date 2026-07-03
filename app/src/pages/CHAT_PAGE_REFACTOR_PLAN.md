@@ -184,7 +184,16 @@ export function useModelSelection(opts: UseModelSelectionOptions) {
 
 **关键**：`pendingConfirm + confirmResolverRef` 是 Promise 化的工具确认流，**整体搬走**，接口收敛为 `requestConfirm(req): Promise<boolean>`。
 
-**验证**：tsc + test + 手动选工作文件夹、触发工具执行看确认弹窗、看 artifacts 渲染。
+**实际落地（2026-07-03）**：
+- hook E 接口：`UseWorkPanelOptions` 接 `conversationId` + `onConversationWorkspaceChanged` 回调 + `isStreaming`（chooseWorkspace/clearWorkspace 守卫）+ `t`
+- bindWorkspace 内部：setWorkspacePath + `onConversationWorkspaceChanged(path)` 回调 + `dbConversations.setWorkspacePath` 写库
+- chooseWorkspace/clearWorkspace 接 `isStreaming` 守卫
+- requestConfirm/resolveConfirm + ESC/Enter 键盘 effect 整体搬入
+- 协调器里 4 处 `setArtifacts([]); setToolCallViews([]);` 改 `clearToolExecutionViews()`
+- `confirmResolverRef` 不暴露（handleSend 用 requestConfirm Promise 即可）
+- 验证：tsc 0 错 + test 1101 passed + build 7.89s
+- 行数：ChatPage.tsx 1807 → 1742（**-65 行**）；useWorkPanel.ts 150 行
+- **手动验证待跑**：选/换工作文件夹、触发工具执行看确认弹窗、看 artifacts 渲染
 
 ### 阶段 5：hook D 编排/对弈（~3h，用 useReducer）
 
