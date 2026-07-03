@@ -1388,6 +1388,13 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     }
   }
 
+  // 队列续发用的 handleSend 句柄镜像。
+  // handleSend 每次 ChatPage 重渲染都生成新实例（闭包捕获了 selectedModelId / orchestrationRef 等
+  // 一堆当时 state），队列 effect 只依赖 [isStreaming, pendingQueue]，若直接闭包捕获 handleSend 会读到
+  // 旧渲染的句柄 → 续发用错模型、abort 失效。这里每渲染都把最新句柄写进 ref，effect 读 ref.current 永远拿到最新。
+  const handleSendRef = useRef(handleSend);
+  handleSendRef.current = handleSend;
+
   // 后台编排：选最省的非 CLI 模型跑 planNodes → 定模型 → 落库 + 自动切 + 写回执。全程兜底，绝不影响主对话。
   // E2a：编排算完 chainPlan 后通过 opts.onChainPlan 回调通知调用方（让调用方决定要不要跑 watch 接力）。
   async function runBackgroundOrchestration(
@@ -1630,16 +1637,15 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
 
   // 串行排空队列：不忙（没在流式）时取队首发送，发完自动取下一条。
   // drainingRef 守住"取出→handleSend 真正置 isStreaming=true"之间的空窗，防并发重入。
+  // handleSend 经由 handleSendRef.current 调用，保证读到最新渲染的句柄（详见 ref 定义处注释）。
   useEffect(() => {
     if (drainingRef.current || isStreaming || pendingQueue.length === 0) return;
     const next = pendingQueue[0]!;
     drainingRef.current = true;
     setPendingQueue((q) => q.slice(1));
-    void handleSend(next.text, next.attachments).finally(() => {
+    void handleSendRef.current(next.text, next.attachments).finally(() => {
       drainingRef.current = false;
     });
-    // handleSend 不是稳定引用，但每次都读当时最新 state，故意只依赖触发条件
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStreaming, pendingQueue]);
 
   // 隐式信号采集（改进-1 Step B）：用户在已有对话里手动换到能力分更高的模型，
