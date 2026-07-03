@@ -55,7 +55,6 @@ import {
   computeChain,
   withChainPlan,
   shouldSkipOrchestrationUpdate,
-  type OrchestrationState,
   type OrchestrationTurn,
 } from "@/lib/llm/orchestrator";
 import { getLanguageModel } from "@/lib/llm/provider-factory";
@@ -85,6 +84,7 @@ import type { ChatMessage, PendingSend } from "@/pages/chat/types";
 import { useChatAttachments } from "@/pages/chat/useChatAttachments";
 import { useChatInput } from "@/pages/chat/useChatInput";
 import { useModelSelection } from "@/pages/chat/useModelSelection";
+import { useOrchestration } from "@/pages/chat/useOrchestration";
 import { useWorkPanel } from "@/pages/chat/useWorkPanel";
 
 type ChatUsage = StreamUsage;
@@ -116,35 +116,6 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
   const [lastUsage, setLastUsage] = useState<ChatUsage | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [permissionMode, setPermissionMode] = usePermissionModeSetting();
-  // 编排者节点状态（后台滚动更新）。用 ref 镜像最新值，供 handleSend 闭包同步读取（避免 stale state）。
-  const [orchestration, setOrchestration] = useState<OrchestrationState | null>(null);
-  const orchestrationRef = useRef<OrchestrationState | null>(null);
-  // 阶段 E2b：chain 接力的运行时状态（驱动进度条 + 中止按钮 + 角色消息渲染）
-  // 单一来源：chainPlan 来自 orchestration.chainPlan（E1），executedRoles/skippedRoles/abortedRole 来自 E2a runChain 回调
-  const [chainExecutedRoles, setChainExecutedRoles] = useState<RoleId[]>([]);
-  const [chainSkippedRoles, setChainSkippedRoles] = useState<RoleId[]>([]);
-  const [chainAbortedRole, setChainAbortedRole] = useState<RoleId | null>(null);
-  const [chainRunning, setChainRunning] = useState(false);
-  // 工作流快照是意图识别的当前状态；右侧协作链只读取被激活的动态节点，不展示固定模板。
-  const [workflowSnapshot, setWorkflowSnapshot] = useState<WorkflowSnapshot | null>(null);
-  const workflowSnapshotRef = useRef<WorkflowSnapshot | null>(null);
-  function applyOrchestration(next: OrchestrationState | null) {
-    orchestrationRef.current = next;
-    setOrchestration(next);
-  }
-  function applyWorkflowSnapshot(next: WorkflowSnapshot | null) {
-    workflowSnapshotRef.current = next;
-    setWorkflowSnapshot(next);
-  }
-
-  async function loadWorkflowForConversation(id: string) {
-    try {
-      const activeRun = await workflowRuns.getActiveByConversation(id);
-      applyWorkflowSnapshot(activeRun?.snapshot ?? null);
-    } catch {
-      applyWorkflowSnapshot(null);
-    }
-  }
   // 镜像当前会话 id，供后台编排回调判断"用户是否已切走会话"（避免回执落到错的会话）
   const conversationIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -153,7 +124,6 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
   const workPanel = usePanelResize({ initial: 320, min: 240, max: 560, edge: "left" });
 
   const abortRef = useRef<AbortController | null>(null);
-  const chainAbortRef = useRef<AbortController | null>(null);
   const pendingRoutingDecisionRef = useRef<{
     prompt: string;
     baselineModelId: string;
@@ -174,6 +144,27 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     showJumpToBottom,
     scrollToBottom,
   } = useChatInput();
+
+  // hook D：编排 + 对弈链 + 工作流快照（useReducer 重构）
+  // 必须在 hook B 之前调用——hook B 依赖 orchestrationRef + applyOrchestration
+  const {
+    orchestration,
+    chainExecutedRoles,
+    chainSkippedRoles,
+    chainAbortedRole,
+    chainRunning,
+    workflowSnapshot,
+    setChainExecutedRoles,
+    setChainSkippedRoles,
+    setChainAbortedRole,
+    setChainRunning,
+    orchestrationRef,
+    workflowSnapshotRef,
+    chainAbortRef,
+    applyOrchestration,
+    applyWorkflowSnapshot,
+    loadWorkflowForConversation,
+  } = useOrchestration({ conversationId });
 
   // hook B：模型选择。所有 deps（conversationId/messages/orchestrationRef/inputRef/
   // pendingRoutingDecisionRef/applyOrchestration/setSwitchNotice）都在上面声明完后才能调
@@ -323,6 +314,8 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     isStreaming,
     t,
   });
+
+  // hook D：编排 + 对弈链 + 工作流快照（useReducer 重构）已上移到 hook F 之后
 
   const {
     draftAttachments,

@@ -210,12 +210,23 @@ type OrchAction =
   | { type: "chain_abort"; role: RoleId }
   | { type: "chain_end" }
   | { type: "apply_workflow"; snapshot: WorkflowSnapshot }
+  | { type: "set_chain_executed_roles"; updater: (prev) => RoleId[] }
+  | { type: "set_chain_skipped_roles"; updater: (prev) => RoleId[] }
+  | { type: "set_chain_aborted_role"; role: RoleId | null }
+  | { type: "set_chain_running"; running: boolean }
   | { type: "reset" };
 ```
 
 **留在 ChatPage 的协调函数**（红队强调）：`runChainIfNeeded` 和对弈触发逻辑仍调 hook C/D 的接口，先不搬。这一步只把 **state 持有 + reducer** 搬走。
 
-**验证**：tsc + test + 手动触发一次完整对弈（复杂问题→自动建议→三角色跑完→结果落库）。
+**实际落地（2026-07-03）**：
+- hook D 调用位置：**必须在 hook B 之前**（hook B 依赖 hook D 的 orchestrationRef + applyOrchestration）
+- 暴露 4 个 setter：`setChainExecutedRoles` / `setChainSkippedRoles` / `setChainAbortedRole` / `setChainRunning`（handleSend 内部实际用了 functional update 模式——发现之前 grep 漏了）
+- setter 内部 dispatch functional action：`{ type: "set_chain_*", updater: (prev) => ... }`，reducer 应用 updater——保持 setState functional update 行为
+- applyOrchestration / applyWorkflowSnapshot 内部**同步更新 ref + dispatch**——保持 handleSend 同步读 ref 的行为
+- 删 1 个孤儿 import：`OrchestrationState`（hook D 内部用）
+- 验证：tsc 0 错 + test 1101 passed + build 7.10s
+- 行数：ChatPage.tsx 1742 → 1698（**-44 行**）；useOrchestration.ts 156 行
 
 ### 阶段 6：handleSend 内部拆子函数（~2h，独立成阶段）
 
