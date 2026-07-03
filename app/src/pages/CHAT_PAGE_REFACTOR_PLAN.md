@@ -121,19 +121,42 @@ setSwitchNotice(C)     setToolCallViews(E)          setWorkspacePath(E)
 
 **接口**：
 ```ts
-export function useModelSelection(deps: {
+export interface UseModelSelectionOptions {
+  // 跨 hook 读（ref 镜像避免 stale closure）
   conversationId: string | null;
-  conversationList: Conversation[];
-  orchestrationRef: MutableRefObject<OrchestrationState | null>;  // handleModelChange 要钉节点
-}) {
+  messages: ChatMessage[];
+  orchestrationRef: MutableRefObject<OrchestrationState | null>;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
+  pendingRoutingDecisionRef: MutableRefObject<PendingRoutingDecision | null>;
+  active: boolean;
+
+  // 跨 hook 写（按范式回调注入，不直接调外部 setter）
+  applyOrchestration: (next: OrchestrationState | null) => void;
+  setSwitchNotice: (message: string | null) => void;
+  onConversationDefaultModelChanged: (newModelId: string) => void;
+
+  // 业务依赖
+  alert: (opts: AlertOptions) => Promise<void>;
+  t: TFunction;
+}
+
+export function useModelSelection(opts: UseModelSelectionOptions) {
   return {
     availableModels, credentials, selectedModelId,
-    setSelectedModelId, handleSmartPick, handleModelChange, reloadModels,
+    setSelectedModelId, handleSmartPick, handleModelChange, loadModelsAndCreds,
   };
 }
 ```
 
-**验证**：tsc + test + 手动切换模型、点智能挑选。
+**接口复杂度高于方案 v2**：实际跨 **5 个外部 state/ref + 3 个回调注入**，不是方案 v2 描述的"无跨 hook 写入"。原因：`handleModelChange` 改会话默认模型（跨 hook 写）、`handleSmartPick` 读 inputRef.current 和 pendingRoutingDecisionRef、handleSmartPick 触发时需改 orchestration 状态。**全部按既定范式（回调注入 + ref 镜像）处理**，未引入 Context/event bus。
+
+**留 ChatPage 协调层的函数**：
+- `pickConversationModelId`（helper，handleNewChat/switchConversation 仍调）
+- `handleNodeModelChange`（归 hook D 协调，本阶段不搬；但用 hook B 返回的 `setSelectedModelId`）
+
+**验证**：tsc 0 错 + test 1101 passed + build 8s。手动测试（未跑，待用户）：切换模型、智能挑选、新对话、切回聊天页刷新模型列表。
+
+> **实际落地（2026-07-03）**：ChatPage.tsx 1944 → 1835 行（**-109 行**）；useModelSelection.ts 221 行。
 
 ### 阶段 3：hook F 输入/滚动（~1h，几乎白送）
 

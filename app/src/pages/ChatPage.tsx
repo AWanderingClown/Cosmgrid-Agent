@@ -10,8 +10,8 @@ import { deriveArtifacts, type WorkArtifact } from "@/lib/work-artifacts";
 import { deriveToolCallViews, type ToolCallView } from "@/lib/work-artifact-views";
 import { deriveChainNodeGraph } from "@/components/work-panel/derive-chain-node-graph";
 import { ensureModelLimitsLoaded } from "@/lib/llm/model-limits";
-import { type ModelListItem, type CredentialListItem } from "@/lib/api";
-import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages, toolExecutions, workflowRuns, intentLearning, getRoleBindingsForConversation, projects as dbProjects, projectMemories as dbProjectMemories, usageEvents, type Conversation, type ToolExecutionRow } from "@/lib/db";
+import { type ModelListItem } from "@/lib/api";
+import { conversations as dbConversations, messages as dbMessages, toolExecutions, workflowRuns, intentLearning, getRoleBindingsForConversation, projects as dbProjects, projectMemories as dbProjectMemories, usageEvents, type Conversation, type ToolExecutionRow } from "@/lib/db";
 import { type ToolConfirmRequest } from "@/lib/llm/tools";
 import { prepareWorkspaceToolRuntime, type WorkspaceToolRuntime } from "@/lib/llm/workspace-tool-runtime";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -20,12 +20,9 @@ import { streamWithFallback, toModelEndpoint, type ModelEndpoint, type StreamUsa
 import { runDynamicDebate } from "@/lib/llm/debate-engine";
 import { realRunRole } from "@/lib/llm/debate-runner";
 import { archiveDynamicDebateResult } from "@/lib/llm/debate-persistence";
-import { pickBestModelForRole, scoreModelForRole } from "@/lib/llm/model-capabilities";
-import { applyOutcomeForLatest } from "@/lib/llm/outcome-tracker";
 import { isCliProviderType } from "@/lib/llm/cli-protocol";
 import { classifyMessageComplexity } from "@/lib/llm/message-router";
 import { shouldAutoRunChain, shouldRunBackgroundOrchestration } from "@/lib/llm/orchestration-gating";
-import { routeMessage } from "@/lib/llm/smart-router";
 import { buildRolePerformanceScoresFromUsageRows } from "@/lib/llm/model-performance-scoring";
 import { isPureSingleModelModeEnabled, isSmartRoutingEnabled, usePermissionModeSetting } from "@/lib/app-settings";
 import { shouldExposeWriteTools, impliesWriteIntent } from "@/lib/llm/tool-permission-policy";
@@ -54,7 +51,6 @@ import {
   resolveOrchestration,
   diffOrchestration,
   currentNode,
-  pinModelToCurrentNode,
   pinModelToNode,
   pickOrchestratorModel,
   serializeOrchestration,
@@ -90,6 +86,7 @@ import { decideStreamRetry } from "@/pages/chat/stream-retry";
 import { createStreamingTurnCallbacks, createStreamingTurnState } from "@/pages/chat/streaming-callbacks";
 import type { ChatMessage, PendingSend } from "@/pages/chat/types";
 import { useChatAttachments } from "@/pages/chat/useChatAttachments";
+import { useModelSelection } from "@/pages/chat/useModelSelection";
 
 type ChatUsage = StreamUsage;
 
@@ -104,9 +101,6 @@ interface ChatPageProps {
 export function ChatPage({ active = true }: ChatPageProps = {}) {
   const { t } = useTranslation();
   const { confirm, alert } = useConfirm();
-  const [availableModels, setAvailableModels] = useState<ModelListItem[]>([]);
-  const [credentials, setCredentials] = useState<CredentialListItem[]>([]);
-  const [selectedModelId, setSelectedModelId] = useState<string>("");
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversationList, setConversationList] = useState<Conversation[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -202,6 +196,36 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
   const inputAreaRef = useRef<HTMLDivElement>(null);
   const [inputAreaH, setInputAreaH] = useState(180);
 
+  // hook B：模型选择。所有 deps（conversationId/messages/orchestrationRef/inputRef/
+  // pendingRoutingDecisionRef/applyOrchestration/setSwitchNotice）都在上面声明完后才能调
+  const {
+    availableModels,
+    credentials,
+    selectedModelId,
+    setSelectedModelId,
+    handleModelChange,
+    handleSmartPick,
+    loadModelsAndCreds,
+  } = useModelSelection({
+    conversationId,
+    messages,
+    orchestrationRef,
+    inputRef,
+    pendingRoutingDecisionRef,
+    active,
+    applyOrchestration,
+    setSwitchNotice,
+    // 用户手动切模型时同步会话默认模型到 conversationList + 写库
+    onConversationDefaultModelChanged: (newId) => {
+      setConversationList((prev) =>
+        prev.map((c) => (c.id === conversationId ? { ...c, defaultModelId: newId } : c)),
+      );
+      if (conversationId) void dbConversations.setDefaultModelId(conversationId, newId).catch(() => {});
+    },
+    alert,
+    t,
+  });
+
   // 实时测量输入框区域高度（含工作区行 + 附件 + 多行文本 + 页脚），驱动消息区底部 padding
   useEffect(() => {
     const el = inputAreaRef.current;
@@ -275,42 +299,6 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     return () => clearInterval(id);
   }, [isStreaming]);
 
-  // 拉取启用的模型 + 凭证并更新状态，返回模型列表。挂载时与"切回聊天页"时都用它，
-  // 保证刚在供应商页新增/删除的模型能立刻反映到下拉里（不用重启 app）。
-  // 选中的模型若仍在列表里就保留，否则回退到第一个。
-  async function loadModelsAndCreds(): Promise<ModelListItem[]> {
-    const [modelsRes, credsRes] = await Promise.all([
-      dbModels.listEnabled(),
-      dbCredentials.list(),
-    ]);
-    const ml = modelsRes.map((m) => ({
-      id: m.id,
-      name: m.name,
-      displayName: m.displayName,
-      contextWindow: m.contextWindow,
-      inputPrice: m.inputPrice,
-      outputPrice: m.outputPrice,
-      enabled: m.enabled,
-      workRoles: m.workRoles,
-      capabilityScore: m.capabilityScore,
-      providerId: m.providerId,
-      provider: m.provider,
-    }));
-    const cl = credsRes.map((c) => ({
-      id: c.id,
-      name: c.name,
-      baseUrl: c.baseUrl,
-      enabled: c.enabled,
-      providerId: c.providerId,
-      provider: c.provider ?? { name: "", type: "" },
-      defaultModelId: c.defaultModelId,
-    }));
-    setAvailableModels(ml);
-    setCredentials(cl);
-    setSelectedModelId((prev) => (prev && ml.some((m) => m.id === prev) ? prev : (ml[0]?.id ?? "")));
-    return ml;
-  }
-
   function pickConversationModelId(
     conv: Conversation | null | undefined,
     models: ModelListItem[],
@@ -321,17 +309,6 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     if (fallbackId && models.some((m) => m.id === fallbackId)) return fallbackId;
     return models[0]?.id ?? "";
   }
-
-  // 切回聊天页时刷新模型列表（首次激活由下面的挂载 effect 负责，这里跳过避免重复拉取）。
-  const activatedOnceRef = useRef(false);
-  useEffect(() => {
-    if (!active) return;
-    if (!activatedOnceRef.current) {
-      activatedOnceRef.current = true;
-      return;
-    }
-    void loadModelsAndCreds().catch(() => {});
-  }, [active]);
 
   // 进页面就预热 models.dev 输出上限表，让首条消息也能按模型真实上限精确给预算
   useEffect(() => {
@@ -1648,30 +1625,6 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     });
   }, [isStreaming, pendingQueue]);
 
-  // 隐式信号采集（改进-1 Step B）：用户在已有对话里手动换到能力分更高的模型，
-  // 说明上一个模型这次没让他满意（路由派轻了）→ 给上个模型记一条 switched_up 负反馈，喂回评分。
-  function handleModelChange(newId: string) {
-    const oldId = selectedModelId;
-    setSelectedModelId(newId);
-    setConversationList((prev) => prev.map((c) => (c.id === conversationId ? { ...c, defaultModelId: newId } : c)));
-    if (conversationId) void dbConversations.setDefaultModelId(conversationId, newId).catch(() => {});
-
-    // 用户手动接管：把这个模型钉到当前节点，编排后续不再自动覆盖它。
-    const state = orchestrationRef.current;
-    if (state && state.currentNodeId) {
-      const pinned = pinModelToCurrentNode(state, newId);
-      applyOrchestration(pinned);
-      if (conversationId) void dbConversations.saveOrchestration(conversationId, serializeOrchestration(pinned)).catch(() => {});
-    }
-
-    if (!oldId || oldId === newId || messages.length === 0) return;
-    const oldM = availableModels.find((m) => m.id === oldId);
-    const newM = availableModels.find((m) => m.id === newId);
-    if (oldM && newM && scoreModelForRole(newM, "main_chat") > scoreModelForRole(oldM, "main_chat")) {
-      void applyOutcomeForLatest(oldId, "switched_up");
-    }
-  }
-
   // 从节点地图给「任意节点」（含还没轮到的）主动指定模型：钉住该节点，编排后续不自动覆盖。
   // 不走 switched_up——这是用户对某节点的明确指派，不是"嫌弃当前回答"。
   function handleNodeModelChange(nodeId: string, modelId: string) {
@@ -1682,68 +1635,6 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     if (conversationId) void dbConversations.saveOrchestration(conversationId, serializeOrchestration(updated)).catch(() => {});
     // 改的是当前节点 → 顶部选择器也跟上，下一轮就用它
     if (nodeId === state.currentNodeId) setSelectedModelId(modelId);
-  }
-
-  async function handleSmartPick() {
-    const title = t("chat.smartPickResult.title");
-    // 没有模型可推荐：明确告知去配置
-    if (availableModels.length === 0) {
-      await alert({ title, description: t("chat.smartPickResult.noModels") });
-      return;
-    }
-    const text = inputRef.current?.value.trim() ?? "";
-    const currentId = selectedModelId;
-
-    // 智能路由开启 + 有输入：用 SmartRouter 按真实表现评分选模型，并展示决策理由
-    if (isSmartRoutingEnabled() && text) {
-      try {
-        const routed = await routeMessage(text, availableModels);
-        if (routed) {
-          const name = routed.model.displayName ?? routed.model.name;
-          const reason = routed.decisionLog.reasons[0] ?? "";
-          const currentModel = currentId ? availableModels.find((m) => m.id === currentId) : null;
-          setSelectedModelId(routed.model.id);
-          pendingRoutingDecisionRef.current =
-            currentModel && currentModel.id !== routed.model.id
-              ? {
-                  prompt: text,
-                  baselineModelId: currentModel.id,
-                  baselineModelName: currentModel.name,
-                  baselineProviderType: currentModel.provider?.type ?? null,
-                  actualModelId: routed.model.id,
-                }
-              : null;
-          setSwitchNotice(reason || null);
-          await alert({
-            title,
-            description:
-              (routed.model.id === currentId
-                ? t("chat.smartPickResult.alreadyBest", { name })
-                : t("chat.smartPickResult.switched", { name })) +
-              (reason ? `\n\n${t("chat.smartPickResult.reasonLabel")}${reason}` : ""),
-          });
-          return;
-        }
-      } catch {
-        // 路由失败回落 v1 规则路由
-      }
-    }
-
-    // 兜底：v1 规则按角色挑能力分最高
-    const best = pickBestModelForRole("main_chat", availableModels);
-    if (!best) {
-      await alert({ title, description: t("chat.smartPickResult.noPick") });
-      return;
-    }
-    const name = best.displayName ?? best.name;
-    // 输入框为空时，附带一句"先输入问题更精准"的提示
-    const hint = text ? "" : `\n\n${t("chat.smartPickResult.emptyHint")}`;
-    if (best.id === currentId) {
-      await alert({ title, description: t("chat.smartPickResult.alreadyBest", { name }) + hint });
-      return;
-    }
-    setSelectedModelId(best.id);
-    await alert({ title, description: t("chat.smartPickResult.switchedRule", { name }) + hint });
   }
 
   function handleFormSubmit(e: React.FormEvent<HTMLFormElement>) {
