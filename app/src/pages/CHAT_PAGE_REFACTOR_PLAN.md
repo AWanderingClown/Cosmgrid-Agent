@@ -419,3 +419,37 @@ git reset --hard <该阶段开始前的 commit>
 
 每阶段独立 commit，message 格式：`refactor(chat): 阶段N - 抽出 xxx`。
 单个阶段出问题可 `git revert` 单条提交。
+
+---
+
+## 最终成果（2026-07-03）
+
+**8 个 hook 文件 + 14 个纯逻辑模块 + 8 个子组件**
+
+| 阶段 | commit | hook | ChatPage 行数变化 |
+|------|--------|------|-------------------|
+| 0 | - | 基线（tsc 0 错 / test 1101 passed） | 1944 |
+| 1 | 5255293 | 合并 chat-format → streaming-status | -6 |
+| 2 | d06dd88 | hook B useModelSelection (221 行) | -109 |
+| 3 | 5b05bb8 | hook F useChatInput (59 行) | -28 |
+| 4 | 478fc80 | hook E useWorkPanel (150 行) | -65 |
+| 5 | 0607d25 | hook D useOrchestration (168 行, useReducer) | -44 |
+| 6 | 044749e | handleSend 原地拆 5 段 helper（独立 commit） | +83（结构化注释） |
+| 7 | 872e9e2 | hook C useChatStream (1318 行, 最高风险) | -1194 |
+| 8 | c864fa0 | hook A useConversations (33 行) | +6 |
+| **总计** | 8 commits | **6 个 hook + 1 合并 + 1 拆解** | **1944 → 647（-1297 行，-67%）** |
+
+**最终验证（每阶段）**：
+- ✅ tsc 0 错
+- ✅ test 1101 passed (90 files)
+- ✅ build 通过
+
+**核心架构突破**：
+- isStreaming / selectedModelId / availableModels / credentials 提到 ChatPage 顶层 useState 共享——hook B/C 循环依赖彻底解开
+- hook B 改用 props setter 写、hook C 用 getter 读（getSelectedModelId/getAvailableModels/getCredentials）
+- handleModelChange 的 messages.length === 0 检查 + switched_up 反馈移到 ChatPage 协调层包装
+- applyOrchestration / applyWorkflowSnapshot 在 hook D 内同步更新 ref + dispatch（保持 handleSend 同步读 ref 的行为）
+
+**遗留待做（后续会话）**：
+- git push 到 origin（需要代理——mixed-port 未起）
+- 用户手动测试（特别是工作面板 UI、对弈触发、队列续发、缓存命中、abort 行为）
