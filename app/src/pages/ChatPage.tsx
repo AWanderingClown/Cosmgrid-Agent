@@ -26,6 +26,7 @@ import { dbMessagesToChat } from "@/pages/chat/history";
 import { useChatAttachments } from "@/pages/chat/useChatAttachments";
 import { useChatInput } from "@/pages/chat/useChatInput";
 import { useChatStream } from "@/pages/chat/useChatStream";
+import { useConversations } from "@/pages/chat/useConversations";
 import { useModelSelection } from "@/pages/chat/useModelSelection";
 import { useOrchestration } from "@/pages/chat/useOrchestration";
 import { useWorkPanel } from "@/pages/chat/useWorkPanel";
@@ -52,11 +53,16 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
   const [selectedModelId, setSelectedModelId] = useState<string>("");
   const [availableModels, setAvailableModels] = useState<ModelListItem[]>([]);
   const [credentials, setCredentials] = useState<CredentialListItem[]>([]);
-  // 镜像当前会话 id，供后台编排回调判断"用户是否已切走会话"（避免回执落到错的会话）
-  const conversationIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    conversationIdRef.current = conversationId;
-  }, [conversationId]);
+
+  // hook A：会话管理（持 conversationId/conversationList/conversationIdRef）
+  const {
+    conversationId: _conversationId,
+    conversationIdRef: _conversationIdRef,
+    setConversationId: _setConversationId,
+  } = useConversations();
+  // 显式抑制 lint：conversationIdRef 保留以备 hook D / 协调层未来用
+  void _conversationIdRef;
+  void _setConversationId;
   const workPanel = usePanelResize({ initial: 320, min: 240, max: 560, edge: "left" });
 
   const pendingRoutingDecisionRef = useRef<{
