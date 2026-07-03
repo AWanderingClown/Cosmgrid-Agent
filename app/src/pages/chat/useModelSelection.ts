@@ -3,13 +3,15 @@ import type { TFunction } from "i18next";
 import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations } from "@/lib/db";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
 import { isSmartRoutingEnabled } from "@/lib/app-settings";
-import { pickBestModelForRole } from "@/lib/llm/model-capabilities";
+import { pickBestModelForRole, scoreModelForRole } from "@/lib/llm/model-capabilities";
 import { routeMessage } from "@/lib/llm/smart-router";
+import { applyOutcomeForLatest } from "@/lib/llm/outcome-tracker";
 import {
   pinModelToCurrentNode,
   serializeOrchestration,
   type OrchestrationState,
 } from "@/lib/llm/orchestrator";
+import type { ChatMessage } from "./types";
 
 /** SmartRouter 在 handleSmartPick 里写、handleSend 读的路由决策镜像（避免 stale closure）。 */
 export interface PendingRoutingDecision {
@@ -32,6 +34,8 @@ export interface UseModelSelectionOptions {
   inputRef: RefObject<HTMLTextAreaElement | null>;
   pendingRoutingDecisionRef: MutableRefObject<PendingRoutingDecision | null>;
   active: boolean;
+  /** 当前会话消息列表（hook C 持有；hook B 调用在 hook C 之后，无循环依赖） */
+  messages: ChatMessage[];
 
   // selectedModelId/availableModels/credentials 提到 ChatPage 顶层 useState（避免 hook B/C 循环）——
   // hook B 通过 setter 改 ChatPage 顶层 state，hook C 通过 getter 读
@@ -62,6 +66,7 @@ export function useModelSelection({
   inputRef,
   pendingRoutingDecisionRef,
   active,
+  messages,
   selectedModelId,
   setSelectedModelId,
   availableModels,
@@ -119,9 +124,11 @@ export function useModelSelection({
     void loadModelsAndCreds().catch(() => {});
   }, [active, loadModelsAndCreds]);
 
-  // 隐式信号采集（改进-1 Step B）：阶段 7 拆出——messages.length 检查 + switched_up 反馈
-  // 移到 ChatPage 协调层包装 handleModelChange（hook B/C 循环依赖）
+  // 隐式信号采集（改进-1 Step B）：用户在已有对话里手动换到能力分更高的模型，
+  // 说明上一个模型这次没让他满意（路由派轻了）→ 给上个模型记一条 switched_up 负反馈，喂回评分。
+  // 阶段 7+simplify 修复：messages 已加回 deps（hook B 在 hook C 之后调，无循环）—— 反馈逻辑搬回 hook B
   const handleModelChange = useCallback((newId: string) => {
+    const oldId = selectedModelId;
     setSelectedModelId(newId);
     onConversationDefaultModelChanged(newId);
 
@@ -136,12 +143,22 @@ export function useModelSelection({
           .catch(() => {});
       }
     }
+
+    if (!oldId || oldId === newId || messages.length === 0) return;
+    const oldM = availableModels.find((m) => m.id === oldId);
+    const newM = availableModels.find((m) => m.id === newId);
+    if (oldM && newM && scoreModelForRole(newM, "main_chat") > scoreModelForRole(oldM, "main_chat")) {
+      void applyOutcomeForLatest(oldId, "switched_up");
+    }
   }, [
+    selectedModelId,
     setSelectedModelId,
     orchestrationRef,
     applyOrchestration,
     conversationId,
     onConversationDefaultModelChanged,
+    messages,
+    availableModels,
   ]);
 
   async function handleSmartPick() {

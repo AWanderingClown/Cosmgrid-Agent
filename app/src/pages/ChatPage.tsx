@@ -16,8 +16,6 @@ import { type ToolCallView } from "@/lib/work-artifact-views";
 import { enableWorkspaceProtection } from "@/lib/llm/tools/git-snapshot";
 import { getActiveAssistantModelLabel } from "@/pages/chat/streaming-status";
 import { parseOrchestration, pinModelToNode, serializeOrchestration } from "@/lib/llm/orchestrator";
-import { scoreModelForRole } from "@/lib/llm/model-capabilities";
-import { applyOutcomeForLatest } from "@/lib/llm/outcome-tracker";
 import { ChatTranscript } from "@/pages/chat/ChatTranscript";
 import { ChatHeader } from "@/pages/chat/ChatHeader";
 import { ChatInputDock } from "@/pages/chat/ChatInputDock";
@@ -231,6 +229,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     inputRef,
     pendingRoutingDecisionRef,
     active,
+    messages,
     selectedModelId,
     setSelectedModelId,
     availableModels,
@@ -249,21 +248,6 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     alert,
     t,
   });
-
-  // 包装 hook B handleModelChange：补回 messages.length === 0 检查 + switched_up 反馈（hook B 阶段 7 拆出）
-  // 仅当旧模型 → 新模型能力分提升时记一条 switched_up 负反馈，喂回评分
-  const handleModelChangeWithFeedback = (newId: string) => {
-    const oldId = selectedModelId;
-    handleModelChange(newId);
-    if (!oldId || oldId === newId || messages.length === 0) return;
-    const oldM = availableModels.find((m) => m.id === oldId);
-    const newM = availableModels.find((m) => m.id === newId);
-    if (oldM && newM && scoreModelForRole(newM, "main_chat") > scoreModelForRole(oldM, "main_chat")) {
-      void applyOutcomeForLatest(oldId, "switched_up");
-    }
-  };
-  // 显式抑制 lint：handleModelChangeWithFeedback 由协调层包装供 JSX onChange 调用
-  void handleModelChangeWithFeedback;
 
   const {
     draftAttachments,
