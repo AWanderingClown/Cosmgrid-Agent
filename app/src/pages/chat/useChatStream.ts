@@ -10,6 +10,7 @@ import {
 } from "react";
 import type { TFunction } from "i18next";
 import { desktopDir } from "@tauri-apps/api/path";
+import { getApiKey } from "@/lib/keystore";
 import {
   conversations as dbConversations,
   messages as dbMessages,
@@ -94,20 +95,15 @@ import { applyPromptCompression } from "@/pages/chat/prompt-compression";
 import { buildChatPromptMessages } from "@/pages/chat/prompt-messages";
 import { decideStreamRetry } from "@/pages/chat/stream-retry";
 import { createStreamingTurnCallbacks, createStreamingTurnState } from "@/pages/chat/streaming-callbacks";
-import type { ChatMessage, PendingSend } from "@/pages/chat/types";
+import { filterReadRecordsSince } from "@/pages/chat/history";
+import type { ChatMessage, PendingRoutingDecision, PendingSend } from "@/pages/chat/types";
 
 interface AlertOptions {
   title: string;
   description: string;
 }
 
-export interface PendingRoutingDecision {
-  prompt: string;
-  baselineModelId: string;
-  baselineModelName: string;
-  baselineProviderType?: string | null;
-  actualModelId: string;
-}
+type ChatUsage = StreamUsage;
 
 export interface UseChatStreamOptions {
   // 顶层 state
@@ -163,7 +159,7 @@ export interface UseChatStreamOptions {
   alert: (opts: AlertOptions) => Promise<void>;
 }
 
-type ChatUsage = StreamUsage;
+
 
 /** hook C：流式主循环 + 队列 + handleSend 整套（5 段 helper + runBackgroundOrchestration +
  *  runChainIfNeeded + handleStop + 流式计时 + 自动滚底 + 队列排空 effect）。
@@ -252,7 +248,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
     try {
       const all = await toolExecutions.listByConversation(convId);
       applyToolExecutionRows(all);
-      const { filterReadRecordsSince } = await import("@/pages/chat/history");
+      // filterReadRecordsSince 静态导入
       const readRecords = filterReadRecordsSince(all, sinceIso);
       return evaluateHarness(content, readRecords);
     } catch {
@@ -329,7 +325,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         return null;
       }
       const primaryIsCli = isCliProviderType(model.provider?.type ?? "");
-      const { getApiKey } = await import("@/lib/keystore");
+      // getApiKey 静态导入
       const apiKey = primaryIsCli ? "" : ((await getApiKey(cred.id)) ?? "");
       if (stopIfAborted()) return null;
       if (!primaryIsCli && !apiKey) {
@@ -611,7 +607,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
       setCacheNotice(null);
 
       try {
-        const { getApiKey } = await import("@/lib/keystore");
+        // getApiKey 静态导入
         const participants = await buildDebateParticipants({
           primaryModel: model,
           availableModels: getAvailableModels(),
@@ -788,7 +784,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
 
       let chain: ModelEndpoint[];
       try {
-        const { getApiKey } = await import("@/lib/keystore");
+        // getApiKey 静态导入
         chain = await buildMainChatModelChain({
           primaryModel: model,
           primaryCredential: cred,
@@ -1074,7 +1070,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         if (!orchModel || !orchModel.provider) return;
         const cred = getCredentials().find((c) => c.providerId === orchModel.providerId);
         if (!cred) return;
-        const { getApiKey } = await import("@/lib/keystore");
+        // getApiKey 静态导入
         const key = (await getApiKey(cred.id)) ?? "";
         if (!key) return;
         const lm = getLanguageModel(orchModel.provider.type, orchModel.name, key, cred.baseUrl);
@@ -1153,7 +1149,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         for (const m of apiModels) {
           const cred = getCredentials().find((c) => c.providerId === m.providerId);
           if (!cred || !m.provider) continue;
-          const { getApiKey } = await import("@/lib/keystore");
+          // getApiKey 静态导入
           const key = await getApiKey(cred.id);
           if (!key) continue;
           endpoints.push(toModelEndpoint(m, cred, key));

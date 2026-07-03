@@ -11,16 +11,7 @@ import {
   serializeOrchestration,
   type OrchestrationState,
 } from "@/lib/llm/orchestrator";
-import type { ChatMessage } from "./types";
-
-/** SmartRouter 在 handleSmartPick 里写、handleSend 读的路由决策镜像（避免 stale closure）。 */
-export interface PendingRoutingDecision {
-  prompt: string;
-  baselineModelId: string;
-  baselineModelName: string;
-  baselineProviderType?: string | null;
-  actualModelId: string;
-}
+import type { ChatMessage, PendingRoutingDecision } from "./types";
 
 interface AlertOptions {
   title: string;

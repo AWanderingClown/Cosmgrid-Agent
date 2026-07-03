@@ -30,3 +30,13 @@ export interface ChatMessage {
 }
 
 export type PendingSend = { text: string; attachments?: Attachment[] };
+
+/** SmartRouter 在 handleSmartPick 里写、handleSend 读的路由决策镜像（避免 stale closure）。
+ *  原本 useModelSelection 和 useChatStream 各重复定义一次——统一放 types.ts。 */
+export interface PendingRoutingDecision {
+  prompt: string;
+  baselineModelId: string;
+  baselineModelName: string;
+  baselineProviderType?: string | null;
+  actualModelId: string;
+}
