@@ -8,7 +8,7 @@ import type { ChainNodeView } from "@/components/work-panel/derive-chain-node-gr
 import { WorkArtifacts } from "@/components/work-panel/WorkArtifacts";
 import type { ModelListItem } from "@/lib/api";
 import type { WorkArtifact } from "@/lib/work-artifacts";
-import { formatElapsed } from "./chat-format";
+import { formatElapsed } from "./streaming-status";
 import type { ChatMessage } from "./types";
 
 const WorkPanelIde = lazy(() => import("@/components/work-panel/WorkPanelIde").then((m) => ({ default: m.WorkPanelIde })));

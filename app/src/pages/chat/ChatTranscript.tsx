@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import type { ToolCallView } from "@/lib/work-artifact-views";
 import { MessageItem, ReceiptItem } from "./ChatMessageItem";
 import { QueuedMessageItem } from "./QueuedMessageItem";
-import { formatElapsed } from "./chat-format";
+import { formatElapsed } from "./streaming-status";
 import type { ChatMessage, PendingSend } from "./types";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 
