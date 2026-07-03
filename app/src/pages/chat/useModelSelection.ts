@@ -1,17 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type RefObject, type MutableRefObject } from "react";
+import { useCallback, useEffect, useRef, type RefObject, type MutableRefObject, type Dispatch, type SetStateAction } from "react";
 import type { TFunction } from "i18next";
 import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations } from "@/lib/db";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
 import { isSmartRoutingEnabled } from "@/lib/app-settings";
-import { pickBestModelForRole, scoreModelForRole } from "@/lib/llm/model-capabilities";
+import { pickBestModelForRole } from "@/lib/llm/model-capabilities";
 import { routeMessage } from "@/lib/llm/smart-router";
-import { applyOutcomeForLatest } from "@/lib/llm/outcome-tracker";
 import {
   pinModelToCurrentNode,
   serializeOrchestration,
   type OrchestrationState,
 } from "@/lib/llm/orchestrator";
-import type { ChatMessage } from "./types";
 
 /** SmartRouter 在 handleSmartPick 里写、handleSend 读的路由决策镜像（避免 stale closure）。 */
 export interface PendingRoutingDecision {
@@ -30,11 +28,19 @@ interface AlertOptions {
 export interface UseModelSelectionOptions {
   // 跨 hook 读（ref 镜像避免 stale closure）
   conversationId: string | null;
-  messages: ChatMessage[];
   orchestrationRef: MutableRefObject<OrchestrationState | null>;
   inputRef: RefObject<HTMLTextAreaElement | null>;
   pendingRoutingDecisionRef: MutableRefObject<PendingRoutingDecision | null>;
   active: boolean;
+
+  // selectedModelId/availableModels/credentials 提到 ChatPage 顶层 useState（避免 hook B/C 循环）——
+  // hook B 通过 setter 改 ChatPage 顶层 state，hook C 通过 getter 读
+  selectedModelId: string;
+  setSelectedModelId: Dispatch<SetStateAction<string>>;
+  availableModels: ModelListItem[];
+  setAvailableModels: (m: ModelListItem[]) => void;
+  credentials: CredentialListItem[];
+  setCredentials: (c: CredentialListItem[]) => void;
 
   // 跨 hook 写（按范式回调注入，不直接调外部 setter）
   applyOrchestration: (next: OrchestrationState | null) => void;
@@ -47,26 +53,27 @@ export interface UseModelSelectionOptions {
   t: TFunction;
 }
 
-/** hook B：模型选择。持 availableModels / credentials / selectedModelId，
- *  提供 loadModelsAndCreds / handleModelChange / handleSmartPick。 */
+/** hook B：模型选择。selectedModelId/availableModels/credentials 提到 ChatPage 顶层
+ *  useState 共享（hook B/C 都需要，提到顶层避免循环依赖）。hook B 通过 setter 写，
+ *  hook C 通过 getter 读。提供 loadModelsAndCreds / handleModelChange / handleSmartPick。 */
 export function useModelSelection({
   conversationId,
-  messages,
   orchestrationRef,
   inputRef,
   pendingRoutingDecisionRef,
   active,
+  selectedModelId,
+  setSelectedModelId,
+  availableModels,
+  setAvailableModels,
+  credentials,
+  setCredentials,
   applyOrchestration,
   setSwitchNotice,
   onConversationDefaultModelChanged,
   alert,
   t,
 }: UseModelSelectionOptions) {
-  const [availableModels, setAvailableModels] = useState<ModelListItem[]>([]);
-  const [credentials, setCredentials] = useState<CredentialListItem[]>([]);
-  const [selectedModelId, setSelectedModelId] = useState<string>("");
-
-  // 切回聊天页时刷新模型列表（首次激活由挂载 effect 负责，这里跳过避免重复拉取）
   const activatedOnceRef = useRef(false);
 
   const loadModelsAndCreds = useCallback(async (): Promise<ModelListItem[]> => {
@@ -98,9 +105,9 @@ export function useModelSelection({
     }));
     setAvailableModels(ml);
     setCredentials(cl);
-    setSelectedModelId((prev) => (prev && ml.some((m) => m.id === prev) ? prev : (ml[0]?.id ?? "")));
+    setSelectedModelId((prev: string) => (prev && ml.some((m) => m.id === prev) ? prev : (ml[0]?.id ?? "")));
     return ml;
-  }, []);
+  }, [setAvailableModels, setCredentials, setSelectedModelId]);
 
   // active prop 触发重新加载（首次激活跳过）
   useEffect(() => {
@@ -112,10 +119,9 @@ export function useModelSelection({
     void loadModelsAndCreds().catch(() => {});
   }, [active, loadModelsAndCreds]);
 
-  // 隐式信号采集（改进-1 Step B）：用户在已有对话里手动换到能力分更高的模型，
-  // 说明上一个模型这次没让他满意（路由派轻了）→ 给上个模型记一条 switched_up 负反馈，喂回评分。
+  // 隐式信号采集（改进-1 Step B）：阶段 7 拆出——messages.length 检查 + switched_up 反馈
+  // 移到 ChatPage 协调层包装 handleModelChange（hook B/C 循环依赖）
   const handleModelChange = useCallback((newId: string) => {
-    const oldId = selectedModelId;
     setSelectedModelId(newId);
     onConversationDefaultModelChanged(newId);
 
@@ -130,20 +136,11 @@ export function useModelSelection({
           .catch(() => {});
       }
     }
-
-    if (!oldId || oldId === newId || messages.length === 0) return;
-    const oldM = availableModels.find((m) => m.id === oldId);
-    const newM = availableModels.find((m) => m.id === newId);
-    if (oldM && newM && scoreModelForRole(newM, "main_chat") > scoreModelForRole(oldM, "main_chat")) {
-      void applyOutcomeForLatest(oldId, "switched_up");
-    }
   }, [
-    selectedModelId,
+    setSelectedModelId,
     orchestrationRef,
     applyOrchestration,
     conversationId,
-    messages,
-    availableModels,
     onConversationDefaultModelChanged,
   ]);
 
