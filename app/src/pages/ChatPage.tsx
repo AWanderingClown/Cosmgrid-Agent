@@ -187,16 +187,10 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     setWorkspacePath,
     permissionMode,
     setPanelOpen,
-    panelOpen,
     isStreaming,
     setIsStreaming,
-    handleModelChange: () => {
-      /* hook C 内部未实际调用此 deps——保留签名以备 hook C 未来需要 */
-    },
     handleNodeModelChange,
-    orchestration,
     orchestrationRef,
-    workflowSnapshot,
     workflowSnapshotRef,
     applyOrchestration,
     applyWorkflowSnapshot,
@@ -206,16 +200,11 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     setChainRunning,
     chainAbortRef,
     applyToolExecutionRows,
-    clearToolExecutionViews,
-    bindWorkspace,
     requestConfirm,
     scrollRef,
-    inputAreaRef,
-    inputRef,
     stickToBottomRef,
     pendingRoutingDecisionRef,
     t,
-    alert,
   });
 
   // hook B：模型选择（在 hook C 之后——hook B 依赖 hook C 的 messages + setSwitchNotice）

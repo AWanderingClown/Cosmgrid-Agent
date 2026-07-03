@@ -98,11 +98,6 @@ import { createStreamingTurnCallbacks, createStreamingTurnState } from "@/pages/
 import { filterReadRecordsSince } from "@/pages/chat/history";
 import type { ChatMessage, PendingRoutingDecision, PendingSend } from "@/pages/chat/types";
 
-interface AlertOptions {
-  title: string;
-  description: string;
-}
-
 type ChatUsage = StreamUsage;
 
 export interface UseChatStreamOptions {
@@ -118,20 +113,14 @@ export interface UseChatStreamOptions {
   workspacePath: string | null;
   setWorkspacePath: Dispatch<SetStateAction<string | null>>;
   permissionMode: "read" | "confirm" | "auto";
-  panelOpen: boolean;
   setPanelOpen: Dispatch<SetStateAction<boolean>>;
   // isStreaming 提到 ChatPage 顶层共享（hook C + hook E 都需要）
   isStreaming: boolean;
   setIsStreaming: Dispatch<SetStateAction<boolean>>;
 
-  // hook B (model)
-  handleModelChange: (newId: string) => void;
-  handleNodeModelChange: (nodeId: string, modelId: string) => void;
-
   // hook D (orchestration)
-  orchestration: OrchestrationState | null;
+  handleNodeModelChange: (nodeId: string, modelId: string) => void;
   orchestrationRef: MutableRefObject<OrchestrationState | null>;
-  workflowSnapshot: WorkflowSnapshot | null;
   workflowSnapshotRef: MutableRefObject<WorkflowSnapshot | null>;
   applyOrchestration: (next: OrchestrationState | null) => void;
   applyWorkflowSnapshot: (next: WorkflowSnapshot | null) => void;
@@ -143,20 +132,15 @@ export interface UseChatStreamOptions {
 
   // hook E (work panel)
   applyToolExecutionRows: (rows: ToolExecutionRow[]) => void;
-  clearToolExecutionViews: () => void;
-  bindWorkspace: (path: string) => Promise<void>;
   requestConfirm: (req: ToolConfirmRequest) => Promise<boolean>;
 
   // hook F + 顶层 ref
   scrollRef: RefObject<HTMLDivElement | null>;
-  inputAreaRef: RefObject<HTMLDivElement | null>;
-  inputRef: RefObject<HTMLTextAreaElement | null>;
   stickToBottomRef: MutableRefObject<boolean>;
   pendingRoutingDecisionRef: MutableRefObject<PendingRoutingDecision | null>;
 
   // i18n + UI
   t: TFunction;
-  alert: (opts: AlertOptions) => Promise<void>;
 }
 
 
@@ -177,15 +161,11 @@ export function useChatStream(opts: UseChatStreamOptions) {
     workspacePath,
     setWorkspacePath,
     permissionMode,
-    panelOpen: _panelOpen,
     setPanelOpen,
     isStreaming,
     setIsStreaming,
-    handleModelChange: _handleModelChange,
     handleNodeModelChange,
-    orchestration: _orchestration,
     orchestrationRef,
-    workflowSnapshot: _workflowSnapshot,
     workflowSnapshotRef,
     applyOrchestration,
     applyWorkflowSnapshot,
@@ -195,16 +175,11 @@ export function useChatStream(opts: UseChatStreamOptions) {
     setChainRunning,
     chainAbortRef,
     applyToolExecutionRows,
-    clearToolExecutionViews: _clearToolExecutionViews,
-    bindWorkspace: _bindWorkspace,
     requestConfirm,
     scrollRef,
-    inputAreaRef: _inputAreaRef,
-    inputRef: _inputRef,
     stickToBottomRef,
     pendingRoutingDecisionRef,
     t,
-    alert: _alert,
   } = opts;
 
   // 流式 state（isStreaming 提到 ChatPage 顶层共享，避免 hook C/E 循环依赖）
