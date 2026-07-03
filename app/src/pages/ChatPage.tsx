@@ -86,6 +86,7 @@ import { decideStreamRetry } from "@/pages/chat/stream-retry";
 import { createStreamingTurnCallbacks, createStreamingTurnState } from "@/pages/chat/streaming-callbacks";
 import type { ChatMessage, PendingSend } from "@/pages/chat/types";
 import { useChatAttachments } from "@/pages/chat/useChatAttachments";
+import { useChatInput } from "@/pages/chat/useChatInput";
 import { useModelSelection } from "@/pages/chat/useModelSelection";
 
 type ChatUsage = StreamUsage;
@@ -189,12 +190,19 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     baselineProviderType?: string | null;
     actualModelId: string;
   } | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  // 浮动输入框是 absolute 盖在消息上的——按它的真实高度给消息区底部预留空间，
-  // 否则输入框一变高（工作区行/附件/多行输入）就把最后几行消息盖住看不见。
-  const inputAreaRef = useRef<HTMLDivElement>(null);
-  const [inputAreaH, setInputAreaH] = useState(180);
+
+  // hook F：输入 + 滚动机制（scrollRef/inputAreaRef/inputAreaH/stickToBottomRef/
+  // showJumpToBottom + scrollToBottom + ResizeObserver + 滚动监听 effect）
+  // messages 变化触发的自动滚底 effect 留在协调层（归 hook C 流式，本阶段不搬）
+  const {
+    scrollRef,
+    inputAreaRef,
+    inputAreaH,
+    stickToBottomRef,
+    showJumpToBottom,
+    scrollToBottom,
+  } = useChatInput();
 
   // hook B：模型选择。所有 deps（conversationId/messages/orchestrationRef/inputRef/
   // pendingRoutingDecisionRef/applyOrchestration/setSwitchNotice）都在上面声明完后才能调
@@ -226,21 +234,6 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     t,
   });
 
-  // 实时测量输入框区域高度（含工作区行 + 附件 + 多行文本 + 页脚），驱动消息区底部 padding
-  useEffect(() => {
-    const el = inputAreaRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => setInputAreaH(el.offsetHeight));
-    ro.observe(el);
-    setInputAreaH(el.offsetHeight);
-    return () => ro.disconnect();
-  }, []);
-
-  // 是否「贴底跟随」：用户在底部附近时为 true，自动滚到底；用户往上滚走就为 false，
-  // 不再抢鼠标。ref 存实时值给滚动逻辑用，state 仅驱动「回到底部」按钮显隐。
-  const stickToBottomRef = useRef(true);
-  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
-
   // Harness 闭环：按时间窗口取本轮真实 read 记录，避免整段会话的旧工具审计污染当前判断。
   async function evalHarnessForConversation(
     convId: string | null,
@@ -258,29 +251,8 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     }
   }
 
-  const scrollToBottom = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-    stickToBottomRef.current = true;
-    setShowJumpToBottom(false);
-  };
-
-  // 监听用户滚动：算出离底部的距离，决定是否继续贴底跟随
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-      const atBottom = distance < 80;
-      stickToBottomRef.current = atBottom;
-      setShowJumpToBottom(!atBottom);
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, []);
-
   // 新内容到达时：只有用户仍贴在底部才自动滚，否则纹丝不动（不跟用户抢滚动条）
+  // messages 变化驱动——归 hook C 流式，本阶段不搬
   useEffect(() => {
     if (scrollRef.current && stickToBottomRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;

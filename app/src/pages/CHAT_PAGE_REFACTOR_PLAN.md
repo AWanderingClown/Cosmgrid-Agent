@@ -167,7 +167,13 @@ export function useModelSelection(opts: UseModelSelectionOptions) {
 
 **为什么这么快**：`useChatAttachments`（附件相关）已经抽完，F 只剩滚动和输入框高度。
 
-**验证**：tsc + test + 手动滚动、粘贴、拖拽文件。
+**实际落地（2026-07-03）**：
+- 范围调整：`inputRef` **不归 hook F**（保留 ChatPage 顶层）—— 因为 hook B 已依赖 inputRef，让 ChatPage 顶层继续持有，hook B 通过 deps 直接接，最小改动
+- hook F 实际持：`scrollRef` `inputAreaRef` `inputAreaH` `stickToBottomRef` `showJumpToBottom`
+- hook F 实际提供：`scrollToBottom()` + ResizeObserver effect + 滚动监听 effect
+- **未搬**（留 ChatPage 协调层）：自动滚底 effect（依赖 messages，归 hook C 流式，本阶段不搬）
+- 验证：tsc 0 错 + test 1101 passed + build 7.95s
+- 行数：ChatPage.tsx 1835 → 1807（**-28 行**）；useChatInput.ts 59 行
 
 ### 阶段 4：hook E 工作面板（~2.5h）
 
