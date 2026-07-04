@@ -66,6 +66,14 @@ describe("buildNoToolsPreamble", () => {
     expect(out).toContain("不要假装");
   });
 
+  // 2026-07-04 修复：原来只告诉模型"没工具"，没告诉它该怎么引导用户解决——导致模型
+  // 只会罗列一堆"做不到"，用户看不出下一步该干嘛（其实按钮就在输入框下面）。
+  it("要求模型在需要工具时主动引导用户去绑定工作文件夹，而不是只列限制", () => {
+    const out = buildNoToolsPreamble();
+    expect(out).toContain("选择文件夹");
+    expect(out).toContain("不要只列限制");
+  });
+
   it("无参纯函数，每次返回同一段固定文本", () => {
     expect(buildNoToolsPreamble()).toBe(buildNoToolsPreamble());
     expect(typeof buildNoToolsPreamble()).toBe("string");

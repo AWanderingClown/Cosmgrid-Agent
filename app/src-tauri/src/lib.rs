@@ -13,13 +13,30 @@ use keyring::Entry;
 use tauri::ipc::Channel;
 use tauri::Manager;
 use tauri::State;
-use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
-/// 在跑的 CLI 子进程句柄表（按前端传来的 sessionId 索引）。
-/// abort 时前端调 kill_cli(sessionId) → 真正 SIGKILL 子进程，停止白耗订阅额度。
+/// 在跑的 CLI 子进程表（按前端传来的 sessionId 索引，存 pid 不存句柄——见 spawn_cli_stream
+/// 里"为什么 spawn 后立刻 drop CommandChild"的注释）。
+/// abort 时前端调 kill_cli(sessionId) → 按 pid 真正杀掉子进程，停止白耗订阅额度。
 #[derive(Default)]
-struct CliChildren(Mutex<HashMap<String, CommandChild>>);
+struct CliChildren(Mutex<HashMap<String, u32>>);
+
+/// 按 pid 杀掉一个进程（跨平台）。tauri-plugin-shell 的 CommandChild::kill() 本可以做到，
+/// 但我们故意不在 map 里存 CommandChild（见下方 spawn_cli_stream 注释），所以自己按 pid 发信号。
+fn kill_pid(pid: u32) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::process::Command::new("kill").args(["-9", &pid.to_string()]).status()?;
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .status()?;
+    }
+    Ok(())
+}
 
 /// CliStreamEvent::Error 的 kind 字段（1.4 修复）：
 /// - spawn_failed：spawn 阶段失败（CLI 程序不存在 / 没装 / PATH 找不到），用户必须先装才能用
@@ -275,9 +292,21 @@ async fn spawn_cli_stream(
         }
     };
 
-    // 存句柄，供 kill_cli 按 sessionId 杀进程。同一 sessionId 重复 spawn 时旧句柄被覆盖。
+    // 2026-07-05 修复：tauri-plugin-shell 无条件把子进程 stdin 设成管道（Stdio::piped()），
+    // 且没有提供"只关 stdin、不杀进程"的 API。codex exec 的行为是：即使 prompt 已经用参数
+    // 传了，只要 stdin 是管道状态，它也会先等着把 stdin 内容当"附加输入"读完（read 到 EOF）
+    // 才会真正处理这一轮——我们从来不写任何东西，也从来没关过这根管道，于是 codex 就一直
+    // 卡在这一步，直到被下面的 60s watchdog 杀掉，误报成"CLI 进程未产生任何事件"（实测复现）。
+    //
+    // 修法：拿到 pid 后立刻把 CommandChild 整个 drop 掉——它的 stdin_writer（os_pipe 的
+    // PipeWriter）被 drop 时会关闭这一端的管道，子进程收到 EOF，不再傻等；child 内部的
+    // Arc<SharedChild> 被 drop 不会杀死进程（shared_child crate 设计成允许句柄单独释放而不
+    // 影响实际的 OS 进程和已经在跑的 stdout/stderr 读取任务）。真正杀进程改成按 pid 发信号
+    // （kill_pid），不再依赖 CommandChild::kill()。
+    let pid = child.pid();
+    drop(child);
     if let Ok(mut map) = children.0.lock() {
-        map.insert(session_id.clone(), child);
+        map.insert(session_id.clone(), pid);
     }
 
     // 1.3 修复：per-event 静默超时（参考 app/src/lib/llm/sse-chunk-timeout.ts 思路）。
@@ -296,8 +325,8 @@ async fn spawn_cli_stream(
                     kind: CliErrorKind::Stalled,
                 });
                 if let Ok(mut map) = children.0.lock() {
-                    if let Some(c) = map.remove(&session_id) {
-                        let _ = c.kill();
+                    if let Some(pid) = map.remove(&session_id) {
+                        let _ = kill_pid(pid);
                     }
                 }
                 return Ok(());
@@ -338,14 +367,14 @@ async fn spawn_cli_stream(
 /// 返回 true=找到并杀掉；false=没有这个 session（已自然结束或从未存在）。
 #[tauri::command]
 fn kill_cli(children: State<'_, CliChildren>, session_id: String) -> Result<bool, String> {
-    let child = children
+    let pid = children
         .0
         .lock()
         .map_err(|e| e.to_string())?
         .remove(&session_id);
-    match child {
-        Some(c) => {
-            c.kill().map_err(|e| e.to_string())?;
+    match pid {
+        Some(pid) => {
+            kill_pid(pid).map_err(|e| e.to_string())?;
             Ok(true)
         }
         None => Ok(false),

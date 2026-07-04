@@ -2,7 +2,8 @@
 // 单组件 + discriminated target，ProvidersPage 只需持一个 editTarget state。
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { Loader2, RefreshCw } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -26,6 +27,8 @@ import { saveApiKey } from "@/lib/keystore";
 import { ApiKeyInput } from "./ApiKeyInput";
 import { WorkRoleSelector } from "./WorkRoleSelector";
 import { saveManualModelPrice } from "@/lib/llm/price-catalog";
+import { isCliType } from "./provider-form-defaults";
+import type { ProviderTypeValue } from "./ProviderTypeSelect";
 
 export type EditTarget =
   | { kind: "provider"; data: ProviderListItem }
@@ -51,12 +54,15 @@ export function ProviderEditDialog({ target, onClose, onSaved }: ProviderEditDia
   const [inputPrice, setInputPrice] = useState(0);
   const [outputPrice, setOutputPrice] = useState(0);
   const [workRoles, setWorkRoles] = useState<WorkRole[]>([]);
+  const [resolvingCliPath, setResolvingCliPath] = useState(false);
+  const [cliPathDetected, setCliPathDetected] = useState(false);
 
   // target 变化时用当前值预填表单
   useEffect(() => {
     if (!target) return;
     setError(null);
     setApiKey("");
+    setCliPathDetected(false);
     if (target.kind === "provider") {
       setName(target.data.name);
     } else if (target.kind === "credential") {
@@ -70,6 +76,29 @@ export function ProviderEditDialog({ target, onClose, onSaved }: ProviderEditDia
       setWorkRoles(parseWorkRoles(target.data.workRoles) as WorkRole[]);
     }
   }, [target]);
+
+  // 2026-07-05 加：编辑已有 CLI 凭据时也能重新检测可执行文件路径——原来只有新建供应商
+  // 时（AddProviderDialog）才有这个按钮，路径一旦失效（重装/换了 nvm 版本）用户只能手动
+  // 改，没法重新自动搜索，只能删了重建。
+  async function detectCliPath() {
+    if (!target || target.kind !== "credential") return;
+    const providerType = target.data.provider.type as ProviderTypeValue;
+    if (!isCliType(providerType)) return;
+    const program = providerType === "claude-cli" ? "claude" : "codex";
+    setResolvingCliPath(true);
+    setCliPathDetected(false);
+    try {
+      const resolved = await invoke<string | null>("resolve_cli_program", { program });
+      if (resolved) {
+        setBaseUrl(resolved);
+        setCliPathDetected(true);
+      }
+    } catch {
+      // 检测失败保留原值，用户可以手动改
+    } finally {
+      setResolvingCliPath(false);
+    }
+  }
 
   async function handleSave() {
     if (!target) return;
@@ -132,9 +161,31 @@ export function ProviderEditDialog({ target, onClose, onSaved }: ProviderEditDia
                 <Field label={t("providers.edit.nameLabel")}>
                   <Input value={name} onChange={(e) => setName(e.target.value)} className="rounded-xl" />
                 </Field>
-                <Field label={t("addProvider.baseUrl")}>
+                <Field label={isCliType(target.data.provider.type as ProviderTypeValue) ? t("addProvider.cliPathLabel") : t("addProvider.baseUrl")}>
                   <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} className="rounded-xl font-mono text-xs" />
                 </Field>
+                {isCliType(target.data.provider.type as ProviderTypeValue) && (
+                  <div className="flex items-center justify-between gap-3 -mt-3">
+                    <p className="text-xs text-muted-foreground">
+                      {cliPathDetected
+                        ? t("addProvider.cliDetected")
+                        : resolvingCliPath
+                          ? t("addProvider.cliDetecting")
+                          : t("addProvider.cliHint")}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void detectCliPath()}
+                      disabled={resolvingCliPath}
+                      className="shrink-0 rounded-xl"
+                    >
+                      {resolvingCliPath ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                      {t("addProvider.cliDetectButton")}
+                    </Button>
+                  </div>
+                )}
                 <div className="space-y-1">
                   <ApiKeyInput value={apiKey} onChange={setApiKey} placeholder={t("providers.edit.apiKeyKeep")} />
                   <p className="text-[10px] text-muted-foreground/60 px-1">{t("providers.edit.apiKeyHint")}</p>
