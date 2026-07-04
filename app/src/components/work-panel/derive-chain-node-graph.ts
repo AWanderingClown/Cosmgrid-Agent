@@ -67,7 +67,10 @@ function debateNodeStatus(snapshot: WorkflowSnapshot, node: WorkflowNode): Chain
   return "planned";
 }
 
-function deriveDebateNode(snapshot: WorkflowSnapshot | null): ChainNodeView | null {
+function deriveDebateNode(
+  snapshot: WorkflowSnapshot | null,
+  participants: { modelId: string; modelName: string }[] | null | undefined,
+): ChainNodeView | null {
   if (!snapshot) return null;
   const node = snapshot.nodes.find((n) => n.phase === "debate") ?? null;
   if (!node) return null;
@@ -77,13 +80,21 @@ function deriveDebateNode(snapshot: WorkflowSnapshot | null): ChainNodeView | nu
     node.status !== "pending";
   if (!shouldShow) return null;
 
+  // 2026-07-05 修复：真实参与者（模型名列表）没传时才回退到"dynamic"占位符（渲染层
+  // ChainNodeGraph 把它转成"动态分配"）——参与者一旦解析出来，直接显示真实模型名单，
+  // 不再让用户"点了开始博弈却不知道到底是谁在跟谁博弈"。
+  const modelNameDisplay =
+    participants && participants.length > 0
+      ? participants.map((p) => p.modelName).join("、")
+      : "dynamic";
+
   return {
     id: "workflow-debate",
     role: "debate",
     stepName: ROLE_STEP_NAME.debate,
     title: node.title,
     modelId: null,
-    modelName: "dynamic",
+    modelName: modelNameDisplay,
     status: debateNodeStatus(snapshot, node),
     pinned: false,
     locked: true,
@@ -100,6 +111,9 @@ export function deriveChainNodeGraph(args: {
   chainExecutedRoles: RoleId[];
   chainSkippedRoles: RoleId[];
   chainAbortedRole: RoleId | null;
+  /** 对弈进行中的真实参与模型（useChatStream 里 buildDebateParticipants 解析完就填，
+   *  对弈结束/中止/失败清空）——没有时回退到"动态分配"占位符，见 deriveDebateNode。 */
+  debateParticipants?: { modelId: string; modelName: string }[] | null;
 }): ChainNodeGraphView {
   const leaderNode: ChainNodeView = {
     id: "main-chat",
@@ -111,7 +125,7 @@ export function deriveChainNodeGraph(args: {
     status: args.orchestration?.currentNodeId ? "done" : args.chainRunning ? "running" : "active",
     pinned: false,
   };
-  const virtualDebateNode = deriveDebateNode(args.workflowSnapshot ?? null);
+  const virtualDebateNode = deriveDebateNode(args.workflowSnapshot ?? null, args.debateParticipants);
 
   if (!args.orchestration || args.orchestration.nodes.length === 0) {
     return { nodes: virtualDebateNode ? [leaderNode, virtualDebateNode] : [leaderNode] };

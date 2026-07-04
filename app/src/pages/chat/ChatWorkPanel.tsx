@@ -6,6 +6,7 @@ import { ResizeHandle } from "@/components/ui/resize-handle";
 import { ChainNodeGraph } from "@/components/work-panel/ChainNodeGraph";
 import type { ChainNodeView } from "@/components/work-panel/derive-chain-node-graph";
 import { WorkArtifacts } from "@/components/work-panel/WorkArtifacts";
+import { DebateHistory } from "@/components/work-panel/DebateHistory";
 import type { ModelListItem } from "@/lib/api";
 import type { WorkArtifact } from "@/lib/work-artifacts";
 import { formatElapsed } from "./streaming-status";
@@ -185,6 +186,14 @@ export function ChatWorkPanel({
               </div>
             </details>
           )}
+          <details className="group">
+            <summary className="cursor-pointer list-none px-4 py-3 text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50 hover:text-foreground">
+              {t("chat.workPanel.debateHistory")}
+            </summary>
+            <div>
+              <DebateHistory availableModels={availableModels} />
+            </div>
+          </details>
           {renderTokenUsage()}
         </div>
       </aside>

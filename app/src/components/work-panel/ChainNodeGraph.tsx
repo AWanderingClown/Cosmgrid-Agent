@@ -114,7 +114,13 @@ export function ChainNodeGraph({ nodes, availableModels, disabled, onMainModelCh
                     </Select>
                   ) : (
                     <div className="mt-1 h-6 flex items-center rounded-md bg-foreground/[0.06] px-2 text-[10px] font-mono text-muted-foreground truncate">
-                      {node.locked ? t("chat.workPanel.dynamicModelPool") : node.modelId ? node.modelName : t("chat.orchestrator.receiptNoModel")}
+                      {node.locked
+                        ? node.modelName !== "dynamic"
+                          ? node.modelName
+                          : t("chat.workPanel.dynamicModelPool")
+                        : node.modelId
+                          ? node.modelName
+                          : t("chat.orchestrator.receiptNoModel")}
                     </div>
                   )}
                 </div>

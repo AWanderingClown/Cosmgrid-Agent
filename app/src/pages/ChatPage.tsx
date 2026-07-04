@@ -187,6 +187,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     cacheNotice,
     setCacheNotice,
     harnessNotice,
+    debateParticipants,
     lastUsage,
     handleStop,
   } = useChatStream({
@@ -497,6 +498,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     chainExecutedRoles,
     chainSkippedRoles,
     chainAbortedRole,
+    debateParticipants,
   }), [
     orchestration,
     selectedModelId,
@@ -507,6 +509,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     chainRunning,
     chainExecutedRoles,
     chainSkippedRoles,
+    debateParticipants,
     chainAbortedRole,
   ]);
 

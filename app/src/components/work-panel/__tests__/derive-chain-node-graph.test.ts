@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { deriveChainNodeGraph } from "../derive-chain-node-graph";
 import type { ModelListItem } from "@/lib/api";
 import type { OrchestrationState } from "@/lib/llm/orchestrator";
+import type { WorkflowSnapshot } from "@/lib/workflow/types";
 
 function model(id: string, name: string): ModelListItem {
   return {
@@ -119,5 +120,83 @@ describe("deriveChainNodeGraph", () => {
     const byRole = Object.fromEntries(graph.nodes.map((n) => [n.role, n.status]));
     expect(byRole.backend).toBe("skipped");
     expect(byRole.frontend).toBe("aborted");
+  });
+});
+
+// 2026-07-05 加：对弈进行中，"模型博弈"节点原来永远显示死板的"dynamic"占位符（渲染层转成
+// "动态分配"），看不出到底哪几个模型在博弈——这里验证真实参与者传进去后节点会显示真实模型名单。
+function debateSnapshot(): WorkflowSnapshot {
+  return {
+    version: 1,
+    runId: "run-1",
+    conversationId: "conv-1",
+    status: "running",
+    intent: {
+      objective: "优化方案",
+      requestedOutcome: "更好的方案",
+      taskKind: "analysis",
+      executionMode: "answer_only",
+      reviewRequested: false,
+      debateRequested: true,
+      verificationRequired: false,
+      securitySensitive: false,
+      needsWorkspace: false,
+      stickyUntil: [],
+    },
+    currentNodeId: "debate-1",
+    nodes: [
+      {
+        id: "debate-1",
+        phase: "debate",
+        title: "模型博弈",
+        status: "running",
+        optional: false,
+        dependsOn: [],
+        assignedRoles: [],
+        autoAdvance: "never",
+      },
+    ],
+    nextActions: [],
+    context: { projectFacts: [], changedFiles: [], riskLevel: "low" },
+  };
+}
+
+describe("deriveChainNodeGraph — 对弈节点显示真实参与者", () => {
+  it("没有传 debateParticipants 时，对弈节点 modelName 是占位符 'dynamic'", () => {
+    const graph = deriveChainNodeGraph({
+      orchestration: null,
+      workflowSnapshot: debateSnapshot(),
+      selectedModelId: "gpt-5-5",
+      selectedModelName: "GPT 5.5",
+      availableModels: models,
+      chainRunning: false,
+      chainExecutedRoles: [],
+      chainSkippedRoles: [],
+      chainAbortedRole: null,
+    });
+
+    const debateNode = graph.nodes.find((n) => n.role === "debate");
+    expect(debateNode?.modelName).toBe("dynamic");
+  });
+
+  it("传了 debateParticipants 时，对弈节点 modelName 显示真实参与模型名单", () => {
+    const graph = deriveChainNodeGraph({
+      orchestration: null,
+      workflowSnapshot: debateSnapshot(),
+      selectedModelId: "gpt-5-5",
+      selectedModelName: "GPT 5.5",
+      availableModels: models,
+      chainRunning: false,
+      chainExecutedRoles: [],
+      chainSkippedRoles: [],
+      chainAbortedRole: null,
+      debateParticipants: [
+        { modelId: "m3", modelName: "MiniMax-M3" },
+        { modelId: "opus", modelName: "Opus 4.8" },
+      ],
+    });
+
+    const debateNode = graph.nodes.find((n) => n.role === "debate");
+    expect(debateNode?.modelName).toBe("MiniMax-M3、Opus 4.8");
   });
 });

@@ -200,6 +200,10 @@ export function useChatStream(opts: UseChatStreamOptions) {
   const [switchNotice, setSwitchNotice] = useState<string | null>(null);
   const [cacheNotice, setCacheNotice] = useState<string | null>(null);
   const [harnessNotice, setHarnessNotice] = useState<string | null>(null);
+  // 2026-07-05 加：对弈进行中，右侧工作流面板的"模型博弈"节点原来一直显示死板的"动态分配"
+  // 占位符，看不出到底是哪几个模型在博弈——这里把真实参与者存出来给面板渲染。
+  // debate 结束（成功/中止/失败）在下面 finally 块里清空，不残留上一轮的参与者列表。
+  const [debateParticipants, setDebateParticipants] = useState<{ modelId: string; modelName: string }[] | null>(null);
   const [lastUsage, setLastUsage] = useState<ChatUsage | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   /** 写权限升级弹窗只在同一个会话里问一次——记已经问过（不管用户同意与否）的会话 id */
@@ -612,6 +616,12 @@ export function useChatStream(opts: UseChatStreamOptions) {
         if (participants.length === 0) {
           throw new Error(t("chat.debate.noParticipants"));
         }
+        setDebateParticipants(
+          participants.map((p) => {
+            const found = getAvailableModels().find((m) => m.id === p.modelId);
+            return { modelId: p.modelId, modelName: found?.displayName || found?.name || p.modelName };
+          }),
+        );
 
         const topic = buildDebateTopic({ messages, userMessage: userMsg });
         const result = await runDynamicDebate({ topic, participants, maxParticipants: 4, signal: controller.signal }, realRunRole);
@@ -701,6 +711,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         }
       } finally {
         setIsStreaming(false);
+        setDebateParticipants(null);
         if (abortRef.current === controller) abortRef.current = null;
       }
       return true;
@@ -1306,6 +1317,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
   return {
     abortRef,
     cacheNotice,
+    debateParticipants,
     drainingRef,
     handleSend,
     handleStop,

@@ -214,6 +214,10 @@
       "readOnlyCode": "Read-only code view",
       "artifacts": "Artifacts",
       "artifactsEmpty": "No files or commands produced yet",
+      "debateHistory": "Debate History",
+      "debateHistoryEmpty": "No debates yet",
+      "debateHistoryFinal": "Final solution",
+      "debateHistoryDeleteConfirm": "Delete this debate record? This can't be undone.",
       "files": "Files",
       "terminals": "Terminal",
       "truncated": "{{total}} lines total, showing first {{shown}}",
@@ -274,8 +278,6 @@
     "queued": "Queued",
     "inputDraftHint": "Model is replying… keep typing, messages are queued and handled in order",
     "orchestrator": {
-      "panelTitle": "Work Nodes",
-      "currentBadge": "Current",
       "roles": {
         "leader": "Leader",
         "architect": "Architect",
@@ -292,8 +294,6 @@
       "receiptReason": "Why: {{reason}}",
       "receiptNoModel": "(No usable model — configure one on the providers page)",
       "detailNodes": "Node plan",
-      "chainPlanTitle": "Chain Plan",
-      "chainPlanHint": "The system will execute roles in this order automatically, and you can abort the chain at any time.",
       "chainProgressTitle": "Chain Progress",
       "chainProgressIdle": "No chain running.",
       "chainProgressLabel": "{{done}} / {{total}}",
