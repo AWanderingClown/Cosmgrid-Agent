@@ -129,6 +129,13 @@ describe("buildChainMessages（纯函数）", () => {
     expect(msgs[0]!.content as string).toContain("本次你没有可用工具");
   });
 
+  it("system 提示含 CosmGrid 的语气规则（接力角色产出直接展示给用户，语气要跟主对话一致）", () => {
+    const msgs = buildChainMessages("frontend", "x", {
+      userTask: "x", previousOutputs: [], previousArtifactTitles: [],
+    }, true);
+    expect(msgs[0]!.content as string).toContain("不要奉承附和");
+  });
+
   it("有 previousOutputs → system 含上一角色摘要", () => {
     const msgs = buildChainMessages("frontend", "x", {
       userTask: "x",

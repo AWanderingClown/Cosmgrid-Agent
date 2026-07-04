@@ -1,7 +1,7 @@
 // ChatPage - 重构为 "Cosmic Cyber" 视觉风格
 // 阶段 7：handleSend 整套 + 流式 state + 流式计时/自动滚底/队列排空 effect 全搬到 hook C
 // ChatPage 协调层只保留 hook 组合 + handleNewChat / switchConversation / handleNodeModelChange / handleFormSubmit
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -159,6 +159,19 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
 
   // hook D：编排 + 对弈链 + 工作流快照（useReducer 重构）已上移到 hook F 之后
 
+  // 2026-07-04 加：检测到写意图但当前只读时，主动弹窗问要不要切到「确认后修改」，
+  // 而不是只插一条文字提示等用户自己去找权限切换按钮。同一会话只弹一次（useChatStream 内控制）。
+  const escalatePermission = useCallback(async () => {
+    const ok = await confirm({
+      title: t("chat.permissionEscalation.title"),
+      description: t("chat.permissionEscalation.description"),
+      confirmText: t("chat.permissionEscalation.confirmText"),
+      cancelText: t("chat.permissionEscalation.cancelText"),
+    });
+    if (ok) setPermissionMode("confirm");
+    return ok;
+  }, [confirm, setPermissionMode, t]);
+
   // hook C：流式主循环 + 队列 + handleSend 整套（5 段 helper + runBackgroundOrchestration
   // + runChainIfNeeded + handleStop + 流式计时 + 自动滚底 + 队列排空 effect）
   const {
@@ -186,6 +199,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     workspacePath,
     setWorkspacePath,
     permissionMode,
+    escalatePermission,
     setPanelOpen,
     isStreaming,
     setIsStreaming,
@@ -310,9 +324,15 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     if (isStreaming) return;
     if (!(await confirm({ description: t("chat.deleteConvConfirm"), destructive: true }))) return;
     try {
-      await dbConversations.delete(id);
-    } catch {
-      // 删库失败也继续更新 UI
+      await dbConversations.archive(id);
+    } catch (err) {
+      // 修复（2026-07-04，用户反馈"删了、重装后又出现"）：这里原来是 catch 后什么都不做、
+      // 照样把这条从 UI 列表移除——库里archive失败时 UI 却谎报"删掉了"，下次启动重新从库
+      // 读取列表，这条又出现，看起来像"诈尸"。现在库操作失败就如实告知，且不碰 UI 列表，
+      // 保证"看起来还在列表里" == "库里真的还在"，不会再有状态不一致。
+      console.error("[handleDeleteConversation] failed to archive conversation", err);
+      void alert({ description: t("chat.deleteConvFailed") });
+      return;
     }
     const remaining = conversationList.filter((c) => c.id !== id);
     if (remaining.length === 0) {

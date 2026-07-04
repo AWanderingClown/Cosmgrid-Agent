@@ -9,15 +9,24 @@ export function buildOrchestrationReceipt(args: {
   prev: OrchestrationState | null;
   reason: string;
   availableModels: ModelListItem[];
+  /**
+   * leader 角色的模型永远不接受编排系统覆盖（用户手选优先，见 orchestrator.ts 设计），
+   * 实际跑的是这个 id——回执文案必须显示它，而不是编排算出来但从不生效的 node.modelId，
+   * 否则会出现"回执说规划用了 Claude，顶部/工作面板却还是 MiniMax"这种文案跟实际执行对不上
+   * 的显示 bug（2026-07-04 修复）。
+   */
+  leaderModelId: string;
   t: TFunction;
 }): ReceiptContent | null {
-  const { change, next, prev, reason, availableModels, t } = args;
+  const { change, next, prev, reason, availableModels, leaderModelId, t } = args;
   const node = change.node;
   if (!node) return null;
   const nameOf = (id: string | null) =>
     (id ? availableModels.find((m) => m.id === id)?.displayName ?? availableModels.find((m) => m.id === id)?.name : null) ?? null;
+  const resolvedModelId = (n: { role: string; modelId: string | null }) =>
+    n.role === "leader" ? leaderModelId : n.modelId;
   const nodeLabel = t(`chat.orchestrator.roles.${node.role}`);
-  const modelName = nameOf(node.modelId) ?? t("chat.orchestrator.receiptNoModel");
+  const modelName = nameOf(resolvedModelId(node)) ?? t("chat.orchestrator.receiptNoModel");
   let summary: string;
   if (!prev) {
     summary = t("chat.orchestrator.receiptPlanned", { count: next.nodes.length, node: nodeLabel, model: modelName });
@@ -28,7 +37,7 @@ export function buildOrchestrationReceipt(args: {
   }
   const nodesList = next.nodes
     .map((n) => {
-      const mk = nameOf(n.modelId);
+      const mk = nameOf(resolvedModelId(n));
       const mark = n.id === next.currentNodeId ? "▸ " : "· ";
       return `${mark}${t(`chat.orchestrator.roles.${n.role}`)}：${n.title}${mk ? ` — ${mk}` : ""}`;
     })

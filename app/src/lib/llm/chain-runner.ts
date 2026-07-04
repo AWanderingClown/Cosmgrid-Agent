@@ -22,6 +22,7 @@
 //  - E2a 范围：纯逻辑 + ChatPage 集成层；UI 整理（进度条 + 中止按钮 + i18n）留 E2b
 
 import { streamWithFallback, type ModelEndpoint, type StreamUsage, type SwitchReason } from "./chat-fallback";
+import { COSMGRID_TONE_RULES } from "./cosmgrid-rules";
 import { pickBestModelWithPerformance } from "./model-performance-scoring";
 import { ROLE_IDS, ROLE_LABELS, ROLE_TO_WORK_ROLE, type RoleId } from "./orchestrator";
 import {
@@ -105,6 +106,8 @@ export function buildChainMessages(
 ): ChatMsg[] {
   const roleLabel = ROLE_LABELS[role];
   const sysLines: string[] = [
+    // 接力角色的产出直接展示给用户，语气要跟主对话一致（不奉承、不堆格式、中文作答等）
+    ...(COSMGRID_TONE_RULES ? [COSMGRID_TONE_RULES] : []),
     `你正在「角色团队接力」中扮演：${roleLabel}（角色 key=${role}）。`,
     `用户原始任务：${userTask}`,
     `请基于已接力角色的产出（如下），完成你的部分。`,

@@ -213,6 +213,32 @@ export async function searchAcrossProjectsHybrid(
   }
 }
 
+/**
+ * 同项目记忆检索：原来 listByProject 纯按 importance/创建时间排序，跟这轮用户问的是什么无关——
+ * 跨项目那条路早就按相关性检索了，同项目反而没做，本末倒置。这里把"跟这句话相关的记忆"
+ * （关键词 LIKE 命中）排到前面，剩余名额再用原有的 importance/时间排序补齐，
+ * 不丢"长期重要但这轮没关键词命中"的记忆。
+ */
+export async function retrieveProjectMemoriesForPrompt(
+  projectId: string,
+  userText: string,
+  options: { limit?: number } = {},
+): Promise<ProjectMemory[]> {
+  const limit = options.limit ?? 6;
+  const [relevant, all] = await Promise.all([
+    projectMemories.searchWithinProject(projectId, userText, { limit }),
+    projectMemories.listByProject(projectId),
+  ]);
+  const seen = new Set(relevant.map((m) => m.id));
+  const merged = [...relevant];
+  for (const m of all) {
+    if (merged.length >= limit) break;
+    if (seen.has(m.id)) continue;
+    merged.push(m);
+  }
+  return merged.slice(0, limit);
+}
+
 export async function retrieveCrossProjectMemoriesForPrompt(
   projectId: string,
   userText: string,

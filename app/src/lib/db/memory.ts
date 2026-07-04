@@ -106,6 +106,51 @@ export const projectMemories = {
     return rows.map(rowToProjectMemory);
   },
 
+  /**
+   * 项目内检索：跟 searchAcrossProjects 同一套关键词 LIKE 打法，只是范围收窄到单个项目、
+   * 不做跨项目分组。用于让"这句话相关的记忆"排到 listByProject（纯 importance/时间排序）前面。
+   */
+  async searchWithinProject(
+    projectId: string,
+    query: string,
+    options: { limit?: number; minImportance?: number } = {},
+  ): Promise<ProjectMemory[]> {
+    const limit = options.limit ?? 6;
+    const minImportance = Math.max(0, options.minImportance ?? 0);
+    const db = await getDb();
+    const q = query.trim();
+    if (!q) return [];
+    const tokens = Array.from(new Set(q
+      .split(/[\s,，、]+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length >= 1)
+      .slice(0, 8)));
+    if (tokens.length === 0) return [];
+
+    const params: unknown[] = [projectId];
+    const likeConditions: string[] = [];
+    tokens.forEach((tok) => {
+      const p = `$${params.length + 1}`;
+      likeConditions.push(`(title LIKE ${p} OR content LIKE ${p} OR tags LIKE ${p})`);
+      params.push(`%${tok}%`);
+    });
+    const importanceClause = minImportance > 0 ? `AND importance >= $${params.length + 1}` : "";
+    if (minImportance > 0) params.push(minImportance);
+
+    const sql = `
+      SELECT *,
+        (${likeConditions.map((c) => `CASE WHEN ${c} THEN 1 ELSE 0 END`).join(" + ")}) AS hits
+      FROM project_memories
+      WHERE project_id = $1 AND (${likeConditions.join(" OR ")})
+      ${importanceClause}
+      ORDER BY hits DESC, importance DESC, created_at DESC
+      LIMIT $${params.length + 1}
+    `;
+    params.push(limit);
+    const rows = await db.select<ProjectMemoryRow[]>(sql, params);
+    return rows.map(rowToProjectMemory);
+  },
+
   async getById(id: string): Promise<ProjectMemory | null> {
     const db = await getDb();
     const rows = await db.select<ProjectMemoryRow[]>(

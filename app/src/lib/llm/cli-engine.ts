@@ -14,7 +14,19 @@ import {
   type CliProviderType,
   type CliMessage,
 } from "./cli-protocol";
-import { COSMGRID_RULES } from "./cosmgrid-rules";
+import { COSMGRID_RULES, buildIdentityLine } from "./cosmgrid-rules";
+
+const CLI_PROVIDER_DISPLAY_NAME: Record<CliProviderType, string> = {
+  "claude-cli": "Claude",
+  "codex-cli": "Codex",
+};
+
+/** CLI 引擎的系统提示：身份陈述（driver = 实际 spawn 的 CLI + 模型名）+ 核心规则。 */
+function buildCliSystemPrompt(providerType: CliProviderType, modelName: string): string {
+  const providerLabel = CLI_PROVIDER_DISPLAY_NAME[providerType];
+  const driverLabel = modelName.trim() ? `${providerLabel}（${modelName.trim()}）` : providerLabel;
+  return `${buildIdentityLine(driverLabel)}\n\n${COSMGRID_RULES}`;
+}
 
 /** CLI 错误事件 kind（与 src-tauri/src/lib.rs CliErrorKind 对应） */
 type CliErrorKind = "spawnFailed" | "executionFailed" | "stalled";
@@ -75,15 +87,16 @@ export async function streamViaCli(
 ): Promise<CliStreamResult> {
   const program = endpoint.program?.trim() || CLI_DEFAULT_PROGRAM[endpoint.providerType];
   const prompt = buildPromptFromMessages(messages);
+  const systemPrompt = buildCliSystemPrompt(endpoint.providerType, endpoint.modelName);
   const args = options.resumeSessionId
     ? buildCliResumeArgs(
         endpoint.providerType,
         endpoint.modelName,
         options.resumeSessionId,
         options.resumePrompt ?? prompt,
-        COSMGRID_RULES,
+        systemPrompt,
       )
-    : buildCliArgs(endpoint.providerType, endpoint.modelName, prompt, COSMGRID_RULES);
+    : buildCliArgs(endpoint.providerType, endpoint.modelName, prompt, systemPrompt);
   const sessionId = newCliSessionId();
 
   let usage = { inputTokens: 0, outputTokens: 0 };

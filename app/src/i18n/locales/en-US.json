@@ -56,6 +56,7 @@
     "conversations": "Conversations",
     "renameChat": "Rename",
     "deleteConvConfirm": "Delete this conversation? This cannot be undone.",
+    "deleteConvFailed": "Delete failed — the database may be busy right now. Please try again in a moment. This conversation is still in your list, nothing was lost.",
     "loadError": "Failed to load",
     "newChatFailed": "Failed to create a new chat — the app may be running twice and locking the database. Please restart the app and try again.",
     "noCredential": "API credential not found",
@@ -72,6 +73,12 @@
     "writeGuardNotice": {
       "noWorkspace": "⚠️ This looks like a file-editing request, but no folder is bound to this chat — the AI has no read/write tools, so the reply below may just be discussion, not an actual edit. Click \"Choose Folder\" next to the input box to bind a working folder, then send this again.",
       "readOnly": "⚠️ This looks like a file-editing request, but the current permission is \"Read-only\" — the AI can look but can't change anything. If you really want it to edit files, switch the permission to \"Confirm before editing\" or \"Auto-edit\" and send this again."
+    },
+    "permissionEscalation": {
+      "title": "Switch to writable permission?",
+      "description": "Looks like you want the AI to create or edit files, but the current permission is \"Read-only\". Confirming switches to \"Confirm before editing\" — the AI can then actually write files, but will still check with you before each specific action.",
+      "confirmText": "Switch now",
+      "cancelText": "Not now"
     },
     "harnessRetry": "Possible fabrication · asking the model to self-check and redo",
       "intentNudgeRetry": "Said you'd act but didn't call any tool · asking again…",

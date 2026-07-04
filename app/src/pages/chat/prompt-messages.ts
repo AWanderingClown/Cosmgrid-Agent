@@ -12,9 +12,11 @@ export function buildChatPromptMessages(args: {
   crossProjectPreamble: string | null;
   workspacePreamble: string | null;
   tooLargeNotice: (name: string) => string;
+  /** 当前选中模型的人类可读名（如 "MiniMax-M3"），用于系统提示词里的身份陈述 */
+  modelLabel?: string | null;
 }): ChatMsg[] {
   return [
-    { role: "system", content: buildCorePreamble(args.effectiveWorkspace) },
+    { role: "system", content: buildCorePreamble(args.effectiveWorkspace, args.modelLabel) },
     { role: "system", content: buildTimePreamble() },
     ...(args.projectMemoryPreamble ? [{ role: "system" as const, content: args.projectMemoryPreamble }] : []),
     ...(args.crossProjectPreamble ? [{ role: "system" as const, content: args.crossProjectPreamble }] : []),

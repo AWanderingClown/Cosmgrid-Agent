@@ -19,7 +19,6 @@ import {
   intentLearning,
   getRoleBindingsForConversation,
   projects as dbProjects,
-  projectMemories as dbProjectMemories,
   usageEvents,
   type Conversation,
   type ToolExecutionRow,
@@ -74,7 +73,10 @@ import { applyTurnIntentDecision, completeCurrentWorkflowNode } from "@/lib/work
 import { evaluateHarness, isClean, detectIntentNoToolCall } from "@/lib/llm/harness/feedback";
 import { runChain as runChainImpl } from "@/lib/llm/chain-runner";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
-import { retrieveCrossProjectMemoriesForPrompt } from "@/lib/memory/retrieval";
+import {
+  retrieveCrossProjectMemoriesForPrompt,
+  retrieveProjectMemoriesForPrompt,
+} from "@/lib/memory/retrieval";
 import { runDynamicDebate } from "@/lib/llm/debate-engine";
 import { realRunRole } from "@/lib/llm/debate-runner";
 import { archiveDynamicDebateResult } from "@/lib/llm/debate-persistence";
@@ -114,6 +116,11 @@ export interface UseChatStreamOptions {
   workspacePath: string | null;
   setWorkspacePath: Dispatch<SetStateAction<string | null>>;
   permissionMode: "read" | "confirm" | "auto";
+  /**
+   * 检测到写意图但权限只读时，主动弹窗问用户要不要切到「确认后修改」——不传则退化成
+   * 只插一条文字提示（旧行为）。同一个会话只弹一次，见 handleSend 内 escalationPromptedRef。
+   */
+  escalatePermission?: () => Promise<boolean>;
   setPanelOpen: Dispatch<SetStateAction<boolean>>;
   // isStreaming 提到 ChatPage 顶层共享（hook C + hook E 都需要）
   isStreaming: boolean;
@@ -162,6 +169,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
     workspacePath,
     setWorkspacePath,
     permissionMode,
+    escalatePermission,
     setPanelOpen,
     isStreaming,
     setIsStreaming,
@@ -194,6 +202,8 @@ export function useChatStream(opts: UseChatStreamOptions) {
   const [harnessNotice, setHarnessNotice] = useState<string | null>(null);
   const [lastUsage, setLastUsage] = useState<ChatUsage | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** 写权限升级弹窗只在同一个会话里问一次——记已经问过（不管用户同意与否）的会话 id */
+  const escalationPromptedRef = useRef<Set<string>>(new Set());
 
   // 流式计时 effect
   useEffect(() => {
@@ -790,16 +800,9 @@ export function useChatStream(opts: UseChatStreamOptions) {
       let workspacePreamble: string | null = null;
       let projectMemoryPreamble: string | null = null;
       let crossProjectPreamble: string | null = null;
-      const includeWriteTools = shouldExposeWriteTools({
-        text,
-        permissionMode,
-        decision: cacheIntent,
-      });
+      let effectivePermissionMode = permissionMode;
 
-      if (
-        impliesWriteIntent({ text, decision: cacheIntent }) &&
-        (!effectiveWorkspace || permissionMode === "read")
-      ) {
+      const insertWriteGuardNotice = () => {
         const noticeMsg: ChatMessage = {
           id: crypto.randomUUID(),
           role: "assistant",
@@ -815,7 +818,29 @@ export function useChatStream(opts: UseChatStreamOptions) {
           if (idx === -1) return [...prev, noticeMsg];
           return [...prev.slice(0, idx), noticeMsg, ...prev.slice(idx)];
         });
+      };
+
+      if (
+        impliesWriteIntent({ text, decision: cacheIntent }) &&
+        (!effectiveWorkspace || permissionMode === "read")
+      ) {
+        const alreadyPrompted = convId ? escalationPromptedRef.current.has(convId) : true;
+        // 只在"绑了工作区 + 当前只读 + 这个会话还没问过"时主动弹窗——没绑工作区没法靠切权限解决
+        // （还得先选文件夹），问过一次就不再重复打扰，退化回旧的文字提示。
+        if (effectiveWorkspace && permissionMode === "read" && escalatePermission && !alreadyPrompted) {
+          if (convId) escalationPromptedRef.current.add(convId);
+          const escalated = await escalatePermission();
+          if (escalated) {
+            effectivePermissionMode = "confirm";
+          } else {
+            insertWriteGuardNotice();
+          }
+        } else {
+          insertWriteGuardNotice();
+        }
       }
+
+      const includeWriteTools = shouldExposeWriteTools(effectivePermissionMode);
 
       if (effectiveWorkspace) {
         const desktopPath = includeWriteTools ? await desktopDir().catch(() => null) : null;
@@ -831,7 +856,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
             // 落库时带上它，UI 侧才能按真实消息分组工具卡片，不再靠时间戳窗口瞎猜、
             // 把编排模式下其他节点的工具调用张冠李戴到这条消息上。
             messageId: assistantId,
-            confirm: permissionMode === "auto" ? async () => true : requestConfirm,
+            confirm: effectivePermissionMode === "auto" ? async () => true : requestConfirm,
             includePreamble: true,
             desktopPath,
           });
@@ -848,7 +873,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
           const [{ preamble }, project, memories] = await Promise.all([
             retrieveCrossProjectMemoriesForPrompt(currentProjectId, text),
             dbProjects.getById(currentProjectId),
-            dbProjectMemories.listByProject(currentProjectId),
+            retrieveProjectMemoriesForPrompt(currentProjectId, text),
           ]);
           if (stopIfAborted()) return;
           projectMemoryPreamble = buildProjectMemoryPreamble(project?.name, memories);
@@ -867,6 +892,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         crossProjectPreamble,
         workspacePreamble,
         tooLargeNotice,
+        modelLabel: model.displayName ?? model.name,
       });
       const compressedPrompt = applyPromptCompression({
         enabled: smart,
@@ -1103,6 +1129,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
             prev,
             reason: plan.reason,
             availableModels: getAvailableModels(),
+            leaderModelId: getSelectedModelId(),
             t,
           });
           if (receipt) {
