@@ -56,4 +56,11 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       await addColumnIfMissing(db, "tool_executions", "message_id", "TEXT");
     },
   },
+  {
+    version: "202607040002-conversation-archived-at",
+    description: "Add archived_at to conversations — delete is now soft (archive), never a real DELETE, so orphaned child rows and 'undo by reinstalling' confusion can't happen",
+    up: async (db) => {
+      await addColumnIfMissing(db, "conversations", "archived_at", "TEXT");
+    },
+  },
 ];

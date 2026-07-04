@@ -90,6 +90,7 @@ describe("initSchema", () => {
       "202607010004-semantic-cache-provider",
       "202607010005-savings-price-catalog-links",
       "202607040001-tool-execution-message-id",
+      "202607040002-conversation-archived-at",
     ]);
 
     const usageColumns = await adapter.select<Array<{ name: string }>>("PRAGMA table_info(usage_events)");
@@ -204,7 +205,7 @@ describe("conversations + 主对话", () => {
     expect(a.projectId).toBeNull();
   });
 
-  it("listMainChats 只列无项目会话 + rename/touch 排到最前 + delete 级联删消息", async () => {
+  it("listMainChats 只列无项目会话 + rename/touch 排到最前 + archive 是软删除不动消息", async () => {
     const c1 = await db.conversations.create({ title: "会话1", projectId: null });
     const c2 = await db.conversations.create({ title: "会话2", projectId: null });
     // 带项目的会话不应出现在主对话列表
@@ -222,11 +223,13 @@ describe("conversations + 主对话", () => {
     const afterRename = await db.conversations.listMainChats();
     expect(afterRename.find((c) => c.id === c1.id)!.title).toBe("会话1-改");
 
-    // delete 级联：先放条消息，删会话后消息也没了
+    // archive 是软删除：先放条消息，归档后列表里消失，但消息还在（不是真 DELETE，不会
+    // 出现"删了、重装后又出现"这种 UI 和库状态不一致的情况）
     await db.messages.create({ conversationId: c2.id, role: "user", content: "hi" });
-    await db.conversations.delete(c2.id);
+    await db.conversations.archive(c2.id);
     expect((await db.conversations.listMainChats()).some((c) => c.id === c2.id)).toBe(false);
-    expect(await db.messages.listByConversation(c2.id)).toHaveLength(0);
+    expect((await db.conversations.list()).some((c) => c.id === c2.id)).toBe(false);
+    expect(await db.messages.listByConversation(c2.id)).toHaveLength(1);
   });
 
   it("setDefaultModelId 会持久化会话默认模型", async () => {

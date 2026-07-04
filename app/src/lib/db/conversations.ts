@@ -99,7 +99,7 @@ export const conversations = {
   async list(): Promise<Conversation[]> {
     const db = await getDb();
     const rows = await db.select<ConversationRow[]>(
-      "SELECT * FROM conversations ORDER BY updated_at DESC"
+      "SELECT * FROM conversations WHERE archived_at IS NULL ORDER BY updated_at DESC"
     );
     return rows.map(mapConversation);
   },
@@ -122,7 +122,7 @@ export const conversations = {
   async getOrCreateMainChat(defaultModelId?: string | null, title = "Main Chat"): Promise<Conversation> {
     const db = await getDb();
     const rows = await db.select<ConversationRow[]>(
-      "SELECT * FROM conversations WHERE project_id IS NULL ORDER BY updated_at DESC LIMIT 1"
+      "SELECT * FROM conversations WHERE project_id IS NULL AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 1"
     );
     const r = rows[0];
     if (r) {
@@ -131,11 +131,11 @@ export const conversations = {
     return this.create({ title, defaultModelId: defaultModelId ?? null, projectId: null });
   },
 
-  // 列出全部主对话（无项目归属），最近活跃在前——ChatPage 多会话侧栏用。
+  // 列出全部主对话（无项目归属，未归档），最近活跃在前——ChatPage 多会话侧栏用。
   async listMainChats(): Promise<Conversation[]> {
     const db = await getDb();
     const rows = await db.select<ConversationRow[]>(
-      "SELECT * FROM conversations WHERE project_id IS NULL ORDER BY updated_at DESC"
+      "SELECT * FROM conversations WHERE project_id IS NULL AND archived_at IS NULL ORDER BY updated_at DESC"
     );
     return rows.map(mapConversation);
   },
@@ -161,10 +161,17 @@ export const conversations = {
     await db.execute("UPDATE conversations SET updated_at = $1 WHERE id = $2", [now(), id]);
   },
 
-  // 删除会话（messages 经 FK ON DELETE CASCADE 一并删）。
-  async delete(id: string): Promise<void> {
+  // "删除"会话：每一段对话都是用户资产（对照 opencode 的 session.time_archived 做法），
+  // 从不做真正的 DELETE——只打 archived_at 时间戳，list()/listMainChats() 按此过滤即可从
+  // 列表消失。好处：不会有"删库失败但 UI 谎报删除成功"这种状态不一致，也不需要给
+  // messages/tool_executions 等子表操心级联删除（父行始终还在，子表引用永远有效）。
+  async archive(id: string): Promise<void> {
     const db = await getDb();
-    await db.execute("DELETE FROM conversations WHERE id = $1", [id]);
+    const ts = now();
+    await db.execute(
+      "UPDATE conversations SET archived_at = $1, updated_at = $2 WHERE id = $3",
+      [ts, ts, id],
+    );
   },
 
   // 阶段 D：查单个会话（拿到 projectId，用于查模板 → 角色绑定）。没找到返 null。
