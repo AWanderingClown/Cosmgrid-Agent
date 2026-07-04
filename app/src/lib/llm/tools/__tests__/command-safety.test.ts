@@ -151,3 +151,35 @@ describe("边界", () => {
     expect(checkCommand("   ").verdict).toBe("block");
   });
 });
+
+// 2026-07-04 修复（坑.md 2.3 技术债）：逐段切分从裸正则 split 换成 shell-quote 真 token 化。
+// 这组测试专门锁定"引号内的 shell 元字符不该被当成真操作符"这个此前存在的误判场景。
+describe("引号内的 shell 元字符不应被误判为分段操作符（2026-07-04 修复）", () => {
+  it.each([
+    "git commit -m \"fix: handle && in strings\"",
+    "echo \"a && b\"",
+    "echo \"a || b\"",
+    "echo \"a ; b\"",
+    "echo \"a | b\"",
+    "git commit -m 'contains && and | chars'",
+  ])("引号内含 shell 元字符的合法命令仍应 allow：%s", (cmd) => {
+    expect(checkCommand(cmd).verdict).toBe("allow");
+  });
+
+  it("真正的 && 串联仍然逐段检查白名单（未被引号掩盖时行为不变）", () => {
+    expect(checkCommand("git status && rm -rf /").verdict).toBe("block");
+    expect(checkCommand("git status && echo done").verdict).toBe("allow");
+  });
+
+  it("引号内的 > 不应被当成真实重定向——只读判定不受影响", () => {
+    expect(isReadOnlyCommand('echo "a > b"')).toBe(true);
+  });
+
+  it("真正的 > 重定向仍然让命令非只读", () => {
+    expect(isReadOnlyCommand("echo hi > file.txt")).toBe(false);
+  });
+
+  it("firstProgram 对引号内含空格的复合命令仍取到正确的第一段程序名", () => {
+    expect(firstProgram('git commit -m "a && b"')).toBe("git");
+  });
+});

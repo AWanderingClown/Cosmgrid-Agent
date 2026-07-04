@@ -12,7 +12,6 @@ import { ensureModelLimitsLoaded } from "@/lib/llm/model-limits";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
 import { conversations as dbConversations, messages as dbMessages, toolExecutions, type Conversation } from "@/lib/db";
 import { usePermissionModeSetting } from "@/lib/app-settings";
-import { type ToolCallView } from "@/lib/work-artifact-views";
 import { enableWorkspaceProtection } from "@/lib/llm/tools/git-snapshot";
 import { getActiveAssistantModelLabel } from "@/pages/chat/streaming-status";
 import { parseOrchestration, pinModelToNode, serializeOrchestration } from "@/lib/llm/orchestrator";
@@ -21,6 +20,7 @@ import { ChatHeader } from "@/pages/chat/ChatHeader";
 import { ChatInputDock } from "@/pages/chat/ChatInputDock";
 import { ChatWorkPanel } from "@/pages/chat/ChatWorkPanel";
 import { dbMessagesToChat } from "@/pages/chat/history";
+import { deriveToolCallsByMessage } from "@/pages/chat/tool-calls-by-message";
 import { useChatAttachments } from "@/pages/chat/useChatAttachments";
 import { useChatInput } from "@/pages/chat/useChatInput";
 import { useChatStream } from "@/pages/chat/useChatStream";
@@ -456,30 +456,16 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         detailFull: "",
         createdAt: new Date().toISOString(),
         durationMs: 0,
+        messageId: null,
       }
     : latestToolCalls[latestToolCalls.length - 1];
 
-  // 把工具动作按时间归属到对应那一轮的 assistant 消息：每条消息只显示「它那一轮」干了什么，
-  // 对话流里就成了「一个节点跟着一个节点」——而不是全堆在最后一条上。
-  // 窗口 = [该 assistant 的 createdAt, 其后第一条带时间戳消息的 createdAt)。
-  const toolCallsByMessage = useMemo(() => {
-    const map = new Map<string, ToolCallView[]>();
-    for (let i = 0; i < messages.length; i++) {
-      const m = messages[i];
-      if (m.role !== "assistant" || m.kind === "receipt" || !m.createdAt) continue;
-      const start = m.createdAt;
-      let end: string | null = null;
-      for (let j = i + 1; j < messages.length; j++) {
-        const c = messages[j].createdAt;
-        if (c) { end = c; break; }
-      }
-      map.set(
-        m.id,
-        toolCallViews.filter((tc) => tc.createdAt >= start && (end === null || tc.createdAt < end)),
-      );
-    }
-    return map;
-  }, [messages, toolCallViews]);
+  // 把工具动作归属到对应那一轮的 assistant 消息（详细原理见 tool-calls-by-message.ts 头部注释：
+  // 2026-07-04 修复，优先按真实 messageId 精确归属，只有历史遗留行才退回时间戳窗口兜底）。
+  const toolCallsByMessage = useMemo(
+    () => deriveToolCallsByMessage(messages, toolCallViews),
+    [messages, toolCallViews],
+  );
 
   const chainNodeGraph = useMemo(() => deriveChainNodeGraph({
     orchestration,

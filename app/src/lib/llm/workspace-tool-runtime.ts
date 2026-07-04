@@ -7,6 +7,9 @@ export interface WorkspaceToolRuntimeOptions {
   includeWrite: boolean;
   projectId?: string;
   conversationId?: string;
+  /** 2026-07-04 修复：这次调用归属的 assistant 消息 id，透传进 ToolContext，
+   *  让工具执行审计能按真实消息分组，而不是靠时间戳窗口猜。 */
+  messageId?: string;
   confirm?: (preview: ToolConfirmRequest) => Promise<boolean>;
   blockedCommands?: string[];
   includePreamble?: boolean;
@@ -36,6 +39,7 @@ export async function prepareWorkspaceToolRuntime(
       workspacePath: options.workspacePath,
       projectId: options.projectId,
       conversationId: options.conversationId,
+      messageId: options.messageId,
       confirm: options.confirm,
       blockedCommands: options.blockedCommands,
     });

@@ -90,6 +90,10 @@ export interface ToolExecutionRow {
   id: string;
   projectId: string | null;
   conversationId: string | null;
+  /** 2026-07-04 修复：这次工具调用真实归属的那条 assistant 消息 id。
+   *  旧数据没有这一列（迁移补列后为 null）——UI 侧对 null 值仍走时间戳窗口兜底，
+   *  不强制回填，避免对历史记录做不保真的猜测性归属。 */
+  messageId: string | null;
   toolName: string;
   input: string;
   output: string;
@@ -105,6 +109,7 @@ function mapToolExecRow(r: any): ToolExecutionRow {
     id: r.id,
     projectId: r.project_id,
     conversationId: r.conversation_id,
+    messageId: r.message_id ?? null,
     toolName: r.tool_name,
     input: r.input,
     output: r.output,
@@ -120,6 +125,7 @@ export const toolExecutions = {
   async create(input: {
     projectId?: string | null;
     conversationId?: string | null;
+    messageId?: string | null;
     toolName: string;
     input: string;
     output: string;
@@ -132,11 +138,11 @@ export const toolExecutions = {
     const id = newId();
     await db.execute(
       `INSERT INTO tool_executions
-        (id, project_id, conversation_id, tool_name, input, output, status,
+        (id, project_id, conversation_id, message_id, tool_name, input, output, status,
          user_confirmed, reversible, duration_ms, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
       [
-        id, input.projectId ?? null, input.conversationId ?? null, input.toolName,
+        id, input.projectId ?? null, input.conversationId ?? null, input.messageId ?? null, input.toolName,
         input.input, input.output, input.status,
         boolToInt(input.userConfirmed ?? false), boolToInt(input.reversible ?? false),
         input.durationMs, now(),

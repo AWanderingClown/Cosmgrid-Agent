@@ -28,7 +28,7 @@ import { type ModelListItem, type CredentialListItem } from "@/lib/api";
 import { type Attachment } from "@/lib/llm/attachments";
 import { type OrchestrationState, type RoleId } from "@/lib/llm/orchestrator";
 import { type TurnIntentDecision, type WorkflowSnapshot } from "@/lib/workflow/types";
-import { type IntentExample } from "@/lib/workflow/semantic-intent-router";
+import { BUILTIN_INTENT_EXAMPLES, type IntentExample } from "@/lib/workflow/semantic-intent-router";
 import { type ToolConfirmRequest } from "@/lib/llm/tools";
 import {
   type ModelEndpoint,
@@ -69,6 +69,7 @@ import { createCodeTaskWorkflowSnapshot } from "@/lib/workflow/code-task-templat
 import { classifyTurnIntentWithJudge } from "@/lib/workflow/intent-judge";
 import { isExplicitDebateRequest } from "@/lib/workflow/intent-classifier";
 import { detectIntentCorrection, intentActionLabel } from "@/lib/workflow/intent-feedback";
+import { downweightMisjudgedExampleInDb } from "@/lib/workflow/intent-decay";
 import { applyTurnIntentDecision, completeCurrentWorkflowNode } from "@/lib/workflow/reducer";
 import { evaluateHarness, isClean, detectIntentNoToolCall } from "@/lib/llm/harness/feedback";
 import { runChain as runChainImpl } from "@/lib/llm/chain-runner";
@@ -399,6 +400,13 @@ export function useChatStream(opts: UseChatStreamOptions) {
                 source: "user_text",
                 reason: `用户明确纠正：不是${intentActionLabel(correction.predictedAction)}，而是${intentActionLabel(correction.correctedAction)}`,
               });
+              // 2026-07-04 补：降权这一半——用这次纠正之前的样例池，找出真正"投票"给
+              // 错误 action 的那条样例，权重打折（跟下面"加权"对称，形成完整闭环）。
+              const examplesBeforeCorrection = [
+                ...BUILTIN_INTENT_EXAMPLES,
+                ...(await intentLearning.listExamples({ enabledOnly: true })),
+              ];
+              await downweightMisjudgedExampleInDb(text, correction.predictedAction, examplesBeforeCorrection).catch(() => {});
               await intentLearning.upsertExample({
                 action: correction.correctedAction,
                 text,
@@ -819,6 +827,10 @@ export function useChatStream(opts: UseChatStreamOptions) {
             workspacePath: effectiveWorkspace,
             includeWrite: includeWriteTools,
             conversationId: convId ?? undefined,
+            // 2026-07-04 修复：把这一轮真正生成的 assistant 消息 id 传下去，工具执行审计
+            // 落库时带上它，UI 侧才能按真实消息分组工具卡片，不再靠时间戳窗口瞎猜、
+            // 把编排模式下其他节点的工具调用张冠李戴到这条消息上。
+            messageId: assistantId,
             confirm: permissionMode === "auto" ? async () => true : requestConfirm,
             includePreamble: true,
             desktopPath,

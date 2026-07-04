@@ -441,6 +441,7 @@ export async function initSchemaForDb(db: DatabaseLike): Promise<void> {
       id TEXT PRIMARY KEY,
       project_id TEXT,
       conversation_id TEXT,
+      message_id TEXT,
       tool_name TEXT NOT NULL,
       input TEXT NOT NULL,
       output TEXT NOT NULL,

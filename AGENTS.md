@@ -1,7 +1,9 @@
-# Cosmgrid-Agent — Codex 项目指令
+# Cosmgrid-Agent — 项目指令（Claude Code / Codex 共用，唯一正本）
+
+> 本文件是本项目唯一维护的 AI 编程助手指令，`.claude/CLAUDE.md` 只是一行导入，不要再分开改两份。
 
 ## 项目定位
-多模型 AI 编程桌面工具。跟 Codex.app Code / Codex App / OpenCode App 同一品类，差异化是"多 AI 协作 + 任务流可视化 + 对 vibe coder 友好"。
+多模型 AI 编程桌面工具。跟 Claude Code / Codex App / OpenCode App 同一品类，差异化是"多 AI 协作 + 任务流可视化 + 对 vibe coder 友好"。
 
 > ⚠️ **目标用户 = vibe coder，不是纯小白。** 懂基础概念、能自己拿到 API Key，但看不懂代码、写不出来。产品职责是"用户用大白话指挥，代码对不对由 AI 自己测、自己给结论"。文档中任何"小白"字样都指此类 vibe coder，不是"不懂 git / 命令行的纯外行"。
 
@@ -9,8 +11,8 @@
 
 **上下文 / 记忆是用户的资产，独立存在；模型 / 套餐 / app 都是围着它转、可随时热插拔的「工人」。换谁、为什么换，上下文纹丝不动。模型是临时工，上下文才是中心。**
 
-- ❌ 不是"套壳 Codex"，也不是 cc / cc switch 那种"只管切模型的开关"；✅ 是**真能陪用户把活干完的工作台**。
-- ❌ 模型中心（"我接了哪个模型"）；✅ 上下文中心。Codex 只是众多临时工之一。
+- ❌ 不是"套壳某个 AI 工具"，也不是 cc / cc switch 那种"只管切模型的开关"；✅ 是**真能陪用户把活干完的工作台**。
+- ❌ 模型中心（"我接了哪个模型"）；✅ 上下文中心。Claude / Codex / 任何模型都只是众多临时工之一。
 - **第一用户 = 作者本人**：先要他自己天天用、用得顺、真能干完活。检验任何功能的尺子：「这能让我自己工作更顺吗？不能就别做。」
 - **模型不限定**：作者实际在用大量且不固定的模型（Codex / GPT / Gemini / GLM / MiniMax / MiMo / Kimi / DeepSeek / Agnes-AI / 通义……），任何模型名都只是举例，产品支持**任意多、可自由增删**，绝不硬编码某几家。
 
@@ -23,64 +25,33 @@
 
 > 这 4 条是同一个病：上下文被锁死在「某模型 + 某套餐 + 某 app」，任何「想换」的理由都导致断片。真北就是解这个病。
 
-当前文档入口（2026-06-29 已收口，后续先读这两份）：
-- 索引：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/00-项目文档索引.md`
-- 当前事实：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/Cosmgrid-Agent-当前状态与后续路线.md`
-- 长期总方案：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/Cosmgrid-Agent-独立多模型AI工作平台完整方案.md`
+当前文档入口（2026-07-04 收口到 6 类文件，后续先读这份）：
+- 索引：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/00-项目文档索引.md`（先看这份，决定去看哪一份）
+- 长期总方案（架构文档）：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/Cosmgrid-Agent-独立多模型AI工作平台完整方案.md`——⚠️ 2026-07-04 核实后确认新旧混杂，先看文档顶部的核实结论横幅
+- 关键技术文档：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/Cosmgrid-Agent-关键技术文档.md`——每层用什么技术、完善度、参考项目对照，2026-07-04 逐代码核实，当前最准确
+- 待办清单：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/剩余问题汇总-2026-07-03.md`——唯一权威待办来源（原"当前状态与后续路线.md"已归档，别再引用那份）
 - UI 规范：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/CosmGrid-Agent-Ui.md`
 - 打开方式：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/应用打开方式.md`
 
 文档纪律：
-- 桌面不再放散落过程稿；已完成方案统一归档到 `项目文档/归档文件/`。
-- 2026-06-28/29 的冗余整理、v3/v3.1 工作面板、项目记忆语义检索、大改状态文档都已归档到 `项目文档/归档文件/2026-06-28-29-大改与文档收口/`。
-- 给用户看先看“当前状态与后续路线”；给 AI 查历史依据再进归档。
+- `项目文档/` 根目录**只保留上面 6 类文件**，其余全部归档到 `项目文档/归档文件/`，桌面不再放散落过程稿。
+- 给用户看先看"00-项目文档索引"；给 AI 查历史依据再进归档。
 - ⚠️ `项目文档/` 已在 `.gitignore`（过程文档不入版本管理，本地保留）。
+
+**文档同步纪律**（改代码时对照检查，照抄 Turborepo AGENTS.md 的做法，别只是笼统说"记得更新文档"）：
+- 改了任何一层的技术实现（LLM 接入/工具/记忆/意图判断/编排等）→ 检查 `Cosmgrid-Agent-关键技术文档.md` 对应章节的技术描述和完善度判断是不是还准。
+- 完成或新发现一项待办 → 更新 `剩余问题汇总-2026-07-03.md`，不要另开新汇总文件。
+- 产品定位/差异化策略变了 → 更新 `Cosmgrid-Agent-独立多模型AI工作平台完整方案.md` §1（其余章节已知过时，不用管）。
+- 过程稿/方案稿写完执行完 → 当天归档到 `项目文档/归档文件/`，不留在桌面或项目文档根目录。
 
 ## 进度与当前任务
 
-> ⚠️ 进度以 git 提交历史为准（本段 2026-06-22 同步到 v0.9 / v0.7.5 Stable）。
+> ⚠️ **详细当前进度、下一步优先级、非阻塞问题，一律以 `项目文档/剩余问题汇总-2026-07-03.md` 为准**（原"当前状态与后续路线.md"已于 2026-07-04 归档，不再是当前入口，别再引用它）——这里不再重复维护一份进度快照，避免两处又分叉。这里只留几条几乎不会变的稳定事实：
 
-- ✅ v0.1 数据底座
-- ✅ v0.2 多模型对话 + workRoles（API 接入页 + 对话页 + Vercel AI SDK）
-- ✅ v0.3 架构返工（Prisma + Hono server → `tauri-plugin-sql` 直连，实测可打包）+ 项目模板 / 套餐管理 + **全自动模型分配**
-- ✅ v0.4 项目工作区端到端打通
-  - ✅ v0.4.1 运行时回退链触发 + UsageEvent 落盘（修 ChatPage 切 fallback 写错 modelName 的 latent bug）
-  - ✅ v0.4.2 模型路由器 v1 规则路由（ChatPage 智能推荐按钮）
-  - ✅ v0.4.3 Token Plan 阈值提醒（`warningThresholds` 接 UI）
-  - ✅ v0.4.4 项目工作区端到端打通 + openai-compatible provider
-- ✅ v0.5 首次启动 4 步引导（OnboardingModal）+ 新建项目向导（2 步 + workspacePath）
-- ✅ v0.6 长期记忆 + RAG（项目级记忆 + 跨项目关键词检索）
-- ✅ v0.7 工具执行层 + CLI 引擎（吃订阅额度）
-  - ✅ 4a 只读工具：read / glob / grep / git-read（+ `path-safety` 路径白名单）
-  - ✅ 4b 写工具：write / edit / bash（+ `command-safety` 命令白名单 + 用户确认 + git 单文件快照回滚 + diagnostics 写后诊断）
-  - ✅ CLI 引擎：Rust `spawn_cli_stream` spawn 本机 Codex/codex，受控 env 隔离（抹掉 `ANTHROPIC_*`/`Codex` 等污染前缀），实测吃订阅 5 小时额度；abort → `kill_cli` 真 SIGKILL 子进程
-- ✅ v0.8 多模型对弈（`debate-engine`/`debate-runner`：出方案 / 反驳 / 裁判同台 + ChatPage 对话内触发 + `debate-suggester` 检测复杂问题建议升级对弈）
-- ✅ v0.9 智能省 token
-  - ✅ SmartRouter v2：按真实表现评分路由 + 决策日志（评分门槛已从 30 样本死锁修为 1 + 贝叶斯收缩，见记忆 [[v0.9-stage7-smartrouter-spec]]）
-  - ✅ 语义缓存（`semantic-cache`，默认关键词哈希 embedding，保持零成本热路径）+ 抽取式上下文压缩（`context-compressor`，零 LLM 成本）
-  - ✅ 项目记忆检索支持可选真实 embedding：设置页可选 OpenAI / OpenAI-compatible embedding 凭据，手动同步索引；聊天热路径不自动批量远程补索引
-  - ✅ StatsPage 用量统计 + 隐式反馈学习 Step B（用户换更强模型 → 给上个模型记 `switched_up` 负反馈喂回评分）
-- ✅ v0.7.5 Stable UI 美化（当前 About 页版本号）
-- ✅ 2026-06-28/29 大改收尾
-  - ✅ 冗余入口整理：项目工作区降级到设置页项目资产；对话页工作文件夹作为主入口；模板收敛到默认 8 角色；用量入口合并为用量监控。
-  - ✅ 执行确认弹窗：只做审批，只显示确认 / 取消，不展示正文、diff、命令或摘要。
-  - ✅ 工作面板 v3.1：右侧顶部多 AI 协作链独立圆角板块；右侧 IDE 内容展示独立圆角板块；历史产出折叠保留；新建对话清空旧工作面板状态。
-  - ✅ 左侧步骤卡：工具执行在对话区显示简短步骤，内容放右侧工作面板。
-  - ✅ 验证：TypeScript、相关测试（823 tests）、前端 build、Tauri build 均通过；安装包已生成到桌面。
-
-### 🔜 下一步（2026-06-29，按「当前状态与后续路线」校准）
-
-v0.7-v0.9 主线和 2026-06-28/29 大改都已落地。下一步以 `项目文档/Cosmgrid-Agent-当前状态与后续路线.md` 为准：
-- **第一梯队**：真实安装试用 + 截图复核；左侧步骤卡展开详情从 JSON 改成人能看懂的简要结果。
-- **第二梯队**：价格表版本管理；再决定是否实现可追溯“省钱统计”。
-- **第三梯队**：真 embedding 已先以“项目记忆可选远程向量 + 手动索引同步”落地；后续只剩包体积 / 动态导入优化与实际模型效果调参。
-- **明确不做**：可编辑 IDE、bash terminal 混入代码 tab、技能市场、未实现公式却宣传“省钱”。
-- **已知安全债（2026-06-30 代码实测复核）**：
-  - ✅ ① API Key 已从 `cosmgrid-keys.json` 明文 JSON 迁到系统凭据库（Rust `keyring`：macOS Keychain / Windows Credential Manager / Linux Secret Service）。[keystore.ts](app/src/lib/keystore.ts) 保留旧文件只读迁移逻辑：写入 keychain 并校验成功后删除旧条目。
-  - ✅ ② [App.tsx](app/src/App.tsx) `dbError` 故障页已正常渲染（`if (dbError)` 出图标+错误详情+reload 按钮），不再被吞
-  - ✅ ③ SettingsPage「管理数据库」按钮已整个移除，`manageDb` i18n key 成孤儿（定义了无人引用），按钮债不存在
-  - ✅ ④ 根目录 `vite_ssr_*.mjs` 调试垃圾已清空
-  - **真现状：4 条全清，无阻塞安全债。** 下次若再写「已知债」，必须先 grep/Read 代码复核再落笔，避免文档过期骗自己
+- 大版本线：v0.1 数据底座 → v0.2 多模型对话 → v0.3 架构返工（`tauri-plugin-sql`）→ v0.4 项目工作区 → v0.5 首次启动引导 → v0.6 长期记忆/RAG → v0.7 工具执行层/CLI 引擎 → v0.8 多模型对弈 → v0.9 智能省 token → 2026-06-28/29 大改（收敛为"以对话页为中心，工作文件夹绑定对话，右侧工作面板展示执行"）。全部已完成，具体子项和后续每轮进展见上面那份当前状态文档。
+- 多模型对弈（debate）已经是**对话内触发**（`ChatPage` 里嵌，`debate-engine`/`debate-runner`/`debate-suggester`），不是独立页面——早期做过独立 `DebatePage`，已被删除（commit `447d9e0`），别再往"要不要做 DebatePage"方向想。
+- API Key 已从明文 JSON 迁移到**系统凭据库**（Rust `keyring`：macOS Keychain / Windows Credential Manager / Linux Secret Service），`keystore.ts` 只保留旧 `cosmgrid-keys.json` 的只读迁移逻辑（迁移成功即删旧条目）。2026-07-04 复核 `Cargo.toml`（`keyring = "4.1.2"`）和 `keystore.ts`（`invoke("save_api_key"...)`）确认属实，无阻塞安全债。
+- 测试覆盖率门槛：**80%**（`vitest.config.ts`：lines/functions/statements 80，branches 75）——不是 90%，别把别处看到的数字抄过来。
 
 ### ⚠️ 架构返工（v0.3，✅ 已完成，保留作技术坑记录）
 
@@ -89,13 +60,8 @@ v0.1/v0.2 用的「Prisma + 内嵌 Hono(Node) server」有**打包死局**：Pri
 返工方案（已用 `spike-tauri-sql/` 实测打包成 4.8MB dmg 并读写落盘通过）：
 - 数据库：Prisma → **`tauri-plugin-sql`**（底层 Rust sqlx，前端纯 TS，不写 Rust 业务逻辑）
 - 架构：去掉 Hono server（3001 端口），前端经插件直连 SQLite
-- API Key：明文传 + 假加密 → **系统凭据库**（Rust `keyring`，不入 SQLite 明文；旧 `cosmgrid-keys.json` 只作为升级迁移来源，迁移成功后逐条删除）。
+- API Key：明文传 + 假加密 → **系统凭据库**（Rust `keyring`，不入 SQLite 明文；旧 `cosmgrid-keys.json` 只作为升级迁移来源，迁移成功后逐条删除）
 - 完成后**必须真跑 `pnpm tauri build` 验证产物可用**，不能只验 dev
-
-### v0.3 验收标准
-- `tauri build` 产出可双击运行的桌面 App，数据库读写落盘
-- API Key 不入 SQLite 明文（走系统凭据库；旧 `plugin-store` 文件只读迁移）
-- tsc 通过、pnpm test 通过、覆盖率 ≥ 80%（✅ 2026-06-27 已达标：vitest **747 测试全过**（55 文件 / 13.9s），行 89% / 语句 87% / 分支 77% / 函数 87%，四阈值全过。db.ts 补了 node:sqlite 真跑集成测试 [db.integration.test.ts](app/src/lib/__tests__/db.integration.test.ts)，从 34% 提到 88%）
 
 ## 技术栈（v0.1 必须用）
 
@@ -109,7 +75,7 @@ v0.1/v0.2 用的「Prisma + 内嵌 Hono(Node) server」有**打包死局**：Pri
 
 **package.json 起步**：直接抄 CC Switch 的依赖列表（路径 `/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/技术参考/cc-switch-main/package.json`）
 
-## 数据表（v0.1 起 14 张，随 v0.6-v0.9 增至 20 张；2026-06-22 删死表 conversation_model_snapshots 后 **19 张**；建表 DDL 全在 [db.ts](app/src/lib/db.ts) `initSchema()`）
+## 数据表（核心 13 张 + v0.6+ 新增 6 张 = 共 **19 张**；2026-06-22 删死表 conversation_model_snapshots；建表 DDL 已拆分到 `app/src/lib/db/schema.ts`，不再是单一 `db.ts` 里的 `initSchema()`）
 
 **资源层（4）**：providers / api_credentials / token_plans / models
 **模板层（2）**：project_templates / project_template_roles
@@ -118,7 +84,7 @@ v0.1/v0.2 用的「Prisma + 内嵌 Hono(Node) server」有**打包死局**：Pri
 **统计层（1）**：usage_events（字段也是 `projectId`）
 **v0.6+ 新增（6）**：project_memories（长期记忆/RAG）/ model_performance_stats（SmartRouter 数据源）/ semantic_cache（语义缓存）/ debate_sessions（多模型对弈）/ tool_executions（工具执行审计）/ workspace_configs（工作区配置）
 
-核心 14 张的完整字段定义见方案文档第 9 节；v0.6+ 6 张以 db.ts 的 DDL 为准。
+核心 13 张的完整字段定义见方案文档第 9 节；v0.6+ 6 张以 `app/src/lib/db/schema.ts` 的 DDL 为准。
 
 ## 借鉴项目（v0.1 主要）
 
@@ -149,19 +115,21 @@ v0.1/v0.2 用的「Prisma + 内嵌 Hono(Node) server」有**打包死局**：Pri
 6. ~~创建 `prisma/schema.prisma`~~（已废弃，改为 `src/lib/db.ts` 里的 `CREATE TABLE` DDL）
 7. ~~`pnpm prisma migrate dev` 生成数据库~~（已废弃，改为 `initSchema()` 启动时建表）
 8. 写 CRUD 函数（资源层 + 模板层 + 任务层的基础增删改查，直接在 `src/lib/db.ts` 里写，不经 server）
-9. 写单测（参考规则 80% 覆盖率）
+9. 写单测（覆盖率门槛见 `app/vitest.config.ts`，当前 80%）
 10. `pnpm tsc` + `pnpm test` 验证通过
 11. `pnpm tauri dev` 验证开发环境跑通 + **必须再跑一次 `pnpm tauri build` 验证打包产物**
 
 ## 工作纪律
 
-参考父级 `~/.Codex/AGENTS.md` 的所有规则，特别是：
-- "行动项必须现在就做或明确说先不做，禁止'以后做'"
-- "派完并行 agent 必须立刻用 TaskOutput 查所有状态"
-- "推荐工具前先 `ls ~/.Codex/{skills,agents,hooks}/` 看现状"
-- "用户不懂技术，回答优先大白话 + 类比"
-- "修改代码前必须先理解完整业务流程，先问流程、画数据流"
-- "Bug 修复要先确认问题根源再改代码"
+通用工作方式（怎么派 agent、怎么验证、怎么跟用户沟通等）由全局配置统一管理（Claude Code 走 `~/.claude/CLAUDE.md` + `~/.claude/rules/zh/`；Codex 走对应的全局配置），本文件不重复罗列，避免和全局内容脱节。这里只保留本项目专属的规则（见下面"文档冲突点"和"沟通风格"）。
+
+### 别把代码堆回大文件（防止 ChatPage.tsx / db.ts 回潮）
+
+这不是抽象原则，是这个项目真实撞过的坑：`ChatPage.tsx` 曾经涨到 1944 行、`db.ts` 曾经是 4000+ 行的单体文件，都是靠专门一轮重构才拆掉的（分别拆成 `app/src/pages/chat/` 下 7 个职责单一的 hook、`app/src/lib/db/` 下 12 个领域文件）。加新功能时：
+
+- **不要**往 `ChatPage.tsx`、`db.ts`、`chat-fallback.ts`、`orchestrator.ts` 这类已经拆过一轮或体量较大的文件里继续堆新逻辑——新状态/新流程优先建新 hook 或新模块，参照 `app/src/pages/chat/useChatStream.ts` 这类"单一职责"的现成范例。
+- **不要**新造一个跟已有工具/领域文件功能重叠的平行实现——新表的 CRUD 放进 `app/src/lib/db/` 对应领域文件（或新建一个），不要退回到往 `db.ts` 本体里加函数。
+- 单文件超过 800 行就是危险信号（跟全局 `coding-style.md` 的"文件聚焦 <800 行"一致），发现时应该主动提出拆分，不用等用户要求。
 
 ## 文档冲突点（重要！v0.1 实施时要避开）
 

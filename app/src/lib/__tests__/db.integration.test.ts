@@ -89,6 +89,7 @@ describe("initSchema", () => {
       "202607010003-usage-event-routing-pricing",
       "202607010004-semantic-cache-provider",
       "202607010005-savings-price-catalog-links",
+      "202607040001-tool-execution-message-id",
     ]);
 
     const usageColumns = await adapter.select<Array<{ name: string }>>("PRAGMA table_info(usage_events)");

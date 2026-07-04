@@ -49,4 +49,11 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       await addColumnIfMissing(db, "savings_events", "baseline_price_catalog_id", "TEXT");
     },
   },
+  {
+    version: "202607040001-tool-execution-message-id",
+    description: "Add message_id to tool_executions so UI can attribute a tool call to its exact message instead of guessing by timestamp window",
+    up: async (db) => {
+      await addColumnIfMissing(db, "tool_executions", "message_id", "TEXT");
+    },
+  },
 ];

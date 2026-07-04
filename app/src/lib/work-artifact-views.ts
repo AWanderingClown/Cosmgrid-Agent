@@ -20,6 +20,11 @@ export interface ToolCallView {
    * - undefined → 该工具无快照概念（read/glob/grep/git_read 等只读工具）
    */
   reversible?: boolean;
+  /**
+   * 2026-07-04 修复：这次工具调用真实归属的 assistant 消息 id。
+   * null = 迁移前的历史记录（当时没有这一列），UI 侧对这些行退回时间戳窗口兜底归属。
+   */
+  messageId: string | null;
 }
 
 function safeParseJson(input: string): Record<string, unknown> {
@@ -133,6 +138,8 @@ export function deriveToolCallViews(rows: ToolExecutionRow[]): ToolCallView[] {
       durationMs: row.durationMs,
       // 2.1 修复：把 row.reversible 透传到 UI（write/edit 工具的成功结果才有值）
       reversible: row.reversible,
+      // 2026-07-04 修复：透传真实 messageId，替代时间戳窗口猜测归属
+      messageId: row.messageId,
     };
   });
 }

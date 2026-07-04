@@ -43,6 +43,7 @@ export async function executeTool(
     await toolExecutions.create({
       projectId: ctx.projectId ?? null,
       conversationId: ctx.conversationId ?? null,
+      messageId: ctx.messageId ?? null,
       toolName: tool.name,
       input: JSON.stringify(rawInput),
       output: truncate(result.output),

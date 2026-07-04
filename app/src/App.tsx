@@ -114,6 +114,8 @@ function App() {
     void loadPlansWithRecordedUsage().then(setPlans);
     void import("@/lib/llm/price-catalog").then((m) => m.syncModelPrices());
     void import("@/lib/memory/retrieval").then((m) => m.backfillProjectMemoryVectors({ limit: 120 })).catch(() => {});
+    // 2026-07-04 补：意图样例"长期不用衰减"——启动时跑一次，跟其他后台维护任务同级别
+    void import("@/lib/workflow/intent-decay").then((m) => m.decayStaleIntentExamples()).catch(() => {});
     const id = setInterval(() => {
       void loadPlansWithRecordedUsage().then(setPlans);
     }, 60_000);

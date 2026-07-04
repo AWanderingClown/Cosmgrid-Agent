@@ -7,6 +7,7 @@ function row(over: Partial<ToolExecutionRow>): ToolExecutionRow {
     id: "r1",
     projectId: null,
     conversationId: "c1",
+    messageId: null,
     toolName: "read",
     input: "{}",
     output: "",

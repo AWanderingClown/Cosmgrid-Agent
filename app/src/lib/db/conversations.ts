@@ -551,6 +551,24 @@ export const intentLearning = {
     );
     return rows.map(mapIntentFeedbackEventRow);
   },
+
+  // 2026-07-04 补：阶段3自我成长闭环的"降权"这一半（此前只有"纠正后加权"）。
+  // 误判降权（导致一次错误判断的样例，权重打折）+ 长期不用衰减两条路径共用这两个方法。
+  async updateExampleWeight(id: string, weight: number): Promise<void> {
+    const db = await getDb();
+    await db.execute(
+      "UPDATE intent_examples SET weight = $1, updated_at = $2 WHERE id = $3",
+      [weight, now(), id],
+    );
+  },
+
+  async setExampleEnabled(id: string, enabled: boolean): Promise<void> {
+    const db = await getDb();
+    await db.execute(
+      "UPDATE intent_examples SET enabled = $1, updated_at = $2 WHERE id = $3",
+      [boolToInt(enabled), now(), id],
+    );
+  },
 };
 
 export const messages = {
