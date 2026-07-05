@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-init-shadow-git-repo"
+description = "Enables the init_shadow_git_repo command without any pre-configured scope."
+commands.allow = ["init_shadow_git_repo"]
+
+[[permission]]
+identifier = "deny-init-shadow-git-repo"
+description = "Denies the init_shadow_git_repo command without any pre-configured scope."
+commands.deny = ["init_shadow_git_repo"]
