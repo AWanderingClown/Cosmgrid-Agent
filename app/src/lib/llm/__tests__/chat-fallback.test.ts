@@ -490,6 +490,19 @@ describe("streamWithFallback - cooldown 行为", () => {
     await streamWithFallback([primary, fallback], [{ role: "user", content: "x" }], cbs);
     expect(isInCooldown(primary.modelId)).toBe(true);
   });
+
+  // 真实事故（2026-07-05）：链上所有模型都在冷却中时，之前抛的是一句生硬英文
+  // "All models are cooling down — please try again later"，用户不知道具体哪个模型、
+  // 还要等多久。现在报错里要带上每个模型的显示名 + 剩余分钟，交给 error-classifier.ts 翻译。
+  it("链上所有模型都在冷却中 → 抛错带上每个模型的名字和剩余分钟数", async () => {
+    markModelFailed(primary.modelId);
+    markModelFailed(fallback.modelId);
+    const cbs: StreamCallbacks = { onDelta: () => {} };
+
+    await expect(streamWithFallback([primary, fallback], [{ role: "user", content: "x" }], cbs)).rejects.toThrow(
+      /All models are cooling down: Primary（还需 \d+ 分钟）、Fallback（还需 \d+ 分钟）/,
+    );
+  });
 });
 
 describe("streamWithFallback - abort 处理", () => {
@@ -576,6 +589,34 @@ describe("streamWithFallback - 内置 recordUsageEvent（修 ChatPage 写错 mod
     const call = vi.mocked(recordUsageEvent).mock.calls[0]?.[0];
     expect(call).toBeDefined();
     expect(call).not.toHaveProperty("projectId");
+  });
+});
+
+describe("streamWithFallback - toolChoice（harness nudge 逼真调用工具）", () => {
+  it("传了 tools 但不传 toolChoice → 默认 auto", async () => {
+    mocks.streamText.mockReturnValueOnce(makeSuccessStream(["ok"]));
+    const cbs: StreamCallbacks = { onDelta: () => {} };
+    await streamWithFallback([primary], [{ role: "user", content: "x" }], cbs, {
+      tools: {} as never,
+    });
+    expect(mocks.streamText.mock.calls[0]![0]).toMatchObject({ toolChoice: "auto" });
+  });
+
+  it("nudge 重答时传 toolChoice:'required' → 原样透传给 streamText（不是文字提醒，是 API 层锁死）", async () => {
+    mocks.streamText.mockReturnValueOnce(makeSuccessStream(["ok"]));
+    const cbs: StreamCallbacks = { onDelta: () => {} };
+    await streamWithFallback([primary], [{ role: "user", content: "x" }], cbs, {
+      tools: {} as never,
+      toolChoice: "required",
+    });
+    expect(mocks.streamText.mock.calls[0]![0]).toMatchObject({ toolChoice: "required" });
+  });
+
+  it("不传 tools 时不传 toolChoice 给 streamText（没工具的场景不该出现这个字段）", async () => {
+    mocks.streamText.mockReturnValueOnce(makeSuccessStream(["ok"]));
+    const cbs: StreamCallbacks = { onDelta: () => {} };
+    await streamWithFallback([primary], [{ role: "user", content: "x" }], cbs);
+    expect(mocks.streamText.mock.calls[0]![0]).not.toHaveProperty("toolChoice");
   });
 });
 

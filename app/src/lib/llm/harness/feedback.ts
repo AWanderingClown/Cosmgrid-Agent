@@ -110,9 +110,15 @@ export function buildCorrectionPrompt(v: HarnessVerdict, opts: { hasTools: boole
  */
 const INTENT_NO_TOOL_RE = /(我先|让我(?:们)?|我来|我们)\s*(?:去)?\s*(?:看|看看|读取?|处理|查(?:看)?|打开|改(?:写|变|一下)?|写(?:下)?|跑(?:一下)?|执行|做(?:一下)?|弄|调(?:整|试)?|修复|删(?:除)?|添加|创建|新建)/;
 
+// 补（2026-07-04）：真实事故——模型说"好，再试一次。"/"再发一次"，不带"我先/让我"这类
+// 前缀词，INTENT_NO_TOOL_RE 完全漏检，导致这句空手套白狼的话直接放行给用户，
+// 下一轮模型还会照着这句瞎话去脑补"上一轮做了什么"（编出根本没发生过的错误细节）。
+// 单独补一条"重试语气但没提到具体新动作"的信号——「再/重新」+「试/发/跑/请求/执行/来」+「一次/一遍」。
+const RETRY_NO_TOOL_RE = /(再|重新)\s*(试|发|跑|请求|执行|来)\s*(一次|一遍)?/;
+
 export function detectIntentNoToolCall(content: string): boolean {
   if (!content) return false;
-  return INTENT_NO_TOOL_RE.test(content);
+  return INTENT_NO_TOOL_RE.test(content) || RETRY_NO_TOOL_RE.test(content);
 }
 
 /**

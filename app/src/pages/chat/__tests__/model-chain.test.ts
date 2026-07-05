@@ -107,4 +107,27 @@ describe("buildMainChatModelChain", () => {
     expect(chain).toHaveLength(1);
     expect(chain[0]?.workingDirectory).toBe("/repo");
   });
+
+  // 真实事故（2026-07-05）：纯净单模型模式自己的文档写的是"排查单模型对话本身是否
+  // 正常工作"，但这里之前不认 pureMode，出错还是会偷偷建故障转移链换模型——跟开关
+  // 自己的承诺矛盾。修法：pureMode=true 时只留 primary，不建任何备用候选。
+  it("pureMode=true 时只留 primary，不建故障转移链（哪怕有可用的备用模型）", async () => {
+    const primary = model("primary", "p1", "openai");
+    const fallback = model("fallback", "p2", "openai");
+    const chain = await buildMainChatModelChain({
+      primaryModel: primary,
+      primaryCredential: credential("c1", "p1", "openai"),
+      primaryApiKey: "primary-key",
+      primaryIsCli: false,
+      availableModels: [primary, fallback],
+      credentials: [credential("c1", "p1", "openai"), credential("c2", "p2", "openai")],
+      effectiveWorkspace: null,
+      getApiKey: async (id) => (id === "c2" ? "fallback-key" : null),
+      stopIfAborted: () => false,
+      toEndpoint,
+      pureMode: true,
+    });
+
+    expect(chain.map((e) => e.modelId)).toEqual(["primary"]);
+  });
 });

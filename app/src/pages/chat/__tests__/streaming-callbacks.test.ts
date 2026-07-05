@@ -98,4 +98,31 @@ describe("createStreamingTurnCallbacks", () => {
       usage: lastUsage,
     });
   });
+
+  // 真实事故（2026-07-05）：onSwitched 的第三个参数 reason 之前被 (_from, to) 解构直接丢掉，
+  // 导致工作面板不管真实原因是什么，一律显示写死的"限额自动切换"——用户所有 provider
+  // 都有额度，却每次都被告知"限额"。这里锁住 reason 必须真实存进消息，不能再丢。
+  it("真实切换原因（非 cooldown）也要存进消息，不能被丢掉", () => {
+    const state = createStreamingTurnState("model-a");
+    const harness = createMessageHarness();
+    const callbacks = createStreamingTurnCallbacks({
+      assistantId: "assistant-1",
+      controller: new AbortController(),
+      state,
+      t,
+      setMessages: harness.setMessages,
+      setSwitchNotice: () => {},
+      setLastUsage: () => {},
+    });
+
+    callbacks.onSwitched?.(endpoint("model-a"), endpoint("model-b", "kimi-k2", "Kimi K2"), {
+      kind: "error",
+      category: "timeout",
+    });
+
+    expect(harness.messages[0]).toMatchObject({
+      switched: true,
+      switchReason: { kind: "error", category: "timeout" },
+    });
+  });
 });

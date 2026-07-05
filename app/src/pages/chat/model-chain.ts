@@ -16,12 +16,17 @@ export async function buildMainChatModelChain(args: {
   getApiKey: (credentialId: string) => Promise<string | null>;
   stopIfAborted: () => boolean;
   toEndpoint?: typeof toModelEndpoint;
+  /** 纯净单模型模式：只留你选的这一个模型，出错直接报错，不建故障转移链。
+   *  开关自己的说明写的是"排查单模型对话本身是否正常工作"——如果这里还偷偷建了
+   *  故障转移链、出错时换成别的模型，排查对象已经不是"单模型"了，跟开关的承诺矛盾。 */
+  pureMode?: boolean;
 }): Promise<ModelEndpoint[]> {
   const toEndpoint = args.toEndpoint ?? toModelEndpoint;
   const primary = toEndpoint(args.primaryModel, args.primaryCredential, args.primaryApiKey);
   if (args.primaryIsCli && args.effectiveWorkspace) primary.workingDirectory = args.effectiveWorkspace;
 
   const chain = [primary];
+  if (args.pureMode) return chain;
   const hasImageChain = args.attachments?.some((a) => a.kind === "image") ?? false;
 
   for (const cand of rankFallbackModels(args.primaryModel, args.availableModels, "main_chat")) {

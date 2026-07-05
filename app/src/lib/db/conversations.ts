@@ -54,6 +54,7 @@ export interface MessageRow {
   chain_step_total: number | null;
   chain_done: number | null;
   kind: string | null;
+  tool_call_count: number | null;
   created_at: string;
 }
 
@@ -72,6 +73,8 @@ export interface DbMessage {
   chainStepTotal?: number | null;
   chainDone?: boolean | null;
   kind?: string | null;
+  /** 本轮真实工具调用次数；null = 未记录（旧数据/不适用），非工具场景不应据此判断 */
+  toolCallCount?: number | null;
   createdAt: string;
 }
 
@@ -91,6 +94,7 @@ function mapMessageRow(r: MessageRow): DbMessage {
     chainStepTotal: r.chain_step_total,
     chainDone: r.chain_done === null ? null : r.chain_done === 1,
     kind: r.kind,
+    toolCallCount: r.tool_call_count,
     createdAt: r.created_at,
   };
 }
@@ -602,6 +606,7 @@ export const messages = {
     chainStepTotal?: number | null;
     chainDone?: boolean | null;
     kind?: string | null;
+    toolCallCount?: number | null;
   }): Promise<DbMessage> {
     const db = await getDb();
     const id = newId();
@@ -609,8 +614,8 @@ export const messages = {
     await db.execute(
       `INSERT INTO messages
         (id, conversation_id, role, content, model_id, input_tokens, output_tokens, cost, attachments,
-         actor_role, chain_step_index, chain_step_total, chain_done, kind, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+         actor_role, chain_step_index, chain_step_total, chain_done, kind, tool_call_count, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [
         id,
         input.conversationId,
@@ -626,6 +631,7 @@ export const messages = {
         input.chainStepTotal ?? null,
         input.chainDone === undefined || input.chainDone === null ? null : boolToInt(input.chainDone),
         input.kind ?? null,
+        input.toolCallCount ?? null,
         ts,
       ]
     );

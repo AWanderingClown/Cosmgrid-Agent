@@ -14,6 +14,17 @@ import type { ChatMessage } from "./types";
 
 const WorkPanelIde = lazy(() => import("@/components/work-panel/WorkPanelIde").then((m) => ({ default: m.WorkPanelIde })));
 
+// 真实事故（2026-07-05）：这里之前不管切换的真实原因是什么，一律显示写死的
+// "限额自动切换"（workPanel.switchedNote）——用户所有 provider 都有额度，却每次
+// 切换都被告知"限额"，完全是误导。真实原因（SwitchReason）其实一直有数据，只是
+// onSwitched 回调把它丢了。现在按真实 kind/category 映射到具体文案。
+function switchReasonKey(reason: ChatMessage["switchReason"]): string {
+  if (!reason) return "unknown";
+  if (reason.kind === "cooldown") return "cooldown";
+  if (reason.kind === "recovery") return "recovery";
+  return reason.category;
+}
+
 interface ChatWorkPanelProps {
   width: number;
   onResizeMouseDown: (event: MouseEvent) => void;
@@ -75,7 +86,9 @@ export function ChatWorkPanel({
           <span className="truncate">{m.modelLabel ?? "-"}</span>
         </div>
         {m.switched && (
-          <div className="text-[10px] text-accent/80">{t("chat.workPanel.switchedNote")}</div>
+          <div className="text-[10px] text-accent/80">
+            {t(`chat.workPanel.switchReason.${switchReasonKey(m.switchReason)}`)}
+          </div>
         )}
         {m.usage && (
           <div className="flex gap-3 font-mono text-[10px] text-muted-foreground/60">

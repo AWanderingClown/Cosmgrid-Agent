@@ -16,6 +16,14 @@ describe("COSMGRID_TONE_RULES（从 CosmGrid.md 摘取的'怎么说话'一段）
   });
 });
 
+describe("COSMGRID_RULES（怎么干活：说了要做就必须真调用工具）", () => {
+  // 对齐 OpenCode 等成熟项目的做法（system prompt 硬约束防"嘴炮"，而非只靠运行时检测），
+  // 见 harness-nudge-toolchoice-required 记忆。
+  it("包含'打算做≠做完了'的硬约束", () => {
+    expect(COSMGRID_RULES).toContain("等于没做");
+  });
+});
+
 describe("buildIdentityLine", () => {
   it("不传 driverLabel 时不含'当前由...驱动'", () => {
     expect(buildIdentityLine()).not.toContain("驱动");

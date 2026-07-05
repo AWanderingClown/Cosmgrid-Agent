@@ -21,7 +21,7 @@ import { streamText, stepCountIs, type ToolSet, type ModelMessage } from "ai";
 import { cliSessions } from "../db";
 import { getLanguageModel } from "./provider-factory";
 import { classifyLlmError, type LlmErrorCategory } from "./error-classifier";
-import { isInCooldown, markModelFailed, markModelSucceeded } from "./model-cooldown";
+import { isInCooldown, markModelFailed, markModelSucceeded, getCooldownRemainingMs } from "./model-cooldown";
 import { recordUsageEvent, type RecordUsageParams } from "./usage-tracker";
 import { isCliProviderType, type CliMessage } from "./cli-protocol";
 import { streamViaCli } from "./cli-engine";
@@ -206,6 +206,10 @@ export async function streamWithFallback(
     tools?: ToolSet;
     /** 工具调用最大步数（防死循环），默认 8 */
     maxToolSteps?: number;
+    /** 强制本轮必须真调用工具（"required"）。用于 harness nudge 重答——模型上一次
+     *  嘴上说了要做却 0 工具调用，文字提醒不够硬，直接在 API 层锁死它这次必须调用，
+     *  不给它继续嘴炮的选项。不传 = "auto"（照常自行判断）。 */
+    toolChoice?: "auto" | "required";
     /** 单次回答的最大输出 token。不传则用 DEFAULT_MAX_OUTPUT_TOKENS。
      *  关键：很多 OpenAI 兼容端点（MiniMax 等）不传 max_tokens 时默认值很小，
      *  推理型模型会把预算花在 <think> 上、正文没写完就被截断 → 必须显式给足。 */
@@ -239,7 +243,17 @@ export async function streamWithFallback(
     startIdx++;
   }
   if (startIdx >= models.length) {
-    throw new Error("All models are cooling down — please try again later");
+    // 修复（2026-07-05）：之前这里直接抛裸英文 Error，classifyLlmError 认不出来只能落进
+    // "unknown"兜底——用户只看到一句生硬的英文提示，不知道具体是哪几个模型在冷却、还要
+    // 等多久，也不知道重启 app 能立即清空（冷却状态只在内存里，见 model-cooldown.ts）。
+    // 这里把每个模型的剩余冷却时间拼进消息，error-classifier.ts 按前缀识别后原样透出。
+    const detail = models
+      .map((m) => {
+        const mins = Math.max(1, Math.ceil(getCooldownRemainingMs(m.modelId) / 60_000));
+        return `${m.displayLabel ?? m.modelName}（还需 ${mins} 分钟）`;
+      })
+      .join("、");
+    throw new Error(`All models are cooling down: ${detail}`);
   }
 
   async function runAttempt(
@@ -405,6 +419,7 @@ export async function streamWithFallback(
         maxRetries: 3,
         ...(options.tools ? {
           tools: options.tools,
+          toolChoice: options.toolChoice ?? "auto",
           stopWhen: stepCountIs(options.maxToolSteps ?? 8),
           onStepFinish: (event) => {
             const calls = (event.toolCalls ?? []) as { toolName: string; input: unknown }[];

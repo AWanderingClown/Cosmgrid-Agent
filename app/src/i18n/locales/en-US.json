@@ -182,7 +182,23 @@
       "showMoreTurns": "Show {{count}} more",
       "primary": "Primary",
       "fallback": "Fallback",
-      "switchedNote": "Auto-switched on limit",
+      "switchReason": {
+        "auth_invalid": "Switched: auth failed",
+        "auth_forbidden": "Switched: forbidden",
+        "rate_limit": "Switched: quota limit",
+        "timeout": "Switched: timeout",
+        "network": "Switched: network error",
+        "web_content_unavailable": "Switched: page fetch failed",
+        "context_overflow": "Switched: context overflow",
+        "model_not_found": "Switched: model offline",
+        "server_error": "Switched: server error",
+        "cli_not_installed": "Switched: CLI not installed",
+        "cli_not_logged_in": "Switched: CLI not logged in",
+        "tool_budget_exhausted": "Switched: step budget exceeded",
+        "unknown": "Switched: unknown error",
+        "cooldown": "Skipped: prior model cooling down",
+        "recovery": "Auto handoff: abnormal finish"
+      },
       "inTokens": "In",
       "outTokens": "Out",
       "currentActivity": "Current Activity",
@@ -714,7 +730,7 @@
     "pureMode": {
       "title": "Pure Single-Model Mode",
       "toggleTitle": "Debug: single-model chat only",
-      "toggleDesc": "When on, it skips the intent judge, background auto-orchestration/model switching, auto debate triggering, semantic cache, project memory retrieval, and the self-check retry loop — leaving only the most basic path: send a message, get a reply from the model you picked. Use it to check whether single-model chat itself works. Doesn't affect other settings; toggle off anytime."
+      "toggleDesc": "When on, it skips the intent judge, background auto-orchestration/model switching, auto debate triggering, semantic cache, project memory retrieval, the self-check retry loop, and failover to backup models on error — leaving only the most basic path: send a message, get a reply from the model you picked, and a real error if it fails (no silent model swap). Use it to check whether single-model chat itself works. Doesn't affect other settings; toggle off anytime."
     },
     "memoryEmbedding": {
       "title": "Cross-Project Memory Search",

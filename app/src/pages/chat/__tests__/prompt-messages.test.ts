@@ -47,4 +47,67 @@ describe("buildChatPromptMessages", () => {
     expect(prompt.some((m) => textContent(m.content).includes("图片"))).toBe(true);
     expect(prompt.some((m) => textContent(m.content).includes("没有接入任何工具"))).toBe(false);
   });
+
+  // 真实事故（2026-07-04）：模型上一轮回复"好，再试一次。"但 0 次真实工具调用，
+  // 下一轮完全没有依据判断"上一轮到底做了什么"，只能瞎编。见 prompt-messages.ts
+  // 的 buildLastTurnNoToolReminder。
+  it("上一条 assistant 消息像重试意图但 toolCallCount=0 → 插入系统提醒", () => {
+    const messages: ChatMessage[] = [
+      { id: "user-1", role: "user", content: "看一下这个网站" },
+      { id: "assistant-1", role: "assistant", content: "好，再试一次。", toolCallCount: 0 },
+      { id: "user-2", role: "user", content: "？" },
+    ];
+
+    const prompt = buildChatPromptMessages({
+      messages,
+      effectiveWorkspace: "/repo",
+      primaryIsCli: false,
+      projectMemoryPreamble: null,
+      crossProjectPreamble: null,
+      workspacePreamble: null,
+      tooLargeNotice: (name) => `${name} 太大`,
+    });
+
+    expect(prompt.some((m) => m.role === "system" && textContent(m.content).includes("0 次真实工具调用"))).toBe(true);
+  });
+
+  it("上一条 assistant 消息 toolCallCount 未记录（undefined）→ 不插入提醒（漏报优于误报）", () => {
+    const messages: ChatMessage[] = [
+      { id: "user-1", role: "user", content: "看一下这个网站" },
+      { id: "assistant-1", role: "assistant", content: "好，再试一次。" },
+      { id: "user-2", role: "user", content: "？" },
+    ];
+
+    const prompt = buildChatPromptMessages({
+      messages,
+      effectiveWorkspace: "/repo",
+      primaryIsCli: false,
+      projectMemoryPreamble: null,
+      crossProjectPreamble: null,
+      workspacePreamble: null,
+      tooLargeNotice: (name) => `${name} 太大`,
+    });
+
+    expect(prompt.some((m) => m.role === "system" && textContent(m.content).includes("0 次真实工具调用"))).toBe(false);
+  });
+
+  it("上一条 assistant 消息真有工具调用（toolCallCount>0）→ 不插入提醒", () => {
+    const messages: ChatMessage[] = [
+      { id: "user-1", role: "user", content: "看一下这个网站" },
+      { id: "assistant-1", role: "assistant", content: "好，再试一次。", toolCallCount: 2 },
+      { id: "user-2", role: "user", content: "？" },
+    ];
+
+    const prompt = buildChatPromptMessages({
+      messages,
+      effectiveWorkspace: "/repo",
+      primaryIsCli: false,
+      projectMemoryPreamble: null,
+      crossProjectPreamble: null,
+      workspacePreamble: null,
+      tooLargeNotice: (name) => `${name} 太大`,
+    });
+
+    expect(prompt.some((m) => m.role === "system" && textContent(m.content).includes("0 次真实工具调用"))).toBe(false);
+  });
 });

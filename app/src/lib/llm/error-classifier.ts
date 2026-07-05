@@ -42,6 +42,11 @@ export type LlmErrorCategory =
   // 之前没有任何分类规则命中，落进 unknown 变成"对话失败，请稍后重试"——这句话具有
   // 误导性，暗示重试能解决，但如果是任务太复杂/多步预算不够，原样重试大概率还会再撞上。
   | "tool_budget_exhausted"
+  // 修复（2026-07-05，用户实测发现）：链上所有模型都在失败冷却中时 chat-fallback.ts
+  // 抛的裸英文 Error（"All models are cooling down: ..."），之前落进 unknown，用户只看到
+  // 一句生硬英文，不知道具体哪几个模型、还要等多久，也不知道重启 app 能立即清空冷却
+  // （冷却状态只在内存里，见 model-cooldown.ts）。
+  | "all_models_cooling"
   | "unknown"; // 其他
 
 /**
@@ -475,6 +480,23 @@ export function classifyLlmError(
       userMessage: msg("网络连接失败，请检查网络或 Base URL 配置", "errorClassifier.network"),
       technicalMessage: sanitized,
       shouldFallback: true,
+    };
+  }
+
+  // 修复（2026-07-05）：链上所有模型都在冷却中时的裸错误，见 chat-fallback.ts。
+  // detail 部分（冒号后面）在抛错时已经拼好了中文"模型名（还需 N 分钟）"，这里原样透出，
+  // 不重新解析——两边约定好格式即可，不用把冷却状态结构穿两遍。
+  if (lower.startsWith("all models are cooling down")) {
+    // 注意：detail 里含运行时才知道的模型名/剩余分钟，天生没法走 msg() 那套"静态 zh
+    // 兜底 + i18n key"模式（key 查回来的是写死的静态文案，会把这些动态信息盖掉）——
+    // 这里直接拼接返回，不接 t()。
+    const detail = rawMessage.slice(rawMessage.indexOf(":") + 1).trim();
+    return {
+      category: "all_models_cooling",
+      httpStatus: 503,
+      userMessage: `所有可用模型目前都在冷却中：${detail}。重启应用可立即清空冷却状态后重试，或稍等冷却结束`,
+      technicalMessage: sanitized,
+      shouldFallback: false,
     };
   }
 

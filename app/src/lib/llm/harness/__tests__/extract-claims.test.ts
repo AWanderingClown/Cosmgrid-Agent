@@ -37,4 +37,16 @@ describe("extractFilePaths（语境提取——只在读取动词后抓带扩展
   it("伪工具 JSON 里的路径不在 claim 抓（由 detect-pseudo-tools 管）", () => {
     expect(extractFilePaths('<run_command>{"command":"cat /Users/x/AGENTS.md"}</run_command>')).toEqual([]);
   });
+
+  // 真实事故（2026-07-05）：模型说"反推自 agent-commerce.js 真实代码"编了一整套没读过的
+  // 内容，之前完全没被抓到——两个漏洞都补了：
+  it("「反推自 X」这类逆向分析用语也算声称读过（之前只认'读取了'）", () => {
+    expect(extractFilePaths("OKX.AI 接单注册流程（反推自 agent-commerce.js 真实代码）")).toContain(
+      "agent-commerce.js",
+    );
+  });
+
+  it("bare 文件名（没有目录前缀）在读取动词后也要抓（之前要求至少一段目录/前缀）", () => {
+    expect(extractFilePaths("我读取了 package.json 的内容")).toContain("package.json");
+  });
 });

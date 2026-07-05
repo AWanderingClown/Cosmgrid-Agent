@@ -43,8 +43,10 @@ export function useSmartRoutingSetting(): [boolean, (on: boolean) => void] {
 
 /**
  * 纯净单模型模式（调试用）：关掉意图裁判、后台编排自动切模型、对弈自动触发、
- * 语义缓存、项目记忆检索、harness 自查重答闭环——只留"发消息→选中模型直接回复"这一条最基础的链路。
- * 用于排查"单模型对话本身是否正常工作"时把其余耦合层全部隔离掉。默认关（不影响现有行为）。
+ * 语义缓存、项目记忆检索、harness 自查重答闭环、**出错故障转移到备用模型**——
+ * 只留"发消息→选中模型直接回复"这一条最基础的链路，出错就直接报错。
+ * 用于排查"单模型对话本身是否正常工作"时把其余耦合层全部隔离掉——如果出错还偷偷换成
+ * 别的模型接着答，排查对象就已经不是"单模型"了。默认关（不影响现有行为）。
  */
 export function isPureSingleModelModeEnabled(): boolean {
   if (!hasLocalStorage()) return false;

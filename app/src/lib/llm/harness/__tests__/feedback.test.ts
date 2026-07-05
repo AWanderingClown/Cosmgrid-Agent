@@ -90,6 +90,18 @@ describe("detectIntentNoToolCall（阶段 H：有意图无工具调用）", () =
   it("【边界】'我看看' 无完整触发词 → 不触发（漏报 OK，漏报优于误报）", () => {
     expect(detectIntentNoToolCall("我看看")).toBe(false);
   });
+
+  // 真实事故补测（2026-07-04）：模型说"再试一次"/"再发一次"完全不带"我先/让我"前缀，
+  // 原正则漏检，导致这句空手套白狼直接放行——见 feedback.ts 里 RETRY_NO_TOOL_RE 的注释。
+  it("【触发】好，再试一次。（无'我先/让我'前缀的重试语气）", () => {
+    expect(detectIntentNoToolCall("好，再试一次。")).toBe(true);
+  });
+  it("【触发】我这边上一轮发请求好像没返回，再发一次。", () => {
+    expect(detectIntentNoToolCall("我这边上一轮发请求好像没返回，再发一次。")).toBe(true);
+  });
+  it("【触发】重新试一下", () => {
+    expect(detectIntentNoToolCall("重新试一下")).toBe(true);
+  });
 });
 
 describe("buildIntentNudgePrompt（阶段 H：nudge 重答话术）", () => {

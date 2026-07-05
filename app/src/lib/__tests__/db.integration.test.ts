@@ -91,6 +91,7 @@ describe("initSchema", () => {
       "202607010005-savings-price-catalog-links",
       "202607040001-tool-execution-message-id",
       "202607040002-conversation-archived-at",
+      "202607040003-message-tool-call-count",
     ]);
 
     const usageColumns = await adapter.select<Array<{ name: string }>>("PRAGMA table_info(usage_events)");
@@ -100,7 +101,7 @@ describe("initSchema", () => {
 
     const messageColumns = await adapter.select<Array<{ name: string }>>("PRAGMA table_info(messages)");
     expect(messageColumns.map((c) => c.name)).toEqual(
-      expect.arrayContaining(["actor_role", "chain_step_index", "chain_step_total", "chain_done", "kind"]),
+      expect.arrayContaining(["actor_role", "chain_step_index", "chain_step_total", "chain_done", "kind", "tool_call_count"]),
     );
   });
 });

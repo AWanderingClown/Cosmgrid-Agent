@@ -373,6 +373,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         modelId: string | null,
         usage?: { inputTokens: number; outputTokens: number },
         kind?: ChatMessage["kind"],
+        toolCallCount?: number | null,
       ) => {
         if (!convId || !content) return;
         void dbMessages
@@ -384,6 +385,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
             inputTokens: usage?.inputTokens ?? 0,
             outputTokens: usage?.outputTokens ?? 0,
             kind: kind && kind !== "chat" ? kind : null,
+            toolCallCount: toolCallCount ?? null,
           })
           .catch(() => {});
       };
@@ -800,6 +802,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
           effectiveWorkspace,
           getApiKey,
           stopIfAborted,
+          pureMode,
         });
       } catch (err) {
         setStreamError(err instanceof Error ? err.message : t("chat.constructError"));
@@ -919,6 +922,9 @@ export function useChatStream(opts: UseChatStreamOptions) {
       const streamingState = createStreamingTurnState(model.id);
       let convo = outgoing;
       let finalContent = "";
+      // nudge 重答（模型嘴上说要做但 0 工具调用）文字提醒不够硬——模型可能继续嘴炮。
+      // 命中 nudge 后，下一次尝试直接在 API 层锁死 toolChoice:"required"，不给它选择。
+      let forceToolChoiceRequired = false;
       try {
         for (let attempt = 0; ; attempt++) {
           streamingState.fullContent = "";
@@ -946,7 +952,9 @@ export function useChatStream(opts: UseChatStreamOptions) {
               actorRole,
               ...(routingDecision ? { routingDecision } : {}),
               ...(compressionStats ? { compressionStats } : {}),
-              ...(tools ? { tools, maxToolSteps: 12 } : {}),
+              ...(tools
+                ? { tools, maxToolSteps: 12, ...(forceToolChoiceRequired ? { toolChoice: "required" as const } : {}) }
+                : {}),
             },
           );
           streamingState.lastResultModelId = result.usedModelId;
@@ -972,6 +980,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
           });
           if (retryDecision.shouldRetry) {
             setHarnessNotice(retryDecision.notice === "harness" ? t("chat.harnessRetry") : t("chat.intentNudgeRetry"));
+            forceToolChoiceRequired = retryDecision.notice === "nudge";
             convo = [
               ...convo,
               { role: "assistant" as const, content: streamingState.fullContent },
@@ -992,7 +1001,16 @@ export function useChatStream(opts: UseChatStreamOptions) {
           break;
         }
         finalContent = streamingState.fullContent;
-        prep.persistAssistant(streamingState.fullContent, streamingState.lastModelId, streamingState.lastUsage);
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantId ? { ...m, toolCallCount: streamingState.lastToolCallCount } : m)),
+        );
+        prep.persistAssistant(
+          streamingState.fullContent,
+          streamingState.lastModelId,
+          streamingState.lastUsage,
+          undefined,
+          streamingState.lastToolCallCount,
+        );
         if (convId && shouldCompleteWorkflowNode && turnWorkflowSnapshot && turnWorkflowRunId && streamingState.fullContent && !controller.signal.aborted) {
           try {
             const nextWorkflow = completeCurrentWorkflowNode({
@@ -1030,7 +1048,17 @@ export function useChatStream(opts: UseChatStreamOptions) {
           }
           return;
         }
-        setStreamError(classifyLlmError(err, t).userMessage);
+        // 修复（2026-07-05）：unknown/tool_budget_exhausted 落到这一步时，userMessage 本身
+        // 信息量很低（"对话失败，请稍后重试"），而 technicalMessage 早就算出来了却被扔掉——
+        // 用户看到空话，连自己是撞了哪种真实错误都无从判断。这两类无信息量兜底才追加技术详情，
+        // 其余分类（auth_invalid/rate_limit 等）userMessage 已经讲清楚原因，不需要再堆技术文本。
+        const classified = classifyLlmError(err, t);
+        const lowInfo = classified.category === "unknown" || classified.category === "tool_budget_exhausted";
+        setStreamError(
+          lowInfo && classified.technicalMessage
+            ? `${classified.userMessage}（${classified.technicalMessage}）`
+            : classified.userMessage,
+        );
         setMessages((prev) => prev.filter((m) => m.id !== assistantId || m.content !== ""));
       } finally {
         setIsStreaming(false);

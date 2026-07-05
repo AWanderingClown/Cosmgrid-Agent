@@ -63,4 +63,12 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       await addColumnIfMissing(db, "conversations", "archived_at", "TEXT");
     },
   },
+  {
+    version: "202607040003-message-tool-call-count",
+    description:
+      "Add tool_call_count to messages so the next turn can be told 'your last reply made 0 real tool calls' instead of letting the model guess (and confabulate) what it actually did",
+    up: async (db) => {
+      await addColumnIfMissing(db, "messages", "tool_call_count", "INTEGER");
+    },
+  },
 ];

@@ -182,7 +182,23 @@
       "showMoreTurns": "展开其余 {{count}} 条",
       "primary": "首选",
       "fallback": "故障切换",
-      "switchedNote": "限额自动切换",
+      "switchReason": {
+        "auth_invalid": "鉴权失败切换",
+        "auth_forbidden": "权限不足切换",
+        "rate_limit": "限额自动切换",
+        "timeout": "超时自动切换",
+        "network": "网络故障切换",
+        "web_content_unavailable": "网页读取失败切换",
+        "context_overflow": "上下文超限切换",
+        "model_not_found": "模型下线切换",
+        "server_error": "服务故障切换",
+        "cli_not_installed": "CLI 未安装切换",
+        "cli_not_logged_in": "CLI 未登录切换",
+        "tool_budget_exhausted": "步骤预算超限切换",
+        "unknown": "未知错误切换",
+        "cooldown": "上一模型冷却中，已跳过",
+        "recovery": "响应异常，自动接力"
+      },
       "inTokens": "输入",
       "outTokens": "输出",
       "currentActivity": "当前活动",
@@ -714,7 +730,7 @@
     "pureMode": {
       "title": "纯净单模型模式",
       "toggleTitle": "调试用：只留单模型对话",
-      "toggleDesc": "开启后会跳过意图裁判、后台自动编排/切模型、对弈自动触发、语义缓存、项目记忆检索和自查重答闭环，只保留「发消息 → 你选的模型直接回复」这条最基础的链路。用于排查单模型对话本身是否正常，不影响其他设置，随时可关。"
+      "toggleDesc": "开启后会跳过意图裁判、后台自动编排/切模型、对弈自动触发、语义缓存、项目记忆检索、自查重答闭环，以及出错故障转移到备用模型，只保留「发消息 → 你选的模型直接回复」这条最基础的链路——出错就直接报错，不会偷偷换成别的模型。用于排查单模型对话本身是否正常，不影响其他设置，随时可关。"
     },
     "memoryEmbedding": {
       "title": "跨项目记忆检索",

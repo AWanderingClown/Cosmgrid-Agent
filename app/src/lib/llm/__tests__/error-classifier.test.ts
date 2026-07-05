@@ -121,6 +121,19 @@ describe("classifyLlmError", () => {
     expect(result.category).toBe("tool_budget_exhausted");
     expect(result.shouldFallback).toBe(false);
   });
+
+  // 真实事故（2026-07-05，用户实测发现）：链上所有模型都在冷却中时的裸错误，之前落进
+  // unknown，用户只看到一句生硬英文，不知道哪几个模型、还要等多久、也不知道重启能清空。
+  it("全员冷却（chat-fallback.ts 裸错误）→ all_models_cooling，带上具体模型和剩余时间", () => {
+    const result = classifyLlmError(
+      new Error("All models are cooling down: MiniMax-M3（还需 4 分钟）、agnes-2.0-flash（还需 12 分钟）"),
+    );
+    expect(result.category).toBe("all_models_cooling");
+    expect(result.shouldFallback).toBe(false);
+    expect(result.userMessage).toContain("MiniMax-M3（还需 4 分钟）");
+    expect(result.userMessage).toContain("agnes-2.0-flash（还需 12 分钟）");
+    expect(result.userMessage).toContain("重启应用");
+  });
 });
 
 // ============ 1.2 修复：provider 专属规则匹配（国产 provider 中文错误体）============

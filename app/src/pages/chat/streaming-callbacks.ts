@@ -38,13 +38,13 @@ export function createStreamingTurnCallbacks(args: {
         prev.map((m) => (m.id === args.assistantId ? { ...m, content: args.state.fullContent } : m)),
       );
     },
-    onSwitched: (_from, to) => {
+    onSwitched: (_from, to, reason) => {
       const label = to.displayLabel ?? to.modelName;
       args.setSwitchNotice(args.t("chat.switchedTo", { name: label }));
       args.setMessages((prev) =>
         prev.map((m) =>
           m.id === args.assistantId
-            ? { ...m, switched: true, switchedTo: label, modelLabel: label }
+            ? { ...m, switched: true, switchedTo: label, modelLabel: label, switchReason: reason }
             : m,
         ),
       );

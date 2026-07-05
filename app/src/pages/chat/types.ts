@@ -1,5 +1,6 @@
 import type { Attachment } from "@/lib/llm/attachments";
 import type { RoleId } from "@/lib/llm/orchestrator";
+import type { SwitchReason } from "@/lib/llm/chat-fallback";
 
 export interface HarnessWarning {
   unverifiedPaths: string[];
@@ -19,6 +20,8 @@ export interface ChatMessage {
   modelLabel?: string;
   switched?: boolean;
   switchedTo?: string;
+  /** 真实切换原因（错误分类/冷却中/异常恢复）；工作面板据此显示具体原因，不能瞎猜成"限额" */
+  switchReason?: SwitchReason;
   usage?: { inputTokens: number; outputTokens: number };
   kind?: "chat" | "receipt" | "system-notice";
   receipt?: ReceiptContent;
@@ -27,6 +30,8 @@ export interface ChatMessage {
   roleId?: RoleId;
   chainStep?: { index: number; total: number };
   chainDone?: boolean;
+  /** 本轮真实工具调用次数；undefined = 未记录，不能据此判断 */
+  toolCallCount?: number | null;
 }
 
 export type PendingSend = { text: string; attachments?: Attachment[] };
