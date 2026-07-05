@@ -732,6 +732,18 @@
       "toggleTitle": "调试用：只留单模型对话",
       "toggleDesc": "开启后会跳过意图裁判、后台自动编排/切模型、对弈自动触发、语义缓存、项目记忆检索、自查重答闭环，以及出错故障转移到备用模型，只保留「发消息 → 你选的模型直接回复」这条最基础的链路——出错就直接报错，不会偷偷换成别的模型。用于排查单模型对话本身是否正常，不影响其他设置，随时可关。"
     },
+    "webSearch": {
+      "title": "网页搜索",
+      "desc": "配置后 AI 才能使用 web_search 工具在公网搜索（不知道具体网址时用这个；已知网址直接抓取用 web_fetch，不需要配置）。后端用 Tavily，免费额度约每月1000次请求。",
+      "apiKeyLabel": "Tavily API Key",
+      "apiKeyPlaceholder": "tvly-xxxxxxxxxxxxxxxx",
+      "save": "保存",
+      "clear": "清除",
+      "configured": "已配置",
+      "notConfigured": "未配置",
+      "saved": "已保存",
+      "cleared": "已清除"
+    },
     "memoryEmbedding": {
       "title": "跨项目记忆检索",
       "modeTitle": "AI怎么找到相关记忆",

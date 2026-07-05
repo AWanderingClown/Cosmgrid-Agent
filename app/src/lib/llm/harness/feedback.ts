@@ -12,6 +12,7 @@
 import { extractFilePaths } from "./extract-claims";
 import { verifyFileClaims, unverifiedClaims } from "./verify-claims";
 import { detectPseudoToolCalls } from "./detect-pseudo-tools";
+import { detectFabricatedUsageCount } from "./detect-usage-narration";
 import type { ReadRecord } from "./verify-claims";
 
 export interface HarnessVerdict {
@@ -19,24 +20,32 @@ export interface HarnessVerdict {
   unverifiedPaths: string[];
   /** 模型在正文里吐的伪工具名（run_command 等），未真实执行 */
   pseudoToolNames: string[];
+  /** 模型声称的工具/命令使用次数超过本轮真实 toolCallCount——数字化的编造信号，无此类声称则为 null */
+  fabricatedUsageCount?: number | null;
 }
 
 /**
- * 评估一条 assistant 回答：声称读的文件有没有真读、有没有吐伪工具调用。
- * 纯函数——readRecords 由调用方从 tool_executions 查好传进来。
+ * 评估一条 assistant 回答：声称读的文件有没有真读、有没有吐伪工具调用、有没有编造使用次数。
+ * 纯函数——readRecords 由调用方从 tool_executions 查好传进来；actualToolCallCount 默认 0
+ * （不传时按"本轮没有真实工具调用"的最严格口径判定，向后兼容旧调用点）。
  */
-export function evaluateHarness(content: string, readRecords: ReadRecord[]): HarnessVerdict {
+export function evaluateHarness(
+  content: string,
+  readRecords: ReadRecord[],
+  actualToolCallCount = 0,
+): HarnessVerdict {
   const claimed = extractFilePaths(content);
   const unverifiedPaths = unverifiedClaims(verifyFileClaims(claimed, readRecords)).map((c) => c.claimed);
   const pseudoToolNames = [
     ...new Set(detectPseudoToolCalls(content).map((p) => p.toolName).filter((n): n is string => !!n)),
   ];
-  return { unverifiedPaths, pseudoToolNames };
+  const fabricatedUsageCount = detectFabricatedUsageCount(content, actualToolCallCount);
+  return { unverifiedPaths, pseudoToolNames, fabricatedUsageCount };
 }
 
 /** verdict 是否干净（没检测到任何违规）。干净 = 不需要标黄、不需要重答。 */
 export function isClean(v: HarnessVerdict): boolean {
-  return v.unverifiedPaths.length === 0 && v.pseudoToolNames.length === 0;
+  return v.unverifiedPaths.length === 0 && v.pseudoToolNames.length === 0 && !v.fabricatedUsageCount;
 }
 
 /**
@@ -67,6 +76,15 @@ export function buildCorrectionPrompt(v: HarnessVerdict, opts: { hasTools: boole
       opts.hasTools
         ? "  请改用系统提供的标准工具调用（结构化 tool_call），不要在正文里写工具调用格式的文本。"
         : "  本次你没有任何可用工具。请**不要再输出任何工具调用格式的文本**，用纯文字回答，或直说这件事你做不了。",
+    );
+  }
+
+  if (v.fabricatedUsageCount) {
+    lines.push(
+      `- 你在正文里声称跑了/用了 ${v.fabricatedUsageCount} 次工具或命令，但本轮真实的工具调用次数没有这么多——这段"执行过程"是编造的。`,
+    );
+    lines.push(
+      "  请如实说明本轮实际做了什么：没有真实执行就不要报具体次数、编号、结果；如果这件事本来就做不到，直接说做不到。",
     );
   }
 

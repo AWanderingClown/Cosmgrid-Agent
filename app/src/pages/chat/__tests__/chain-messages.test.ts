@@ -97,6 +97,7 @@ describe("chain message helpers", () => {
     expect(withWarnings[0]?.harness).toEqual({
       unverifiedPaths: ["src/App.tsx"],
       pseudoToolNames: ["build"],
+      fabricatedUsageCount: null,
     });
     expect(withWarnings[1]).not.toHaveProperty("harness");
   });

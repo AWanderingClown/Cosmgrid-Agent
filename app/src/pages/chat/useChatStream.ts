@@ -28,7 +28,7 @@ import { type Attachment } from "@/lib/llm/attachments";
 import { type OrchestrationState, type RoleId } from "@/lib/llm/orchestrator";
 import { type TurnIntentDecision, type WorkflowSnapshot } from "@/lib/workflow/types";
 import { BUILTIN_INTENT_EXAMPLES, type IntentExample } from "@/lib/workflow/semantic-intent-router";
-import { type ToolConfirmRequest } from "@/lib/llm/tools";
+import { type ToolConfirmRequest, type AskUserRequest } from "@/lib/llm/tools";
 import {
   type ModelEndpoint,
   type StreamUsage,
@@ -141,6 +141,7 @@ export interface UseChatStreamOptions {
   // hook E (work panel)
   applyToolExecutionRows: (rows: ToolExecutionRow[]) => void;
   requestConfirm: (req: ToolConfirmRequest) => Promise<boolean>;
+  requestAskUser: (req: AskUserRequest) => Promise<string>;
 
   // hook F + 顶层 ref
   scrollRef: RefObject<HTMLDivElement | null>;
@@ -185,6 +186,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
     chainAbortRef,
     applyToolExecutionRows,
     requestConfirm,
+    requestAskUser,
     scrollRef,
     stickToBottomRef,
     pendingRoutingDecisionRef,
@@ -233,6 +235,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
     convId: string | null,
     content: string,
     sinceIso: string | null,
+    actualToolCallCount = 0,
   ) {
     if (!convId || !content.trim()) return null;
     try {
@@ -240,7 +243,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
       applyToolExecutionRows(all);
       // filterReadRecordsSince 静态导入
       const readRecords = filterReadRecordsSince(all, sinceIso);
-      return evaluateHarness(content, readRecords);
+      return evaluateHarness(content, readRecords, actualToolCallCount);
     } catch {
       return null;
     }
@@ -626,7 +629,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         );
 
         const topic = buildDebateTopic({ messages, userMessage: userMsg });
-        const result = await runDynamicDebate({ topic, participants, maxParticipants: 4, signal: controller.signal }, realRunRole);
+        const result = await runDynamicDebate({ topic, participants, maxParticipants: 4, maxIterations: 2, signal: controller.signal }, realRunRole);
         const nameFor = (modelId: string) => {
           const found = getAvailableModels().find((m) => m.id === modelId);
           return found?.displayName || found?.name || modelId;
@@ -871,6 +874,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
             // 把编排模式下其他节点的工具调用张冠李戴到这条消息上。
             messageId: assistantId,
             confirm: effectivePermissionMode === "auto" ? async () => true : requestConfirm,
+            askUser: requestAskUser,
             includePreamble: true,
             desktopPath,
           });
@@ -878,6 +882,19 @@ export function useChatStream(opts: UseChatStreamOptions) {
           tools = runtime.tools;
           workspacePreamble = runtime.workspacePreamble;
         }
+      } else if (!primaryIsCli) {
+        // 2026-07-05 修复：没绑工作区时，文件/命令类工具确实没有根目录可用，但 web_fetch（联网）
+        // 和 remember（记忆）不依赖 workspacePath，不该被"没绑文件夹"连坐一起消失——
+        // 纯聊天模式下模型也该能上网查资料。CLI 引擎走自己的真实工具，不需要这条兜底。
+        const runtime = await prepareWorkspaceToolRuntime({
+          includeWrite: false,
+          conversationId: convId ?? undefined,
+          messageId: assistantId,
+          confirm: effectivePermissionMode === "auto" ? async () => true : requestConfirm,
+          askUser: requestAskUser,
+        });
+        if (stopIfAborted()) return;
+        tools = runtime.tools;
       }
 
       const currentProjectId =
@@ -960,7 +977,12 @@ export function useChatStream(opts: UseChatStreamOptions) {
           streamingState.lastResultModelId = result.usedModelId;
           if (controller.signal.aborted) break;
 
-          const verdict = await evalHarnessForConversation(convId, streamingState.fullContent, turnStartedAt);
+          const verdict = await evalHarnessForConversation(
+            convId,
+            streamingState.fullContent,
+            turnStartedAt,
+            streamingState.lastToolCallCount,
+          );
           const harnessDirty = !!(verdict && !isClean(verdict));
           const nudgeNeeded =
             !harnessDirty &&
@@ -993,7 +1015,14 @@ export function useChatStream(opts: UseChatStreamOptions) {
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantId
-                  ? { ...m, harness: { unverifiedPaths: verdict!.unverifiedPaths, pseudoToolNames: verdict!.pseudoToolNames } }
+                  ? {
+                      ...m,
+                      harness: {
+                        unverifiedPaths: verdict!.unverifiedPaths,
+                        pseudoToolNames: verdict!.pseudoToolNames,
+                        fabricatedUsageCount: verdict!.fabricatedUsageCount ?? null,
+                      },
+                    }
                   : m,
               ),
             );
@@ -1227,8 +1256,8 @@ export function useChatStream(opts: UseChatStreamOptions) {
           models: endpoints,
           tools: args.tools,
           conversationId: args.conversationId,
-          harnessCheck: async ({ content, startedAt }) => {
-            return evalHarnessForConversation(args.conversationId, content, startedAt);
+          harnessCheck: async ({ content, startedAt, toolCallCount }) => {
+            return evalHarnessForConversation(args.conversationId, content, startedAt, toolCallCount);
           },
           callbacks: {
             onChainStart: (total) => {

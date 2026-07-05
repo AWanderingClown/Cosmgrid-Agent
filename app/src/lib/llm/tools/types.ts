@@ -22,6 +22,20 @@ export interface ToolContext {
   confirm?: (preview: ToolConfirmRequest) => Promise<boolean>;
   /** 项目自定义的命令黑名单前缀（bash 工具用，叠加在内置危险拦截之上） */
   blockedCommands?: string[];
+  /** ask_user_question 工具用：向用户提一个结构化问题，返回用户选中的 label 文本 */
+  askUser?: (request: AskUserRequest) => Promise<string>;
+}
+
+/** 结构化追问用户时的一个候选选项 */
+export interface AskUserOption {
+  label: string;
+  description?: string;
+}
+
+/** ask_user_question 工具的提问请求 */
+export interface AskUserRequest {
+  question: string;
+  options: AskUserOption[];
 }
 
 /** 写操作请求用户确认时的展示信息 */

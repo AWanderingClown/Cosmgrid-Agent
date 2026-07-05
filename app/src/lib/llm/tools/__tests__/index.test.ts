@@ -23,13 +23,17 @@ beforeEach(() => {
 });
 
 describe("createDefaultToolRegistry", () => {
-  it("注册 read/glob/grep/git_read 四个只读工具", () => {
+  it("注册 read/glob/grep/git_read/web_fetch/web_search/todo_write/ask_user_question 八个只读工具", () => {
     const r = createDefaultToolRegistry();
     expect(r.has("read")).toBe(true);
     expect(r.has("glob")).toBe(true);
     expect(r.has("grep")).toBe(true);
     expect(r.has("git_read")).toBe(true);
-    expect(r.listReadOnly()).toHaveLength(4);
+    expect(r.has("web_fetch")).toBe(true);
+    expect(r.has("web_search")).toBe(true);
+    expect(r.has("todo_write")).toBe(true);
+    expect(r.has("ask_user_question")).toBe(true);
+    expect(r.listReadOnly()).toHaveLength(8);
   });
 });
 
@@ -37,7 +41,17 @@ describe("buildAiSdkTools", () => {
   it("每个工具转成带 description 的 AI SDK tool", () => {
     const tools = buildAiSdkTools(createDefaultToolRegistry(), ctx);
     // remember（3.1 修复）始终注册，不分只读/写——它自己走 confirm 审批，不受权限档位过滤。
-    expect(Object.keys(tools).sort()).toEqual(["git_read", "glob", "grep", "read", "remember"]);
+    expect(Object.keys(tools).sort()).toEqual([
+      "ask_user_question",
+      "git_read",
+      "glob",
+      "grep",
+      "read",
+      "remember",
+      "todo_write",
+      "web_fetch",
+      "web_search",
+    ]);
     expect(tools.read!.description).toContain("读取");
     expect(tools.git_read!.description).toContain("git");
   });

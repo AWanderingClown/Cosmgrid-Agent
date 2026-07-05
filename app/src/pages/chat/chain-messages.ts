@@ -76,6 +76,7 @@ export function applyChainHarnessWarnings(
           harness: {
             unverifiedPaths: warning.unverifiedPaths,
             pseudoToolNames: warning.pseudoToolNames,
+            fabricatedUsageCount: warning.fabricatedUsageCount ?? null,
           },
         }
       : m;

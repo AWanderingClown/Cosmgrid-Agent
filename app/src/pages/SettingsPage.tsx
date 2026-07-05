@@ -1,7 +1,7 @@
 // SettingsPage - 设置页 (v0.7.5: 移除缺失的 RadioGroup 依赖，采用自定义稳定实现)
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap, FolderKanban, Brain, Bug } from "lucide-react";
+import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap, FolderKanban, Brain, Bug, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -14,6 +14,8 @@ import { apiCredentials, type ApiCredential } from "@/lib/db";
 import { backfillProjectMemoryVectors } from "@/lib/memory/retrieval";
 import { SUPPORTED_LANGUAGES, LANGUAGE_LABELS, type SupportedLanguage } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { getApiKey, saveApiKey, deleteApiKey } from "@/lib/keystore";
+import { TAVILY_SEARCH_CREDENTIAL_ID } from "@/lib/llm/tools/web-search-tool";
 
 export interface SettingsPageProps {
   onOpenProjectAssets?: () => void;
@@ -28,6 +30,9 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
   const [embeddingCredentials, setEmbeddingCredentials] = useState<ApiCredential[]>([]);
   const [syncingMemoryIndex, setSyncingMemoryIndex] = useState(false);
   const [memoryIndexMessage, setMemoryIndexMessage] = useState<string | null>(null);
+  const [tavilyKeyConfigured, setTavilyKeyConfigured] = useState(false);
+  const [tavilyKeyInput, setTavilyKeyInput] = useState("");
+  const [tavilyMessage, setTavilyMessage] = useState<string | null>(null);
   const [language, setLanguageState] = useState<SupportedLanguage>(
     (SUPPORTED_LANGUAGES as readonly string[]).includes(i18n.language)
       ? (i18n.language as SupportedLanguage)
@@ -48,6 +53,27 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
       .then(setEmbeddingCredentials)
       .catch(() => setEmbeddingCredentials([]));
   }, []);
+
+  useEffect(() => {
+    void getApiKey(TAVILY_SEARCH_CREDENTIAL_ID)
+      .then((key) => setTavilyKeyConfigured(!!key))
+      .catch(() => setTavilyKeyConfigured(false));
+  }, []);
+
+  async function handleSaveTavilyKey() {
+    const trimmed = tavilyKeyInput.trim();
+    if (!trimmed) return;
+    await saveApiKey(TAVILY_SEARCH_CREDENTIAL_ID, trimmed);
+    setTavilyKeyConfigured(true);
+    setTavilyKeyInput("");
+    setTavilyMessage(t("settings.webSearch.saved"));
+  }
+
+  async function handleClearTavilyKey() {
+    await deleteApiKey(TAVILY_SEARCH_CREDENTIAL_ID);
+    setTavilyKeyConfigured(false);
+    setTavilyMessage(t("settings.webSearch.cleared"));
+  }
 
   async function handleSyncMemoryIndex() {
     setSyncingMemoryIndex(true);
@@ -282,6 +308,56 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
                   )}
                 />
               </button>
+            </div>
+          </Card>
+
+          {/* 网页搜索（Tavily API Key） */}
+          <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-8 shadow-xl">
+            <div className="flex items-center gap-3 pb-4 border-b border-white/10">
+              <Search className="w-5 h-5 text-primary" />
+              <h2 className="text-xl font-bold dark:text-white">{t("settings.webSearch.title")}</h2>
+            </div>
+            <div className="space-y-4">
+              <div className="flex items-start justify-between gap-4 p-5 bg-white/5 rounded-2xl border border-white/5">
+                <p className="text-xs text-muted-foreground max-w-xl leading-relaxed">{t("settings.webSearch.desc")}</p>
+                <Badge
+                  className={cn(
+                    "shrink-0 border-none px-3 py-1 font-bold whitespace-nowrap",
+                    tavilyKeyConfigured ? "bg-emerald-500/20 text-emerald-500" : "bg-white/10 text-muted-foreground",
+                  )}
+                >
+                  {tavilyKeyConfigured ? t("settings.webSearch.configured") : t("settings.webSearch.notConfigured")}
+                </Badge>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto] p-5 bg-white/5 rounded-2xl border border-white/5">
+                <div className="space-y-2">
+                  <Label className="text-xs font-bold opacity-60">{t("settings.webSearch.apiKeyLabel")}</Label>
+                  <Input
+                    type="password"
+                    value={tavilyKeyInput}
+                    onChange={(event) => setTavilyKeyInput(event.target.value)}
+                    placeholder={t("settings.webSearch.apiKeyPlaceholder")}
+                    className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm dark:text-white"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <Button type="button" onClick={() => void handleSaveTavilyKey()} disabled={!tavilyKeyInput.trim()} className="rounded-xl whitespace-nowrap">
+                    {t("settings.webSearch.save")}
+                  </Button>
+                </div>
+                <div className="flex items-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void handleClearTavilyKey()}
+                    disabled={!tavilyKeyConfigured}
+                    className="rounded-xl whitespace-nowrap"
+                  >
+                    {t("settings.webSearch.clear")}
+                  </Button>
+                </div>
+              </div>
+              {tavilyMessage && <p className="text-xs text-primary font-bold">{tavilyMessage}</p>}
             </div>
           </Card>
 

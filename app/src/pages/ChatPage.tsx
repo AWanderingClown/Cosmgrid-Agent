@@ -135,12 +135,15 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     artifacts,
     toolCallViews,
     pendingConfirm,
+    pendingQuestion,
     setPanelOpen,
     setWorkspacePath,
     setProtectedWorkspaces,
     applyToolExecutionRows,
     clearToolExecutionViews,
+    requestAskUser,
     requestConfirm,
+    resolveAskUser,
     resolveConfirm,
     bindWorkspace,
     chooseWorkspace,
@@ -216,6 +219,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     chainAbortRef,
     applyToolExecutionRows,
     requestConfirm,
+    requestAskUser,
     scrollRef,
     stickToBottomRef,
     pendingRoutingDecisionRef,
@@ -602,6 +606,8 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         onStop={handleStop}
         pendingConfirm={pendingConfirm}
         onResolveConfirm={resolveConfirm}
+        pendingQuestion={pendingQuestion}
+        onResolveQuestion={resolveAskUser}
       />
       </div>
 

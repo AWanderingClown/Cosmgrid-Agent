@@ -5,6 +5,7 @@ import type { SwitchReason } from "@/lib/llm/chat-fallback";
 export interface HarnessWarning {
   unverifiedPaths: string[];
   pseudoToolNames: string[];
+  fabricatedUsageCount?: number | null;
 }
 
 export interface ReceiptContent {

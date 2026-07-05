@@ -1,15 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../../db", () => ({
+  toolExecutions: { create: vi.fn().mockResolvedValue("id") },
+  conversations: { getById: vi.fn().mockResolvedValue(null) },
+}));
+
 const mocks = vi.hoisted(() => ({
   buildAiSdkTools: vi.fn(),
   createDefaultToolRegistry: vi.fn(),
   buildWorkspacePreamble: vi.fn(),
 }));
 
-vi.mock("../tools", () => ({
-  buildAiSdkTools: mocks.buildAiSdkTools,
-  createDefaultToolRegistry: mocks.createDefaultToolRegistry,
-}));
+vi.mock("../tools", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../tools")>();
+  return {
+    ...actual,
+    // 只替换 createDefaultToolRegistry/buildAiSdkTools（有工作区分支用），ToolRegistry 保留真实实现——
+    // 没绑工作区的新分支（2026-07-05）直接 new ToolRegistry() 注册 web_fetch/remember，
+    // 假的类会在真实代码路径里被 new 出来，必须是能跑的真类，不能被 vi.fn() 顶掉。
+    buildAiSdkTools: mocks.buildAiSdkTools,
+    createDefaultToolRegistry: mocks.createDefaultToolRegistry,
+  };
+});
 
 vi.mock("../workspace-context", () => ({
   buildWorkspacePreamble: mocks.buildWorkspacePreamble,
@@ -25,13 +37,41 @@ describe("prepareWorkspaceToolRuntime", () => {
     mocks.buildWorkspacePreamble.mockResolvedValue("workspace preamble");
   });
 
-  it("没有 workspacePath 时不构造工具", async () => {
+  it("没有 workspacePath 时不走 createDefaultToolRegistry/项目说明，但仍构造 web_fetch 等不依赖工作区的工具", async () => {
     const runtime = await prepareWorkspaceToolRuntime({ workspacePath: null, includeWrite: true });
 
-    expect(runtime).toEqual({ workspacePreamble: null });
+    expect(runtime.workspacePreamble).toBeNull();
     expect(mocks.createDefaultToolRegistry).not.toHaveBeenCalled();
-    expect(mocks.buildAiSdkTools).not.toHaveBeenCalled();
     expect(mocks.buildWorkspacePreamble).not.toHaveBeenCalled();
+    // buildAiSdkTools 仍会被调用一次——用真实 ToolRegistry 只装 web_fetch/ask_user_question（无 conversationId 时不装 remember）
+    expect(mocks.buildAiSdkTools).toHaveBeenCalledTimes(1);
+    const [registryArg, ctxArg] = mocks.buildAiSdkTools.mock.calls[0]!;
+    expect(registryArg.has("web_fetch")).toBe(true);
+    expect(registryArg.has("ask_user_question")).toBe(true);
+    expect(registryArg.has("remember")).toBe(false);
+    expect(ctxArg).toMatchObject({ workspacePath: "" });
+  });
+
+  it("没有 workspacePath 时也透传 askUser 回调到 ctx", async () => {
+    const askUser = vi.fn();
+    await prepareWorkspaceToolRuntime({ workspacePath: null, includeWrite: true, askUser });
+
+    const [, ctxArg] = mocks.buildAiSdkTools.mock.calls[0]!;
+    expect(ctxArg.askUser).toBe(askUser);
+  });
+
+  it("没有 workspacePath 但有 conversationId 时，web_fetch + remember 都装", async () => {
+    await prepareWorkspaceToolRuntime({
+      workspacePath: null,
+      includeWrite: true,
+      conversationId: "conv-1",
+      messageId: "msg-1",
+    });
+
+    const [registryArg, ctxArg] = mocks.buildAiSdkTools.mock.calls[0]!;
+    expect(registryArg.has("web_fetch")).toBe(true);
+    expect(registryArg.has("remember")).toBe(true);
+    expect(ctxArg).toMatchObject({ workspacePath: "", conversationId: "conv-1", messageId: "msg-1" });
   });
 
   it("构造工具时透传工作区、确认回调和关联实体", async () => {
@@ -55,6 +95,14 @@ describe("prepareWorkspaceToolRuntime", () => {
       blockedCommands: ["rm"],
     });
     expect(mocks.buildWorkspacePreamble).not.toHaveBeenCalled();
+  });
+
+  it("绑了工作区时也透传 askUser 回调到 ctx", async () => {
+    const askUser = vi.fn();
+    await prepareWorkspaceToolRuntime({ workspacePath: "/ws", includeWrite: true, askUser });
+
+    const [, ctxArg] = mocks.buildAiSdkTools.mock.calls[0]!;
+    expect(ctxArg.askUser).toBe(askUser);
   });
 
   it("项目说明读取失败不影响工具", async () => {

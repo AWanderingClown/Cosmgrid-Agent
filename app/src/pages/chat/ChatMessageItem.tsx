@@ -125,7 +125,7 @@ export const MessageItem = memo(function MessageItem({
               </span>
             )}
           </div>
-          {isAssistant && harness && (harness.unverifiedPaths.length > 0 || harness.pseudoToolNames.length > 0) && (
+          {isAssistant && harness && (harness.unverifiedPaths.length > 0 || harness.pseudoToolNames.length > 0 || !!harness.fabricatedUsageCount) && (
             <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
               <div className="font-semibold">⚠️ 内容真实性校验：模型可能编造了内容，请勿轻信</div>
               {harness.unverifiedPaths.length > 0 && (
@@ -136,6 +136,11 @@ export const MessageItem = memo(function MessageItem({
               {harness.pseudoToolNames.length > 0 && (
                 <div className="mt-1">
                   吐了伪工具调用文本（{harness.pseudoToolNames.join("、")}）——这些不是本应用真工具，未实际执行
+                </div>
+              )}
+              {!!harness.fabricatedUsageCount && (
+                <div className="mt-1">
+                  声称跑了/用了 {harness.fabricatedUsageCount} 次工具或命令，但本轮没有对应数量的真实工具调用记录
                 </div>
               )}
             </div>

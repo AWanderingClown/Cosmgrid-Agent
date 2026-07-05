@@ -7,7 +7,7 @@ import type { ToolExecutionRow } from "@/lib/db";
 // 派生规则：
 //   write / edit → file 工件（路径 + content/new_string）
 //   bash         → terminal 工件（命令 + output）
-//   read / glob / grep / git_read → 跳过（只读探查，不是产出物）
+//   read / glob / grep / git_read / web_fetch / web_search / todo_write → 跳过（只读探查，不是产出物）
 //   未知工具     → 跳过（不臆造）
 // input 是 JSON.stringify(rawInput) 的字符串，残缺/非法时降级显示原文，绝不崩。
 
@@ -35,7 +35,7 @@ export interface WorkArtifact {
 const HTML_FILE_RE = /\.(html?|svg)$/i;
 
 /** 只读工具不产出工件，跳过 */
-const READONLY_TOOLS = new Set(["read", "glob", "grep", "git_read"]);
+const READONLY_TOOLS = new Set(["read", "glob", "grep", "git_read", "web_fetch", "web_search", "todo_write", "ask_user_question"]);
 
 const STATUS_MAP: Record<string, ArtifactStatus> = {
   success: "success",

@@ -1,5 +1,8 @@
 import type { Tool } from "ai";
-import { buildAiSdkTools, createDefaultToolRegistry, type ToolConfirmRequest } from "./tools";
+import { buildAiSdkTools, createDefaultToolRegistry, ToolRegistry, type ToolConfirmRequest, type AskUserRequest } from "./tools";
+import { webFetchTool } from "./tools/web-fetch-tool";
+import { rememberTool } from "./tools/memory-tool";
+import { askUserTool } from "./tools/ask-user-tool";
 import { buildWorkspacePreamble } from "./workspace-context";
 
 export interface WorkspaceToolRuntimeOptions {
@@ -11,6 +14,8 @@ export interface WorkspaceToolRuntimeOptions {
    *  让工具执行审计能按真实消息分组，而不是靠时间戳窗口猜。 */
   messageId?: string;
   confirm?: (preview: ToolConfirmRequest) => Promise<boolean>;
+  /** ask_user_question 工具用：结构化追问用户，返回用户选中的 label */
+  askUser?: (request: AskUserRequest) => Promise<string>;
   blockedCommands?: string[];
   includePreamble?: boolean;
   /** 桌面绝对路径——让模型知道"保存/导出到桌面"该写哪（见 workspace-context.ts 的 desktopPath）。 */
@@ -29,7 +34,28 @@ export interface WorkspaceToolRuntime {
 export async function prepareWorkspaceToolRuntime(
   options: WorkspaceToolRuntimeOptions,
 ): Promise<WorkspaceToolRuntime> {
-  if (!options.workspacePath) return { workspacePreamble: null };
+  // 没绑工作区：文件/命令类工具没有根目录可用，但 web_fetch（联网）和 remember（记忆）
+  // 不依赖 workspacePath，不该被连坐一起消失——纯聊天模式下也该给这两个。
+  if (!options.workspacePath) {
+    let tools: Record<string, Tool> | undefined;
+    try {
+      const registry = new ToolRegistry();
+      registry.register(webFetchTool);
+      registry.register(askUserTool);
+      if (options.conversationId) registry.register(rememberTool);
+      tools = buildAiSdkTools(registry, {
+        workspacePath: "",
+        projectId: options.projectId,
+        conversationId: options.conversationId,
+        messageId: options.messageId,
+        confirm: options.confirm,
+        askUser: options.askUser,
+      });
+    } catch (err) {
+      console.error("[tools] 构建无工作区工具失败:", err);
+    }
+    return { tools, workspacePreamble: null };
+  }
 
   let tools: Record<string, Tool> | undefined;
   let workspacePreamble: string | null = null;
@@ -41,6 +67,7 @@ export async function prepareWorkspaceToolRuntime(
       conversationId: options.conversationId,
       messageId: options.messageId,
       confirm: options.confirm,
+      askUser: options.askUser,
       blockedCommands: options.blockedCommands,
     });
   } catch (err) {

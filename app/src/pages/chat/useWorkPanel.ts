@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { conversations as dbConversations } from "@/lib/db";
-import { type ToolConfirmRequest } from "@/lib/llm/tools";
+import { type ToolConfirmRequest, type AskUserRequest } from "@/lib/llm/tools";
 import { deriveArtifacts, type WorkArtifact } from "@/lib/work-artifacts";
 import { deriveToolCallViews, type ToolCallView } from "@/lib/work-artifact-views";
 import type { ToolExecutionRow } from "@/lib/db";
@@ -59,6 +59,23 @@ export function useWorkPanel({
     confirmResolverRef.current?.(ok);
     confirmResolverRef.current = null;
     setPendingConfirm(null);
+  }
+
+  // ask_user_question 工具的追问流：跟 confirm 同一套 Promise 化模式，但返回的是用户选中的
+  // label 文本而非布尔值——语义不同（"问问题"vs"批准/拒绝"），故意不复用 pendingConfirm。
+  const [pendingQuestion, setPendingQuestion] = useState<AskUserRequest | null>(null);
+  const questionResolverRef = useRef<((answer: string) => void) | null>(null);
+
+  function requestAskUser(req: AskUserRequest): Promise<string> {
+    return new Promise((resolve) => {
+      setPendingQuestion(req);
+      questionResolverRef.current = resolve;
+    });
+  }
+  function resolveAskUser(answer: string): void {
+    questionResolverRef.current?.(answer);
+    questionResolverRef.current = null;
+    setPendingQuestion(null);
   }
 
   // 写操作确认通道：工具运行到写/执行时调 requestConfirm，弹窗等用户按下确认/拒绝
@@ -136,8 +153,11 @@ export function useWorkPanel({
     clearWorkspace,
     panelOpen,
     pendingConfirm,
+    pendingQuestion,
     protectedWorkspaces,
+    requestAskUser,
     requestConfirm,
+    resolveAskUser,
     resolveConfirm,
     setPanelOpen,
     setProtectedWorkspaces,
