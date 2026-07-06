@@ -29,6 +29,14 @@ export interface ProviderPreset {
   defaultContextWindow: number;
   /** 是否支持「粘 key 后自动拉取模型列表」（CLI / 无 /models 的厂商为 false） */
   supportsModelFetch: boolean;
+  /**
+   * 额外自动创建的模型档位（目前只有 CLI 订阅用：一个 provider 底下同时挂 Sonnet/Opus/Haiku
+   * 这种多档位）。用具体版本号（如 "claude-sonnet-5"）而非通用别名（"sonnet"）——
+   * 用户要求下拉菜单里能直接看到具体版本，不是裸档位名。代价：新一代模型发布后这里要手动
+   * 跟着改；本机 CLI 版本是否够新（能不能解析出这个版本号）靠 SettingsPage 的「检查 CLI
+   * 更新」兜底。AddProviderDialog 建完 defaultModel 后接着建这些。
+   */
+  extraModels?: Array<{ name: string; displayName: string }>;
 }
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
@@ -152,10 +160,14 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     providerType: "claude-cli",
     baseUrl: "",
     website: "https://docs.claude.com/claude-code",
-    defaultModel: "sonnet",
-    defaultDisplayName: "Claude Sonnet",
+    defaultModel: "claude-sonnet-5",
+    defaultDisplayName: "Sonnet 5",
     defaultContextWindow: 1_000_000,
     supportsModelFetch: false,
+    extraModels: [
+      { name: "claude-opus-4-8", displayName: "Opus 4.8" },
+      { name: "claude-haiku-4-5", displayName: "Haiku 4.5" },
+    ],
   },
   {
     id: "codex-cli",
@@ -167,6 +179,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     defaultDisplayName: "GPT 5.5",
     defaultContextWindow: 1_050_000,
     supportsModelFetch: false,
+    extraModels: [{ name: "gpt-5.4-mini", displayName: "GPT 5.4 Mini" }],
   },
 ];
 

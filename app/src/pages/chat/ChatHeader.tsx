@@ -1,11 +1,21 @@
-import { Cpu, PanelRight, ShieldAlert, Sparkles, Zap } from "lucide-react";
+import { ChevronDown, Cpu, PanelRight, ShieldAlert, Sparkles, Zap } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import type { Conversation } from "@/lib/db";
 import type { ModelListItem } from "@/lib/api";
 import { ConversationSwitcher } from "./ConversationSwitcher";
+import { capitalizeFirstLetter, groupModelsForPicker } from "./model-picker-groups";
 
 interface ChatHeaderProps {
   conversations: Conversation[];
@@ -45,6 +55,8 @@ export function ChatHeader({
   onTogglePanel,
 }: ChatHeaderProps) {
   const { t } = useTranslation();
+  const selectedModel = availableModels.find((m) => m.id === selectedModelId);
+  const modelEntries = groupModelsForPicker(availableModels);
 
   return (
     <header className="px-6 py-3 flex items-center justify-between gap-x-3 gap-y-2 flex-wrap border-b border-white/10 glass z-10">
@@ -62,18 +74,34 @@ export function ChatHeader({
           <div className="absolute -inset-1 bg-gradient-to-r from-primary to-accent rounded-xl blur opacity-25 group-hover:opacity-50 transition duration-1000 group-hover:duration-200" />
           <div className="relative flex items-center gap-2 px-3 py-1.5 rounded-xl">
             <Cpu className="w-4 h-4 text-primary shrink-0" />
-            <Select value={selectedModelId} onValueChange={onModelChange}>
-              <SelectTrigger className="border-0 bg-transparent shadow-none focus-visible:ring-0 focus-visible:border-0 px-0 h-auto text-xs font-bold gap-1 hover:bg-transparent">
-                <SelectValue placeholder="选择模型" />
-              </SelectTrigger>
-              <SelectContent position="popper" side="bottom" sideOffset={6} align="start" avoidCollisions={false}>
-                {availableModels.map((m) => (
-                  <SelectItem key={m.id} value={m.id} className="focus:bg-primary focus:text-primary-foreground">
-                    {m.displayName ?? m.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <DropdownMenu>
+              <DropdownMenuTrigger className="flex items-center gap-1 text-xs font-bold outline-none">
+                {selectedModel ? selectedModel.displayName ?? selectedModel.name : "选择模型"}
+                <ChevronDown className="w-3.5 h-3.5 opacity-50" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" sideOffset={6}>
+                <DropdownMenuRadioGroup value={selectedModelId} onValueChange={onModelChange}>
+                  {modelEntries.map((entry) =>
+                    entry.kind === "flat" ? (
+                      <DropdownMenuRadioItem key={entry.model.id} value={entry.model.id}>
+                        {entry.model.displayName ?? entry.model.name}
+                      </DropdownMenuRadioItem>
+                    ) : (
+                      <DropdownMenuSub key={entry.providerId}>
+                        <DropdownMenuSubTrigger>{entry.label}</DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent>
+                          {entry.models.map((m) => (
+                            <DropdownMenuRadioItem key={m.id} value={m.id}>
+                              {capitalizeFirstLetter(m.displayName ?? m.name)}
+                            </DropdownMenuRadioItem>
+                          ))}
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                    ),
+                  )}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 

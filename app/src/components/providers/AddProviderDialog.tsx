@@ -23,7 +23,7 @@ import { providers as dbProviders, apiCredentials as dbCredentials, models as db
 import { saveApiKey, deleteApiKey } from "@/lib/keystore";
 import { inferModelCapabilities } from "@/lib/llm/model-capabilities";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { PROVIDER_PRESETS, type ProviderPreset } from "@/lib/llm/provider-presets";
+import { PROVIDER_PRESETS, getPresetById, type ProviderPreset } from "@/lib/llm/provider-presets";
 import { fetchAvailableModels } from "@/lib/llm/fetch-models";
 import { lookupPriceFromCatalog, saveManualModelPrice } from "@/lib/llm/price-catalog";
 import { ApiKeyInput } from "./ApiKeyInput";
@@ -195,7 +195,7 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
 
     let createdProviderId: string | null = null;
     let createdCredentialId: string | null = null;
-    let createdModelId: string | null = null;
+    const createdModelIds: string[] = [];
 
     try {
       // 1. 建 Provider
@@ -235,7 +235,7 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
         capabilityScore: JSON.stringify(inferred.capabilityScore),
         workRoles: JSON.stringify(workRoles),
       });
-      createdModelId = model.id;
+      createdModelIds.push(model.id);
 
       if (inputPrice > 0 && outputPrice > 0) {
         await saveManualModelPrice({
@@ -247,6 +247,26 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
         });
       }
 
+      // 4b. 额外档位（目前只有 Claude CLI 预设声明：Opus/Haiku，跟主模型同一个 provider+credential）
+      const preset = presetId ? getPresetById(presetId) : undefined;
+      if (preset?.extraModels) {
+        for (const extra of preset.extraModels) {
+          const extraInferred = inferModelCapabilities(extra.name);
+          const extraModel = await dbModels.create({
+            providerId: provider.id,
+            name: extra.name,
+            displayName: extra.displayName,
+            contextWindow,
+            inputPrice: null,
+            outputPrice: null,
+            capabilityTags: JSON.stringify([]),
+            capabilityScore: JSON.stringify(extraInferred.capabilityScore),
+            workRoles: JSON.stringify(extraInferred.workRoles),
+          });
+          createdModelIds.push(extraModel.id);
+        }
+      }
+
       // 5. 回填 defaultModelId
       await dbCredentials.update(credential.id, { defaultModelId: model.id });
 
@@ -255,7 +275,7 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
     } catch (err) {
       const message = err instanceof Error ? err.message : t("addProvider.addFailed");
       try {
-        if (createdModelId) await dbModels.delete(createdModelId);
+        for (const id of createdModelIds) await dbModels.delete(id);
         if (createdCredentialId) {
           await dbCredentials.delete(createdCredentialId);
           await deleteApiKey(createdCredentialId);

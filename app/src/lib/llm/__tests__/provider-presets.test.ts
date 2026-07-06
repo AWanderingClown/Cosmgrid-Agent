@@ -47,8 +47,8 @@ describe("provider-presets", () => {
     expect(claude).toMatchObject({
       providerType: "claude-cli",
       baseUrl: "",
-      defaultModel: "sonnet",
-      defaultDisplayName: "Claude Sonnet",
+      defaultModel: "claude-sonnet-5",
+      defaultDisplayName: "Sonnet 5",
       defaultContextWindow: 1_000_000,
       supportsModelFetch: false,
     });
@@ -56,5 +56,18 @@ describe("provider-presets", () => {
 
   it("getPresetById 找不到返回 undefined", () => {
     expect(getPresetById("nope")).toBeUndefined();
+  });
+
+  it("Claude CLI 预设额外声明 Opus/Haiku 档位，用具体版本号（实测过 --model 能解析成功，不是通用别名）", () => {
+    const claude = getPresetById("claude-cli");
+    expect(claude?.extraModels).toEqual([
+      { name: "claude-opus-4-8", displayName: "Opus 4.8" },
+      { name: "claude-haiku-4-5", displayName: "Haiku 4.5" },
+    ]);
+  });
+
+  it("Codex CLI 预设额外声明 GPT 5.4 Mini 档位（来自 ~/.codex/models_cache.json 真实目录，不是瞎猜）", () => {
+    const codex = getPresetById("codex-cli");
+    expect(codex?.extraModels).toEqual([{ name: "gpt-5.4-mini", displayName: "GPT 5.4 Mini" }]);
   });
 });

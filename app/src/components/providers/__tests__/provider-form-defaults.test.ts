@@ -12,8 +12,8 @@ describe("provider-form-defaults", () => {
       id: "claude-cli",
       name: "Claude Code (CLI 订阅)",
       providerType: "claude-cli",
-      defaultModel: "sonnet",
-      defaultDisplayName: "Claude Sonnet",
+      defaultModel: "claude-sonnet-5",
+      defaultDisplayName: "Sonnet 5",
     });
     expect(getPresetForProviderType("codex-cli")).toMatchObject({
       id: "codex-cli",

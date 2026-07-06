@@ -1,7 +1,9 @@
 // SettingsPage - 设置页 (v0.7.5: 移除缺失的 RadioGroup 依赖，采用自定义稳定实现)
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap, FolderKanban, Brain, Bug, Search } from "lucide-react";
+import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap, FolderKanban, Brain, Bug, Search, Terminal, RefreshCw, Loader2 } from "lucide-react";
+import { homeDir } from "@tauri-apps/api/path";
+import { quote as quoteShellCommand } from "shell-quote";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -16,6 +18,9 @@ import { SUPPORTED_LANGUAGES, LANGUAGE_LABELS, type SupportedLanguage } from "@/
 import { cn } from "@/lib/utils";
 import { getApiKey, saveApiKey, deleteApiKey } from "@/lib/keystore";
 import { TAVILY_SEARCH_CREDENTIAL_ID } from "@/lib/llm/tools/web-search-tool";
+import { getShellAdapter } from "@/lib/llm/tools/shell-adapter";
+
+const CLI_PROVIDER_TYPES = ["claude-cli", "codex-cli"];
 
 export interface SettingsPageProps {
   onOpenProjectAssets?: () => void;
@@ -33,6 +38,9 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
   const [tavilyKeyConfigured, setTavilyKeyConfigured] = useState(false);
   const [tavilyKeyInput, setTavilyKeyInput] = useState("");
   const [tavilyMessage, setTavilyMessage] = useState<string | null>(null);
+  const [cliUpdateState, setCliUpdateState] = useState<
+    Record<string, { checking: boolean; message: string | null }>
+  >({});
   const [language, setLanguageState] = useState<SupportedLanguage>(
     (SUPPORTED_LANGUAGES as readonly string[]).includes(i18n.language)
       ? (i18n.language as SupportedLanguage)
@@ -46,6 +54,9 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
   ];
   const remoteEmbeddingCredentials = embeddingCredentials.filter((cred) => (
     cred.enabled && ["openai", "openai-compatible"].includes(cred.provider?.type ?? "")
+  ));
+  const cliCredentials = embeddingCredentials.filter((cred) => (
+    CLI_PROVIDER_TYPES.includes(cred.provider?.type ?? "")
   ));
 
   useEffect(() => {
@@ -85,6 +96,34 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
       setMemoryIndexMessage(t("settings.memoryEmbedding.syncFailed"));
     } finally {
       setSyncingMemoryIndex(false);
+    }
+  }
+
+  // 别名（sonnet/opus/...）解析到哪个具体版本由本机 CLI 版本决定；claude/codex 都自带
+  // `update` 子命令,跑一次就是"检查 + 有新版就装",不需要我们自己维护一份版本目录。
+  async function handleCheckCliUpdate(cred: ApiCredential) {
+    const program = cred.baseUrl?.trim();
+    if (!program) {
+      setCliUpdateState((prev) => ({
+        ...prev,
+        [cred.id]: { checking: false, message: t("settings.cliEngines.notConfigured") },
+      }));
+      return;
+    }
+    setCliUpdateState((prev) => ({ ...prev, [cred.id]: { checking: true, message: null } }));
+    try {
+      const cwd = await homeDir();
+      const result = await getShellAdapter().run(quoteShellCommand([program, "update"]), cwd);
+      const combined = `${result.stdout}${result.stderr}`.trim();
+      setCliUpdateState((prev) => ({
+        ...prev,
+        [cred.id]: { checking: false, message: combined || t("settings.cliEngines.done") },
+      }));
+    } catch (err) {
+      setCliUpdateState((prev) => ({
+        ...prev,
+        [cred.id]: { checking: false, message: err instanceof Error ? err.message : String(err) },
+      }));
     }
   }
 
@@ -308,6 +347,55 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
                   )}
                 />
               </button>
+            </div>
+          </Card>
+
+          {/* CLI 引擎更新检查 */}
+          <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-8 shadow-xl">
+            <div className="flex items-center gap-3 pb-4 border-b border-white/10">
+              <Terminal className="w-5 h-5 text-primary" />
+              <h2 className="text-xl font-bold dark:text-white">{t("settings.cliEngines.title")}</h2>
+            </div>
+            <div className="space-y-4">
+              <p className="text-xs text-muted-foreground leading-relaxed">{t("settings.cliEngines.desc")}</p>
+              {cliCredentials.length === 0 && (
+                <p className="text-xs text-muted-foreground">{t("settings.cliEngines.none")}</p>
+              )}
+              {cliCredentials.map((cred) => {
+                const state = cliUpdateState[cred.id];
+                return (
+                  <div key={cred.id} className="flex flex-col gap-3 p-5 bg-white/5 rounded-2xl border border-white/5">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="space-y-1 min-w-0">
+                        <div className="text-sm font-bold">{cred.provider?.name ?? cred.name}</div>
+                        <p className="text-xs text-muted-foreground font-mono truncate">
+                          {cred.baseUrl || t("settings.cliEngines.notConfigured")}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handleCheckCliUpdate(cred)}
+                        disabled={state?.checking}
+                        className="shrink-0 rounded-xl"
+                      >
+                        {state?.checking ? (
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-4 h-4 mr-2" />
+                        )}
+                        {state?.checking ? t("settings.cliEngines.checking") : t("settings.cliEngines.checkButton")}
+                      </Button>
+                    </div>
+                    {state?.message && (
+                      <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words bg-black/20 rounded-xl p-3 max-h-40 overflow-y-auto">
+                        {state.message}
+                      </pre>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </Card>
 

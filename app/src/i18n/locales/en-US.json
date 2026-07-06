@@ -732,6 +732,15 @@
       "toggleTitle": "Debug: single-model chat only",
       "toggleDesc": "When on, it skips the intent judge, background auto-orchestration/model switching, auto debate triggering, semantic cache, project memory retrieval, the self-check retry loop, and failover to backup models on error — leaving only the most basic path: send a message, get a reply from the model you picked, and a real error if it fails (no silent model swap). Use it to check whether single-model chat itself works. Doesn't affect other settings; toggle off anytime."
     },
+    "cliEngines": {
+      "title": "CLI Engines",
+      "desc": "Locally spawned Claude Code / Codex CLI use up your subscription quota, not token billing. Which exact snapshot a model alias (e.g. sonnet) resolves to depends on the installed CLI version — check for updates periodically to stay on the latest model without manually tracking version numbers.",
+      "none": "No Claude CLI / Codex CLI provider configured yet — add one under \"Model Providers\".",
+      "notConfigured": "No executable path detected yet — edit this credential under \"Model Providers\" and click \"Detect\"",
+      "checkButton": "Check for updates",
+      "checking": "Checking...",
+      "done": "Done, no output"
+    },
     "webSearch": {
       "title": "Web Search",
       "desc": "Once configured, the AI can use the web_search tool to search the public web (for when you don't know the exact URL — if you already have a URL, web_fetch handles that without any setup). Backed by Tavily, free tier is about 1000 requests/month.",
