@@ -326,7 +326,10 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
   }
 
   async function handleDeleteConversation(id: string) {
-    if (isStreaming) return;
+    // 修复（2026-07-06，用户反馈"最后一个对话删不掉"）：同 handleNewChat/switchConversation
+    // ——这里原来是 isStreaming 时直接 return，isStreaming 卡在 true 时点删除会被静默拦截、
+    // 且没有任何提示。删除同样是"放弃当前这轮"的明确意图，应强制停止当前流而不是拒绝响应。
+    if (isStreaming) handleStop();
     if (!(await confirm({ description: t("chat.deleteConvConfirm"), destructive: true }))) return;
     try {
       await dbConversations.archive(id);
