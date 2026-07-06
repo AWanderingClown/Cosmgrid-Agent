@@ -6,6 +6,14 @@
 //   3. 不在白名单 → block（默认拒绝，宁可少跑也不误伤）
 //
 // 纯函数、可红队测试。execute 时即便 allow 也强制走用户确认（双保险）。
+//
+// 2026-07-04 修复（技术债，坑.md 2.3）：逐段切分复合命令(; && || |)以前是裸正则
+// split(/&&|\|\||;|\|/)，不理解引号——`git commit -m "a && b"` 这类合法命令里，引号内的
+// "&&" 会被错误当成真操作符切开，导致误判（把 `b"` 当成一个新程序名，白名单查不到就
+// 误 block）。改用 `shell-quote` 做真正的 token 化：字符串/操作符分开产出，引号内容原样
+// 保留为一个 token，不会被内部的 shell 元字符污染分段结果。
+
+import { parse as parseShellCommand } from "shell-quote";
 
 export type CommandVerdict = "allow" | "block";
 
@@ -37,14 +45,75 @@ const ALLOWED_PROGRAMS = new Set([
   "pnpm", "npm", "yarn", "node", "npx",
   "git", "ls", "cat", "echo", "pwd", "head", "tail", "wc", "grep", "rg", "find",
   "tsc", "vitest", "jest", "eslint", "prettier", "python", "python3", "pip", "cargo", "go",
+  // 常用 shell 工具：切目录 + 文本处理 + 文件/路径工具。无网络、无提权、无破坏性；
+  // 危险用法（rm -rf / sudo / 重定向裸设备 / curl|sh 等）仍由上方黑名单拦截。
+  "cd", "which", "type", "date", "env", "printenv",
+  "sort", "uniq", "cut", "tr", "column", "comm", "paste", "seq", "nl",
+  "diff", "cmp", "file", "stat", "tree", "du", "basename", "dirname", "realpath", "readlink",
+  "sed", "awk", "mkdir", "touch", "cp", "mv", "jq",
 ]);
 
-/** 取命令的第一个程序名（去掉前导环境变量赋值 FOO=bar cmd） */
-export function firstProgram(command: string): string {
-  const tokens = command.trim().split(/\s+/);
+type ShellToken = string | { op: string; pattern?: string };
+
+/**
+ * 把命令串按真正的 shell 操作符（&& || ; |）切分成段，每段是 token 数组。
+ * 用 shell-quote 解析，引号内容原样保留成一个 token，不会被内部的 && 等字符误判成分段点。
+ * 重定向（> >> <）、子 shell（( )）等其他 operator 不当分段依据，也不当普通文本塞进段里——
+ * 那些场景已经由上层的 $()／反引号／danger pattern 专项检查处理，这里只负责"这是几段、
+ * 每段第一个程序是谁"。
+ * 解析失败（极端畸形输入）时保守整条当一段，交给后面的白名单/黑名单兜底。
+ */
+function tokenizeSegments(cmd: string): string[][] {
+  let tokens: ShellToken[];
+  try {
+    tokens = parseShellCommand(cmd) as ShellToken[];
+  } catch {
+    return [[cmd]];
+  }
+  const segments: string[][] = [];
+  let current: string[] = [];
+  for (const tok of tokens) {
+    if (typeof tok === "string") {
+      current.push(tok);
+      continue;
+    }
+    if (tok.op === "&&" || tok.op === "||" || tok.op === ";" || tok.op === "|") {
+      segments.push(current);
+      current = [];
+      continue;
+    }
+    if (tok.op === "glob" && typeof tok.pattern === "string") {
+      current.push(tok.pattern);
+      continue;
+    }
+    // 其余 operator（> >> < ( ) 等）：丢弃这个 token，不计入分段依据
+  }
+  segments.push(current);
+  return segments.filter((seg) => seg.length > 0);
+}
+
+/** 一段 token 里去掉前导环境变量赋值（FOO=bar），取第一个真正的程序名 */
+function firstProgramFromTokens(tokens: string[]): string {
   let i = 0;
   while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]!)) i++;
   return tokens[i] ?? "";
+}
+
+/** 命令是否含真正的重定向操作符（> >>），不是引号内字符串里出现的 ">"。 */
+function hasRedirectOperator(cmd: string): boolean {
+  let tokens: ShellToken[];
+  try {
+    tokens = parseShellCommand(cmd) as ShellToken[];
+  } catch {
+    return />/.test(cmd); // 解析失败保守退回原始子串判断
+  }
+  return tokens.some((tok) => typeof tok !== "string" && (tok.op === ">" || tok.op === ">>"));
+}
+
+/** 取命令的第一个程序名（去掉前导环境变量赋值 FOO=bar cmd） */
+export function firstProgram(command: string): string {
+  const segments = tokenizeSegments(command.trim());
+  return firstProgramFromTokens(segments[0] ?? []);
 }
 
 /**
@@ -72,14 +141,61 @@ export function checkCommand(command: string, extraBlocked: string[] = []): Comm
     return { verdict: "block", reason: "含命令替换 $() / 反引号，无法静态审查" };
   }
 
-  // 逐段（; && || |）检查白名单
-  const segments = cmd.split(/\s*(?:&&|\|\||;|\|)\s*/).filter(Boolean);
+  // 逐段（; && || |）检查白名单——用 shell-quote 真正 token 化，引号内的 && 等字符不会被误判成分段点
+  const segments = tokenizeSegments(cmd);
   for (const seg of segments) {
-    const prog = firstProgram(seg);
+    const prog = firstProgramFromTokens(seg);
     if (!ALLOWED_PROGRAMS.has(prog)) {
-      return { verdict: "block", reason: `程序 "${prog || seg}" 不在白名单` };
+      return { verdict: "block", reason: `程序 "${prog || seg.join(" ")}" 不在白名单` };
     }
   }
 
   return { verdict: "allow", reason: "白名单命令" };
+}
+
+// 100% 只读的程序（只看不改，跑了不产生副作用）
+const READONLY_PROGRAMS = new Set([
+  "ls", "cat", "head", "tail", "wc", "pwd", "echo", "find", "grep", "rg",
+  // 只看不改的 shell 工具（cd 只切目录、其余纯输出）→ 免确认。
+  // sed/awk/mkdir/touch/cp/mv/jq 能写文件，不在此列（仍走确认）。
+  "cd", "which", "type", "date", "env", "printenv",
+  "sort", "uniq", "cut", "tr", "column", "comm", "paste", "seq", "nl",
+  "diff", "cmp", "file", "stat", "tree", "du", "basename", "dirname", "realpath", "readlink",
+]);
+
+// git 的只读子命令（其余 add/commit/checkout/reset/push/pull/merge/stash/clean 等都算写）
+const GIT_READONLY_SUBCOMMANDS = new Set([
+  "log", "status", "diff", "show", "branch", "remote", "ls-files", "rev-parse",
+  "describe", "blame", "shortlog",
+]);
+
+/**
+ * 命令是否「纯只读」——只看不改、跑了没副作用，可免用户确认。
+ * 保守：含命令替换 $()/反引号一律当非只读；逐段都必须只读才算只读。
+ * git 看子命令（log/status/diff 只读，commit/add/checkout 算写）。
+ */
+export function isReadOnlyCommand(command: string): boolean {
+  const cmd = command.trim();
+  if (!cmd) return false;
+  if (/\$\(|`/.test(cmd)) return false; // 命令替换无法静态判断 → 保守当非只读
+  // 2026-07-04 修复：改用 token 化后的真操作符判断重定向，不再是裸 />/ 子串匹配——
+  // 后者会把 `echo "a > b"` 这种引号内的 ">" 也误判成重定向，导致只读命令被错误要求确认。
+  if (hasRedirectOperator(cmd)) return false;
+
+  const segments = tokenizeSegments(cmd);
+  if (segments.length === 0) return false;
+
+  return segments.every((tokens) => {
+    const stripped = tokens.slice();
+    let i = 0;
+    while (i < stripped.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(stripped[i]!)) i++;
+    const rest = stripped.slice(i);
+    const prog = rest[0] ?? "";
+    if (READONLY_PROGRAMS.has(prog)) return true;
+    if (prog === "git") {
+      const sub = rest.slice(1).find((tk) => tk && !tk.startsWith("-"));
+      return sub ? GIT_READONLY_SUBCOMMANDS.has(sub) : false;
+    }
+    return false;
+  });
 }

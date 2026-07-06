@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-run-shell-command"
+description = "Enables the run_shell_command command without any pre-configured scope."
+commands.allow = ["run_shell_command"]
+
+[[permission]]
+identifier = "deny-run-shell-command"
+description = "Denies the run_shell_command command without any pre-configured scope."
+commands.deny = ["run_shell_command"]

@@ -35,7 +35,8 @@ export async function testConnection(
       model: languageModel,
       prompt: "ping",
       maxOutputTokens: 10,
-      abortSignal: AbortSignal.timeout(10_000),
+      // 30s：聚合网关（如 Agnes 的 LiteLLM）首次冷启动可能慢，10s 太短会误判超时
+      abortSignal: AbortSignal.timeout(30_000),
     });
 
     return {

@@ -1,7 +1,8 @@
 // Cosmgrid-Agent 主入口
-// v0.7.2: 彻底修复响应式布局冲突，回归稳定的 Flex 布局
-import { useState, useEffect } from "react";
-import { AlertTriangle, KeyRound, MessageSquare, LayoutTemplate, Coins, FolderKanban, X, Settings, BarChart3, Swords } from "lucide-react";
+// 布局：根容器用 h-full/w-full，依赖 index.css 建立的 html→body→#root height:100% 链。
+// 不用 dvh/dvw——WKWebView(Tauri 内核)下动态视口单位 resize 后不重算，会导致窗口变大露白。
+import { Suspense, lazy, useState, useEffect } from "react";
+import { AlertTriangle, KeyRound, MessageSquare, LayoutTemplate, Coins, X, Settings, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { usePanelResize, ResizeHandle } from "@/components/ui/resize-handle";
@@ -10,49 +11,79 @@ import {
   seedBuiltInTemplates,
   tokenPlans as dbTokenPlans,
   apiCredentials as dbCredentials,
+  usageEvents,
   type TokenPlan,
 } from "@/lib/db";
 import { planUsageLevel, type UsageLevel } from "@/lib/llm/plan-thresholds";
+import { computeTokenPlanUsageMap } from "@/lib/llm/token-plan-usage";
+import { migrateLegacyApiKeys } from "@/lib/keystore";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
-import { ChatPage } from "@/pages/ChatPage";
-import { ProvidersPage } from "@/pages/ProvidersPage";
-import { TemplatesPage } from "@/pages/TemplatesPage";
-import { TokenPlansPage } from "@/pages/TokenPlansPage";
-import { ProjectsPage } from "@/pages/ProjectsPage";
-import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { OnboardingModal } from "@/pages/OnboardingModal";
-import { SettingsPage } from "@/pages/SettingsPage";
-import { StatsPage } from "@/pages/StatsPage";
-import { DebatePage } from "@/pages/DebatePage";
 
-type PageKey = "chat" | "providers" | "templates" | "tokenPlans" | "projects" | "debate" | "stats" | "settings";
+const ChatPage = lazy(() => import("@/pages/ChatPage").then((m) => ({ default: m.ChatPage })));
+const ProvidersPage = lazy(() => import("@/pages/ProvidersPage").then((m) => ({ default: m.ProvidersPage })));
+const TemplatesPage = lazy(() => import("@/pages/TemplatesPage").then((m) => ({ default: m.TemplatesPage })));
+const ProjectsPage = lazy(() => import("@/pages/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
+const ProjectDetailPage = lazy(() => import("@/pages/ProjectDetailPage").then((m) => ({ default: m.ProjectDetailPage })));
+const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
+const UsageMonitorPage = lazy(() => import("@/pages/UsageMonitorPage").then((m) => ({ default: m.UsageMonitorPage })));
+
+type PageKey = "chat" | "providers" | "templates" | "tokenPlans" | "projects" | "settings";
 
 interface NavItem {
   key: PageKey;
   icon: React.ReactNode;
 }
 
+function PageLoading() {
+  const { t } = useTranslation();
+  return (
+    <div className="h-full w-full flex items-center justify-center bg-background/30">
+      <div className="flex flex-col items-center gap-3 text-muted-foreground">
+        <div className="logo-wrap w-12 h-12 animate-pulse">
+          <img src={cosmgridLogo} className="logo-base" alt="CosmGrid" />
+        </div>
+        <span className="text-xs font-bold uppercase tracking-widest">{t("common.loading")}</span>
+      </div>
+    </div>
+  );
+}
+
+function LazyPage({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="h-full w-full rounded-3xl overflow-hidden">
+      <Suspense fallback={<PageLoading />}>{children}</Suspense>
+    </div>
+  );
+}
+
+async function loadPlansWithRecordedUsage(): Promise<TokenPlan[]> {
+  const [plans, rows] = await Promise.all([dbTokenPlans.list(), usageEvents.list()]);
+  const usageMap = computeTokenPlanUsageMap(plans, rows);
+  return plans.map((plan) => {
+    const usage = usageMap.get(plan.id);
+    return usage?.autoTrackable ? { ...plan, usedQuota: usage.usedQuota } : plan;
+  });
+}
+
 function App() {
   const { t } = useTranslation();
   const NAV_ITEMS: NavItem[] = [
     { key: "chat", icon: <MessageSquare className="w-4 h-4" /> },
-    { key: "projects", icon: <FolderKanban className="w-4 h-4" /> },
     { key: "providers", icon: <KeyRound className="w-4 h-4" /> },
     { key: "templates", icon: <LayoutTemplate className="w-4 h-4" /> },
     { key: "tokenPlans", icon: <Coins className="w-4 h-4" /> },
-    { key: "debate", icon: <Swords className="w-4 h-4" /> },
-    { key: "stats", icon: <BarChart3 className="w-4 h-4" /> },
   ];
   const [page, setPage] = useState<PageKey>("chat");
   const [openProjectId, setOpenProjectId] = useState<string | null>(null);
-  const [debateSeed, setDebateSeed] = useState<string | undefined>(undefined);
   const [dbReady, setDbReady] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
   const [plans, setPlans] = useState<TokenPlan[]>([]);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   const [providerCount, setProviderCount] = useState(0);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const sidebar = usePanelResize({ initial: 288, min: 200, max: 460, edge: "right" });
 
   useTheme();
@@ -61,12 +92,15 @@ function App() {
     void initSchema()
       .then(() => seedBuiltInTemplates())
       .then(() => setDbReady(true))
-      .catch((err: unknown) => setDbError(err instanceof Error ? err.message : "Database init failed"));
+      .catch((err: unknown) => setDbError(err instanceof Error ? err.message : String(err)));
   }, []);
 
   useEffect(() => {
     if (!dbReady) return;
-    void dbCredentials.list().then((c) => setProviderCount(c.length));
+    void dbCredentials.list().then((c) => {
+      setProviderCount(c.length);
+      void migrateLegacyApiKeys(c.map((cred) => cred.id)).catch(() => {});
+    });
   }, [dbReady]);
 
   useEffect(() => {
@@ -77,16 +111,20 @@ function App() {
 
   useEffect(() => {
     if (!dbReady) return;
-    void dbTokenPlans.list().then(setPlans);
+    void loadPlansWithRecordedUsage().then(setPlans);
+    void import("@/lib/llm/price-catalog").then((m) => m.syncModelPrices());
+    void import("@/lib/memory/retrieval").then((m) => m.backfillProjectMemoryVectors({ limit: 120 })).catch(() => {});
+    // 2026-07-04 补：意图样例"长期不用衰减"——启动时跑一次，跟其他后台维护任务同级别
+    void import("@/lib/workflow/intent-decay").then((m) => m.decayStaleIntentExamples()).catch(() => {});
     const id = setInterval(() => {
-      void dbTokenPlans.list().then(setPlans);
+      void loadPlansWithRecordedUsage().then(setPlans);
     }, 60_000);
     return () => clearInterval(id);
   }, [dbReady]);
 
   useEffect(() => {
     if (page === "tokenPlans") {
-      void dbTokenPlans.list().then((p) => {
+      void loadPlansWithRecordedUsage().then((p) => {
         setPlans(p);
         setDismissedIds(new Set());
       });
@@ -100,7 +138,7 @@ function App() {
 
   if (dbError) {
     return (
-      <div className="flex h-screen items-center justify-center bg-background p-6">
+      <div className="flex h-full w-full items-center justify-center bg-background p-6">
         <div className="glass border border-red-500/30 rounded-3xl p-8 max-w-lg w-full space-y-4 text-center shadow-xl">
           <AlertTriangle className="w-10 h-10 text-red-500 mx-auto" />
           <h1 className="text-lg font-bold">{t("common.dbErrorTitle")}</h1>
@@ -116,7 +154,7 @@ function App() {
 
   if (!dbReady) {
     return (
-      <div className="flex h-screen items-center justify-center bg-background">
+      <div className="flex h-full w-full items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
           <div className="logo-wrap w-20 h-20 animate-pulse">
             <img src={cosmgridLogo} className="logo-base" alt="CosmGrid" />
@@ -128,66 +166,133 @@ function App() {
   }
 
   return (
-    <div className="flex h-screen bg-background text-foreground overflow-hidden p-3">
+    <div className="flex h-full w-full bg-background text-foreground overflow-hidden p-3">
       <OnboardingModal
         providerCount={providerCount}
         onNavigate={(p) => setPage(p)}
       />
 
-      {/* Sidebar - 可拖拽宽度 */}
-      <aside style={{ width: sidebar.width }} className="glass rounded-3xl overflow-hidden flex flex-col p-6 gap-2 shrink-0">
-        <div className="flex flex-col items-center py-10 mb-6 gap-4">
-          <div className="logo-wrap w-24 h-24" aria-label="CosmGrid" role="img">
+      {/* Sidebar - 可拖拽宽度；收起后保留窄栏，主工作区释放空间 */}
+      {sidebarOpen ? (
+        <>
+          <aside style={{ width: sidebar.width }} className="glass rounded-3xl overflow-hidden hidden xl:flex flex-col p-6 gap-2 shrink-0 relative">
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(false)}
+              title={t("app.sidebar.collapse")}
+              aria-label={t("app.sidebar.collapse")}
+              className="absolute right-4 top-4 h-9 w-9 rounded-xl text-muted-foreground hover:bg-white/10 hover:text-foreground transition-colors flex items-center justify-center"
+            >
+              <PanelLeftClose className="w-4 h-4" />
+            </button>
+
+            <div className="flex flex-col items-center py-10 mb-6 gap-4">
+              <div className="logo-wrap w-24 h-24" aria-label="CosmGrid" role="img">
+                <img src={cosmgridLogo} className="logo-base" alt="CosmGrid" />
+              </div>
+              <div className="text-center">
+                <h1 className="text-xl font-bold bg-gradient-to-br from-primary to-accent bg-clip-text text-transparent">
+                  CosmGrid Agent
+                </h1>
+                <p className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground font-bold mt-1">{t("app.brandSubtitle")}</p>
+              </div>
+            </div>
+
+            <nav className="flex-1 min-h-0 flex flex-col gap-1 overflow-y-auto scrollbar-none">
+              {NAV_ITEMS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => {
+                    setPage(item.key);
+                    if (item.key !== "projects") setOpenProjectId(null);
+                  }}
+                  className={cn(
+                    "flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-bold transition-all",
+                    page === item.key
+                      ? "nav-item-active"
+                      : "hover:bg-white/10 dark:hover:bg-white/5 text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {item.icon}
+                  {t(`app.sidebar.${item.key}`)}
+                </button>
+              ))}
+            </nav>
+
+            <div className="mt-auto pt-4 border-t border-white/5">
+              <button
+                type="button"
+                onClick={() => setPage("settings")}
+                className={cn(
+                  "w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-bold transition-all",
+                  page === "settings"
+                    ? "nav-item-active"
+                    : "hover:bg-white/10 dark:hover:bg-white/5 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Settings className="w-4 h-4" />
+                <span>{t("app.sidebar.settings")}</span>
+              </button>
+            </div>
+          </aside>
+
+          <ResizeHandle onMouseDown={sidebar.onMouseDown} className="hidden xl:block" />
+        </>
+      ) : (
+        <aside className="glass rounded-3xl overflow-hidden hidden xl:flex w-16 shrink-0 flex-col items-center p-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            title={t("app.sidebar.expand")}
+            aria-label={t("app.sidebar.expand")}
+            className="mt-2 flex h-10 w-10 items-center justify-center rounded-xl text-muted-foreground hover:bg-white/10 hover:text-foreground transition-colors"
+          >
+            <PanelLeftOpen className="w-4 h-4" />
+          </button>
+          <div className="logo-wrap my-4 h-9 w-9" aria-label="CosmGrid" role="img">
             <img src={cosmgridLogo} className="logo-base" alt="CosmGrid" />
           </div>
-          <div className="text-center">
-            <h1 className="text-xl font-bold bg-gradient-to-br from-primary to-accent bg-clip-text text-transparent">
-              CosmGrid Agent
-            </h1>
-            <p className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground font-bold mt-1">{t("app.brandSubtitle")}</p>
-          </div>
-        </div>
-
-        <nav className="flex flex-col gap-1">
-          {NAV_ITEMS.map((item) => (
+          <nav className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto scrollbar-none">
+            {NAV_ITEMS.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                title={t(`app.sidebar.${item.key}`)}
+                aria-label={t(`app.sidebar.${item.key}`)}
+                onClick={() => {
+                  setPage(item.key);
+                  if (item.key !== "projects") setOpenProjectId(null);
+                }}
+                className={cn(
+                  "flex h-11 w-11 items-center justify-center rounded-2xl transition-all",
+                  page === item.key
+                    ? "nav-item-active"
+                    : "hover:bg-white/10 dark:hover:bg-white/5 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {item.icon}
+              </button>
+            ))}
+          </nav>
+          <div className="mt-auto border-t border-white/5 pt-2">
             <button
-              key={item.key}
               type="button"
-              onClick={() => {
-                setPage(item.key);
-                if (item.key !== "projects") setOpenProjectId(null);
-              }}
+              title={t("app.sidebar.settings")}
+              aria-label={t("app.sidebar.settings")}
+              onClick={() => setPage("settings")}
               className={cn(
-                "flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-bold transition-all",
-                page === item.key
+                "flex h-11 w-11 items-center justify-center rounded-2xl transition-all",
+                page === "settings"
                   ? "nav-item-active"
                   : "hover:bg-white/10 dark:hover:bg-white/5 text-muted-foreground hover:text-foreground",
               )}
             >
-              {item.icon}
-              {t(`app.sidebar.${item.key}`)}
+              <Settings className="w-4 h-4" />
             </button>
-          ))}
-        </nav>
-
-        <div className="mt-auto pt-4 border-t border-white/5">
-          <button
-            type="button"
-            onClick={() => setPage("settings")}
-            className={cn(
-              "w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-bold transition-all",
-              page === "settings"
-                ? "nav-item-active"
-                : "hover:bg-white/10 dark:hover:bg-white/5 text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Settings className="w-4 h-4" />
-            <span>{t("app.sidebar.settings")}</span>
-          </button>
-        </div>
-      </aside>
-
-      <ResizeHandle onMouseDown={sidebar.onMouseDown} />
+          </div>
+        </aside>
+      )}
 
       {/* Main Content Area - Fluid, handle overflow */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
@@ -211,34 +316,40 @@ function App() {
         )}
 
         <main className="flex-1 overflow-hidden">
-          <div className="h-full" style={{ display: page === "chat" ? "block" : "none" }}>
-            <ChatPage onOpenDebate={(topic) => { setDebateSeed(topic); setPage("debate"); }} />
+          <div className="h-full w-full" style={{ display: page === "chat" ? "block" : "none" }}>
+            <Suspense fallback={<PageLoading />}>
+              <ChatPage active={page === "chat"} />
+            </Suspense>
           </div>
-          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "providers" ? "block" : "none" }}>
-            <ProvidersPage />
-          </div>
-          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "templates" ? "block" : "none" }}>
-            <TemplatesPage />
-          </div>
-          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "tokenPlans" ? "block" : "none" }}>
-            <TokenPlansPage />
-          </div>
-          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "debate" ? "block" : "none" }}>
-            <DebatePage initialTopic={debateSeed} />
-          </div>
-          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "stats" ? "block" : "none" }}>
-            <StatsPage />
-          </div>
-          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "settings" ? "block" : "none" }}>
-            <SettingsPage />
-          </div>
-          <div className="h-full rounded-3xl overflow-hidden" style={{ display: page === "projects" ? "block" : "none" }}>
-            {openProjectId ? (
-              <ProjectDetailPage projectId={openProjectId} onBack={() => setOpenProjectId(null)} />
-            ) : (
-              <ProjectsPage onOpenProject={(id) => setOpenProjectId(id)} />
-            )}
-          </div>
+          {page === "providers" && (
+            <LazyPage>
+              <ProvidersPage />
+            </LazyPage>
+          )}
+          {page === "templates" && (
+            <LazyPage>
+              <TemplatesPage />
+            </LazyPage>
+          )}
+          {page === "tokenPlans" && (
+            <LazyPage>
+              <UsageMonitorPage />
+            </LazyPage>
+          )}
+          {page === "settings" && (
+            <LazyPage>
+              <SettingsPage onOpenProjectAssets={() => { setOpenProjectId(null); setPage("projects"); }} />
+            </LazyPage>
+          )}
+          {page === "projects" && (
+            <LazyPage>
+              {openProjectId ? (
+                <ProjectDetailPage projectId={openProjectId} onBack={() => setOpenProjectId(null)} />
+              ) : (
+                <ProjectsPage onOpenProject={(id) => setOpenProjectId(id)} />
+              )}
+            </LazyPage>
+          )}
         </main>
       </div>
     </div>

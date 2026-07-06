@@ -1,5 +1,5 @@
 // 首次启动引导（v0.5 / 7.11）
-// 4 步引导帮用户在 5 分钟内走完"加 API → 看模板 → 建项目"全流程
+// 4 步引导帮用户在 5 分钟内走完"加 API → 看模板 → 回到对话绑定工作文件夹"全流程
 //
 // 设计原则（沿用 v0.4 全自动模型分配 / AI 自动生成检查点 的减负思路）：
 // 1. 系统能判断的就自动做（用 useEffect 自动检测有无 provider，决定是否弹窗）
@@ -15,7 +15,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { KeyRound, LayoutTemplate, FolderKanban, Sparkles, CheckCircle2 } from "lucide-react";
+import { KeyRound, LayoutTemplate, MessageSquare, Sparkles, CheckCircle2 } from "lucide-react";
 
 const STORAGE_KEY = "cosmgrid_onboarded_v1";
 
@@ -23,16 +23,16 @@ interface OnboardingModalProps {
   /** 当前 db 里的 provider 数量（0 = 还没配置任何） */
   providerCount: number;
   /** 跳到对应页 */
-  onNavigate: (page: "providers" | "templates" | "projects") => void;
+  onNavigate: (page: "providers" | "templates" | "chat") => void;
 }
 
-const STEP_ICONS = [KeyRound, Sparkles, LayoutTemplate, FolderKanban];
-const STEP_KEYS = ["addApiKey", "addSecondModel", "browseTemplates", "createFirstProject"] as const;
-const STEP_TARGETS: Array<"providers" | "templates" | "projects"> = [
+const STEP_ICONS = [KeyRound, Sparkles, LayoutTemplate, MessageSquare];
+const STEP_KEYS = ["addApiKey", "addSecondModel", "browseTemplates", "bindWorkspace"] as const;
+const STEP_TARGETS: Array<"providers" | "templates" | "chat"> = [
   "providers",
   "providers",
   "templates",
-  "projects",
+  "chat",
 ];
 
 export function OnboardingModal({ providerCount, onNavigate }: OnboardingModalProps) {

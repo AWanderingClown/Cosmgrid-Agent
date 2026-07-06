@@ -7,8 +7,8 @@
 // builder 消除 4 处 provider.type guard。
 //
 // 设计决策：
-// 1. 保留流式体验：主模型一开始流就报错（最常见的 401/429/网络问题）时才切 fallback 重发；
-//    流到一半失败的场景留给 v0.4.x 优化（少见 + 难做）。
+// 1. 保留流式体验：主模型失败时自动切 fallback；如果已经流出部分内容，
+//    会把已输出片段放回上下文，要求下一个模型从中断处继续、不要重复。
 // 2. 哪些错误触发 fallback：401/403/404/429/超时/网络/5xx → 切；
 //    context_overflow（413 / 上下文超长）→ 不切（换模型也救不了，让用户知道要压缩历史）；
 //    unknown → 不切（保守，避免浪费 fallback 配额）。
@@ -17,19 +17,57 @@
 //    不再混用 LlmErrorCategory。
 // 5. 链式调用：models 数组按顺序尝试，跳过 cooldown 的，遇到非 shouldFallback 的错就终止。
 
-import { streamText, stepCountIs, type ToolSet } from "ai";
+import { streamText, stepCountIs, type ToolSet, type ModelMessage } from "ai";
+import { cliSessions } from "../db";
 import { getLanguageModel } from "./provider-factory";
 import { classifyLlmError, type LlmErrorCategory } from "./error-classifier";
-import { isInCooldown, markModelFailed, markModelSucceeded } from "./model-cooldown";
+import { isInCooldown, markModelFailed, markModelSucceeded, getCooldownRemainingMs } from "./model-cooldown";
 import { recordUsageEvent, type RecordUsageParams } from "./usage-tracker";
-import { isCliProviderType } from "./cli-protocol";
+import { isCliProviderType, type CliMessage } from "./cli-protocol";
 import { streamViaCli } from "./cli-engine";
 import { classifyMessageComplexity } from "./message-router";
+import { detectDoomLoop, type StepToolCall } from "./harness/doom-loop";
+import { resolveMaxOutputTokens, ensureModelLimitsLoaded } from "./model-limits";
+import { isNormalFinishReason, isRecoverableTruncation } from "./finish-reason";
+import type { ChatMsg } from "./context-compressor";
 
-/** 从对话里取最后一条 user 消息推断难度桶（role 默认值） */
-function inferRole(messages: Array<{ role: string; content: string }>): string {
+const MAX_AUTO_CONTINUATIONS = 2;
+
+function buildRecoveryMessages(messages: ChatMsg[], partialText: string, reason: string): ChatMsg[] {
+  const trimmed = partialText.trim();
+  const recovered: ChatMsg[] = [...messages];
+  if (trimmed) {
+    recovered.push({ role: "assistant", content: trimmed });
+  }
+  recovered.push({
+    role: "user",
+    content:
+      `上一次模型调用因为「${reason}」没有正常完成。请从刚才中断处继续，不要重复已经完成的内容，` +
+      "继续完成用户原始任务。如果前文已经给出部分答案，只补剩余部分。",
+  });
+  return recovered;
+}
+
+function getPartialTextFromError(error: unknown): string {
+  if (typeof error === "object" && error !== null && "__partialText" in error) {
+    const partial = (error as { __partialText?: unknown }).__partialText;
+    return typeof partial === "string" ? partial : "";
+  }
+  return "";
+}
+
+/** 从对话里取最后一条 user 消息推断难度桶（role 默认值）。兼容多模态 content（数组取 text part）。 */
+function inferRole(messages: ChatMsg[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]!.role === "user") return classifyMessageComplexity(messages[i]!.content);
+    const m = messages[i]!;
+    if (m.role === "user") {
+      const c = m.content;
+      const text =
+        typeof c === "string"
+          ? c
+          : c.filter((p) => p.type === "text").map((p) => ("text" in p ? p.text : "")).join("");
+      return classifyMessageComplexity(text);
+    }
   }
   return "main_chat";
 }
@@ -44,6 +82,8 @@ export interface ModelEndpoint {
   providerType: string;
   apiKey: string;
   baseUrl?: string;
+  /** CLI provider 的工作目录：绑定工作文件夹时传入，避免 CLI 读到应用开发目录 */
+  workingDirectory?: string | null;
   /** 给 UI 显示的标签（如 "Opus 4.8"），仅做展示 */
   displayLabel?: string;
   /** 对应 ApiCredential 的 id（用于 recordUsageEvent 落库关联） */
@@ -56,6 +96,12 @@ export interface ModelEndpoint {
 export interface StreamUsage {
   inputTokens: number;
   outputTokens: number;
+  cacheReadInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  /** 阶段 H：本轮真实工具调用次数（来自 stepToolCalls.length）。
+   *  - 0 + finishReason="stop" + 输出含动手意图 → Harness nudge 重答触发条件之一
+   *  - 加这个字段让 ChatPage 在 onUsage 回调里直接拿到，不用额外暴露 streamText 内部状态 */
+  toolCallCount: number;
 }
 
 /**
@@ -66,7 +112,8 @@ export interface StreamUsage {
  */
 export type SwitchReason =
   | { kind: "error"; category: LlmErrorCategory }
-  | { kind: "cooldown" };
+  | { kind: "cooldown" }
+  | { kind: "recovery"; reason: string };
 
 /** 流式过程的回调钩子 */
 export interface StreamCallbacks {
@@ -83,6 +130,17 @@ export interface StreamCallbacks {
    * interrupted=true 表示用户主动 abort（不写 usage，标记 interrupted）。
    */
   onUsage?: (usage: StreamUsage, model: ModelEndpoint, finishReason: string, interrupted: boolean) => void;
+  /** 系统自动恢复的方式：原生续跑 / 上下文重放 / fallback 接力 */
+  onRecovered?: (mode: "native_resume" | "context_replay" | "fallback_handoff") => void;
+  /** CLI/agent 中间状态，不计入最终回答正文 */
+  onStatus?: (status: string) => void;
+  /** CLI 官方输出的实际模型名，例如 sonnet 别名会解析成 claude-sonnet-4-6 */
+  onResolvedModel?: (modelName: string, target: ModelEndpoint) => void;
+  /**
+   * streamText 全部 step 跑完后，把累积的所有 toolCalls 一次交给 caller。
+   * 不传=noop，零侵入。Abort 中断时不调。
+   */
+  onFinalToolCalls?: (toolCalls: { toolName: string; input?: unknown }[]) => void;
 }
 
 /**
@@ -128,7 +186,7 @@ export function toModelEndpoint(
  */
 export async function streamWithFallback(
   models: ModelEndpoint[],
-  messages: Array<{ role: "user" | "assistant" | "system"; content: string }>,
+  messages: ChatMsg[],
   callbacks: StreamCallbacks,
   options: {
     signal?: AbortSignal;
@@ -139,15 +197,41 @@ export async function streamWithFallback(
     /** 消息难度桶（simple/standard/hard），落 UsageEvent 供 v0.9 SmartRouter 滚动统计。
      *  不传则内部按最后一条 user 消息推断（调用方无需各自重复算）。 */
     role?: string;
+    /** 阶段 F1：actor 维度（leader/architect/frontend/.../stage）。
+     *  - 跟 role（workRole 难度桶）配对清晰，不撞名
+     *  - 不传 → NULL（review F1-1：leader 占比 80%+，NULL 是真实数据，聚合不过滤）
+     *  - 调用方责任：必须显式传（ChatPage 主对话 → 'leader'，ProjectDetailPage → 'stage'，runChain 每跳 → role: RoleId） */
+    actorRole?: string | null;
     /** v0.7 阶段4：工具集（read/glob/grep 等）。传了才开启工具调用 + 多步 agentic 循环 */
     tools?: ToolSet;
     /** 工具调用最大步数（防死循环），默认 8 */
     maxToolSteps?: number;
+    /** 强制本轮必须真调用工具（"required"）。用于 harness nudge 重答——模型上一次
+     *  嘴上说了要做却 0 工具调用，文字提醒不够硬，直接在 API 层锁死它这次必须调用，
+     *  不给它继续嘴炮的选项。不传 = "auto"（照常自行判断）。 */
+    toolChoice?: "auto" | "required";
+    /** 单次回答的最大输出 token。不传则用 DEFAULT_MAX_OUTPUT_TOKENS。
+     *  关键：很多 OpenAI 兼容端点（MiniMax 等）不传 max_tokens 时默认值很小，
+     *  推理型模型会把预算花在 <think> 上、正文没写完就被截断 → 必须显式给足。 */
+    maxOutputTokens?: number;
+    routingDecision?: {
+      baselineModelId: string;
+      baselineModelName: string;
+      baselineProviderType?: string | null;
+      actualModelId: string;
+    } | null;
+    compressionStats?: {
+      beforeTokens: number;
+      afterTokens: number;
+    } | null;
   } = {},
 ): Promise<{ usedModelId: string; switched: boolean }> {
   if (models.length === 0) {
     throw new Error("streamWithFallback: models array cannot be empty");
   }
+
+  // 预热 models.dev 输出上限表（幂等、不阻塞本轮）。首轮没拉到就用 CEILING 兜底，下轮起精确 clamp。
+  void ensureModelLimitsLoaded();
 
   // 跳过 cooldown 中的模型：从前往后找第一个不在 cooldown 的；前面被跳过的都触发 onSwitched("cooldown")
   let startIdx = 0;
@@ -159,107 +243,421 @@ export async function streamWithFallback(
     startIdx++;
   }
   if (startIdx >= models.length) {
-    throw new Error("All models are cooling down — please try again later");
+    // 修复（2026-07-05）：之前这里直接抛裸英文 Error，classifyLlmError 认不出来只能落进
+    // "unknown"兜底——用户只看到一句生硬的英文提示，不知道具体是哪几个模型在冷却、还要
+    // 等多久，也不知道重启 app 能立即清空（冷却状态只在内存里，见 model-cooldown.ts）。
+    // 这里把每个模型的剩余冷却时间拼进消息，error-classifier.ts 按前缀识别后原样透出。
+    const detail = models
+      .map((m) => {
+        const mins = Math.max(1, Math.ceil(getCooldownRemainingMs(m.modelId) / 60_000));
+        return `${m.displayLabel ?? m.modelName}（还需 ${mins} 分钟）`;
+      })
+      .join("、");
+    throw new Error(`All models are cooling down: ${detail}`);
+  }
+
+  async function runAttempt(
+    target: ModelEndpoint,
+    attemptMessages: ChatMsg[],
+  ): Promise<{
+    streamUsage: StreamUsage;
+    finishReason: string;
+    wasAborted: boolean;
+    partialText: string;
+    toolCalls: StepToolCall[];
+  }> {
+    let partialText = "";
+
+    if (isCliProviderType(target.providerType)) {
+      // CLI 引擎路径：spawn 本机 claude/codex 吃订阅额度（baseUrl 复用为可执行文件路径）
+      // CLI 不支持图片——带图消息的 chain 已在 ChatPage 过滤掉 CLI 端点；这里防御性把数组 content 折叠成纯文本
+      const cliMessages: CliMessage[] = attemptMessages.map((m) => ({
+        role: m.role as "user" | "assistant" | "system",
+        content:
+          typeof m.content === "string"
+            ? m.content
+            : m.content.filter((p) => p.type === "text").map((p) => ("text" in p ? p.text : "")).join(""),
+      }));
+      let officialSessionId: string | null = null;
+      const persistCliSession = (sessionId: string, status: "active" | "completed" | "failed") => {
+        void cliSessions.upsert({
+          providerType: target.providerType as "claude-cli" | "codex-cli",
+          conversationId: options.conversationId ?? null,
+          projectId: options.projectId ?? null,
+          officialSessionId: sessionId,
+          modelName: target.modelName,
+          program: target.baseUrl ?? null,
+          status,
+        }).catch(() => {});
+      };
+      const runCli = async (
+        resumeSessionId?: string | null,
+      ): Promise<{
+        finishReason: string;
+        wasAborted: boolean;
+        inputTokens: number;
+        outputTokens: number;
+        officialSessionId: string | null;
+        actualModelName: string | null;
+      }> => {
+        const cliResult = await streamViaCli(
+          {
+            providerType: target.providerType as "claude-cli" | "codex-cli",
+            modelName: target.modelName,
+            ...(target.baseUrl ? { program: target.baseUrl } : {}),
+            ...(target.workingDirectory ? { workingDirectory: target.workingDirectory } : {}),
+          },
+          cliMessages,
+          {
+            onDelta: (delta) => {
+              partialText += delta;
+              callbacks.onDelta(delta);
+            },
+            onSession: (sessionId) => {
+              officialSessionId = sessionId;
+              persistCliSession(sessionId, "active");
+            },
+            onStatus: callbacks.onStatus,
+            onModel: (modelName) => callbacks.onResolvedModel?.(modelName, target),
+          },
+          {
+            ...(options.signal ? { signal: options.signal } : {}),
+            ...(resumeSessionId
+              ? {
+                  resumeSessionId,
+                  resumePrompt: "Continue from where you stopped. Do not repeat completed content.",
+                }
+              : {}),
+          },
+        );
+        if (cliResult.officialSessionId) {
+          officialSessionId = cliResult.officialSessionId;
+        }
+        return {
+          finishReason: cliResult.finishReason,
+          wasAborted: cliResult.finishReason === "abort" || (options.signal?.aborted ?? false),
+          inputTokens: cliResult.inputTokens,
+          outputTokens: cliResult.outputTokens,
+          officialSessionId,
+          actualModelName: cliResult.actualModelName,
+        };
+      };
+      try {
+        const cliResult = await runCli();
+        let totalInputTokens = cliResult.inputTokens;
+        let totalOutputTokens = cliResult.outputTokens;
+        let finishReason = cliResult.finishReason;
+        let wasAborted = cliResult.wasAborted;
+        if (
+          !wasAborted &&
+          officialSessionId &&
+          isRecoverableTruncation(finishReason)
+        ) {
+          callbacks.onRecovered?.("native_resume");
+          const resumed = await runCli(officialSessionId);
+          totalInputTokens += resumed.inputTokens;
+          totalOutputTokens += resumed.outputTokens;
+          finishReason = resumed.finishReason;
+          wasAborted = resumed.wasAborted;
+        }
+        if (officialSessionId) {
+          persistCliSession(officialSessionId, isNormalFinishReason(finishReason) ? "completed" : "failed");
+        }
+        return {
+          finishReason,
+          wasAborted,
+          partialText,
+          toolCalls: [],
+          streamUsage: {
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
+            toolCallCount: 0,
+          },
+        };
+      } catch (error) {
+        const sessionId =
+          (error as { officialSessionId?: string | null })?.officialSessionId ?? officialSessionId;
+        if (sessionId && !(options.signal?.aborted ?? false)) {
+          try {
+            callbacks.onRecovered?.("native_resume");
+            const resumed = await runCli(sessionId);
+            persistCliSession(sessionId, isNormalFinishReason(resumed.finishReason) ? "completed" : "failed");
+            return {
+              finishReason: resumed.finishReason,
+              wasAborted: resumed.wasAborted,
+              partialText,
+              toolCalls: [],
+              streamUsage: {
+                inputTokens: resumed.inputTokens,
+                outputTokens: resumed.outputTokens,
+                toolCallCount: 0,
+              },
+            };
+          } catch {
+            persistCliSession(sessionId, "failed");
+          }
+        }
+        if (typeof error === "object" && error !== null) {
+          (error as { __partialText?: string }).__partialText = partialText;
+        }
+        throw error;
+      }
+    }
+
+    // API 直连路径：Vercel AI SDK streamText
+    const lm = getLanguageModel(target.providerType, target.modelName, target.apiKey, target.baseUrl);
+    const localAbort = new AbortController();
+    const onParentAbort = () => localAbort.abort();
+    options.signal?.addEventListener("abort", onParentAbort);
+    const stepToolCalls: StepToolCall[] = [];
+
+    try {
+      const result = streamText({
+        model: lm,
+        messages: attemptMessages as unknown as ModelMessage[],
+        maxOutputTokens: options.maxOutputTokens ?? resolveMaxOutputTokens(target.modelName),
+        maxRetries: 3,
+        ...(options.tools ? {
+          tools: options.tools,
+          toolChoice: options.toolChoice ?? "auto",
+          stopWhen: stepCountIs(options.maxToolSteps ?? 8),
+          onStepFinish: (event) => {
+            const calls = (event.toolCalls ?? []) as { toolName: string; input: unknown }[];
+            for (const tc of calls) {
+              stepToolCalls.push({ toolName: tc.toolName, input: tc.input });
+            }
+            if (detectDoomLoop(stepToolCalls)) localAbort.abort();
+          },
+        } : {}),
+        abortSignal: localAbort.signal,
+      });
+
+      for await (const delta of result.textStream) {
+        partialText += delta;
+        callbacks.onDelta(delta);
+      }
+
+      const usage = await result.usage;
+      const finishReason = (await result.finishReason) ?? "stop";
+      return {
+        finishReason,
+        wasAborted: localAbort.signal.aborted || (options.signal?.aborted ?? false),
+        partialText,
+        toolCalls: stepToolCalls,
+        streamUsage: {
+          inputTokens: usage?.inputTokens ?? 0,
+          outputTokens: usage?.outputTokens ?? 0,
+          cacheReadInputTokens:
+            usage?.inputTokenDetails?.cacheReadTokens ?? usage?.cachedInputTokens ?? 0,
+          cacheWriteInputTokens:
+            usage?.inputTokenDetails?.cacheWriteTokens ?? 0,
+          toolCallCount: stepToolCalls.length,
+        },
+      };
+    } catch (error) {
+      if (typeof error === "object" && error !== null) {
+        (error as { __partialText?: string }).__partialText = partialText;
+      }
+      throw error;
+    } finally {
+      options.signal?.removeEventListener("abort", onParentAbort);
+    }
+  }
+
+  function recordUsageEventOnly(args: {
+    target: ModelEndpoint;
+    usage: StreamUsage;
+    finishReason: string;
+    startedAt: number;
+  }): void {
+    const params: RecordUsageParams = {
+      modelId: args.target.modelId,
+      modelName: args.target.modelName,
+      providerType: args.target.providerType,
+      providerId: args.target.providerId,
+      apiCredentialId: args.target.apiCredentialId,
+      usage: {
+        inputTokens: args.usage.inputTokens,
+        outputTokens: args.usage.outputTokens,
+        cacheReadInputTokens: args.usage.cacheReadInputTokens,
+        cacheWriteInputTokens: args.usage.cacheWriteInputTokens,
+      },
+      finishReason: args.finishReason,
+      interrupted: false,
+      latencyMs: Date.now() - args.startedAt,
+    };
+    if (options.projectId) params.projectId = options.projectId;
+    if (options.conversationId) params.conversationId = options.conversationId;
+    params.role = options.role ?? inferRole(messages);
+    if (options.actorRole !== undefined) params.roleKind = options.actorRole;
+    if (options.routingDecision) params.routingDecision = options.routingDecision;
+    if (options.compressionStats) params.compressionStats = options.compressionStats;
+    void recordUsageEvent(params);
+  }
+
+  function recordFinalUsage(args: {
+    target: ModelEndpoint;
+    usage: StreamUsage;
+    finishReason: string;
+    startedAt: number;
+  }): void {
+    callbacks.onUsage?.(args.usage, args.target, args.finishReason, false);
+    recordUsageEventOnly(args);
   }
 
   let usedIndex = startIdx;
+  let activeMessages = messages;
+  let aggregateUsage: StreamUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    toolCallCount: 0,
+  };
+  let aggregateToolCalls: StepToolCall[] = [];
+
   while (usedIndex < models.length) {
     const target = models[usedIndex]!;
+    const modelStartedAt = Date.now();
 
     if (options.signal?.aborted) {
       return { usedModelId: target.modelId, switched: usedIndex !== 0 };
     }
 
-    try {
-      let streamUsage: StreamUsage;
-      let finishReason: string;
-      let wasAborted: boolean;
-      const startedAt = Date.now();
+    let continuationsForThisModel = 0;
+    while (true) {
+      try {
+        const attempt = await runAttempt(target, activeMessages);
+        aggregateUsage.inputTokens += attempt.streamUsage.inputTokens;
+        aggregateUsage.outputTokens += attempt.streamUsage.outputTokens;
+        aggregateUsage.cacheReadInputTokens =
+          (aggregateUsage.cacheReadInputTokens ?? 0) + (attempt.streamUsage.cacheReadInputTokens ?? 0);
+        aggregateUsage.cacheWriteInputTokens =
+          (aggregateUsage.cacheWriteInputTokens ?? 0) + (attempt.streamUsage.cacheWriteInputTokens ?? 0);
+        aggregateUsage.toolCallCount += attempt.streamUsage.toolCallCount;
+        aggregateToolCalls.push(...attempt.toolCalls);
 
-      if (isCliProviderType(target.providerType)) {
-        // CLI 引擎路径：spawn 本机 claude/codex 吃订阅额度（baseUrl 复用为可执行文件路径）
-        const cliResult = await streamViaCli(
-          {
-            providerType: target.providerType,
-            modelName: target.modelName,
-            ...(target.baseUrl ? { program: target.baseUrl } : {}),
-          },
-          messages,
-          { onDelta: callbacks.onDelta },
-          options.signal ? { signal: options.signal } : {},
-        );
-        finishReason = cliResult.finishReason;
-        wasAborted = finishReason === "abort" || (options.signal?.aborted ?? false);
-        streamUsage = { inputTokens: cliResult.inputTokens, outputTokens: cliResult.outputTokens };
-      } else {
-        // API 直连路径：Vercel AI SDK streamText
-        const lm = getLanguageModel(target.providerType, target.modelName, target.apiKey, target.baseUrl);
-        const result = streamText({
-          model: lm,
-          messages,
-          // 传了 tools 才开工具调用 + 多步循环（stopWhen 防死循环）
-          ...(options.tools ? { tools: options.tools, stopWhen: stepCountIs(options.maxToolSteps ?? 8) } : {}),
-          ...(options.signal ? { abortSignal: options.signal } : {}),
-        });
-
-        for await (const delta of result.textStream) {
-          callbacks.onDelta(delta);
+        if (attempt.wasAborted) {
+          return { usedModelId: target.modelId, switched: usedIndex !== 0 };
         }
 
-        const usage = await result.usage;
-        finishReason = (await result.finishReason) ?? "stop";
-        wasAborted = options.signal?.aborted ?? false;
-        streamUsage = {
-          inputTokens: usage?.inputTokens ?? 0,
-          outputTokens: usage?.outputTokens ?? 0,
-        };
-      }
+        if (!isNormalFinishReason(attempt.finishReason) &&
+          isRecoverableTruncation(attempt.finishReason)) {
+          if (continuationsForThisModel < MAX_AUTO_CONTINUATIONS) {
+            callbacks.onRecovered?.("context_replay");
+            activeMessages = buildRecoveryMessages(activeMessages, attempt.partialText, attempt.finishReason);
+            continuationsForThisModel++;
+            continue;
+          }
 
-      markModelSucceeded(target.modelId);
-      callbacks.onUsage?.(streamUsage, target, finishReason, wasAborted);
+          markModelFailed(target.modelId);
+          recordUsageEventOnly({
+            target,
+            usage: aggregateUsage,
+            finishReason: attempt.finishReason,
+            startedAt: modelStartedAt,
+          });
+          if (usedIndex >= models.length - 1) {
+            throw new Error(`Model output was truncated after ${MAX_AUTO_CONTINUATIONS} automatic continuations`);
+          }
+          const next = models[usedIndex + 1]!;
+          callbacks.onSwitched?.(target, next, { kind: "recovery", reason: attempt.finishReason });
+          callbacks.onRecovered?.("fallback_handoff");
+          activeMessages = buildRecoveryMessages(activeMessages, attempt.partialText, attempt.finishReason);
+          aggregateUsage = {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            toolCallCount: 0,
+          };
+          aggregateToolCalls = [];
+          usedIndex++;
+          break;
+        }
 
-      // 落 UsageEvent（chat-fallback 内置，避免调用方写错 modelName/providerId）
-      // interrupted=true 的不写——abort 没收尾，统计意义不大
-      if (!wasAborted) {
-        const params: RecordUsageParams = {
-          modelId: target.modelId,
-          modelName: target.modelName,
-          providerId: target.providerId,
-          apiCredentialId: target.apiCredentialId,
-          usage: { inputTokens: streamUsage.inputTokens, outputTokens: streamUsage.outputTokens },
-          finishReason,
-          interrupted: false,
-          latencyMs: Date.now() - startedAt,
-        };
-        if (options.projectId) params.projectId = options.projectId;
-        if (options.conversationId) params.conversationId = options.conversationId;
-        // role 不传则按最后一条 user 消息推断难度桶（避免每个调用方各算一遍）
-        params.role = options.role ?? inferRole(messages);
-        void recordUsageEvent(params);
-      }
+        if (!isNormalFinishReason(attempt.finishReason)) {
+          markModelFailed(target.modelId);
+          recordUsageEventOnly({
+            target,
+            usage: aggregateUsage,
+            finishReason: attempt.finishReason,
+            startedAt: modelStartedAt,
+          });
+          if (usedIndex >= models.length - 1) {
+            throw new Error(`Model call ended abnormally: ${attempt.finishReason}`);
+          }
+          const next = models[usedIndex + 1]!;
+          callbacks.onSwitched?.(target, next, { kind: "recovery", reason: attempt.finishReason });
+          callbacks.onRecovered?.("fallback_handoff");
+          activeMessages = buildRecoveryMessages(activeMessages, attempt.partialText, attempt.finishReason);
+          aggregateUsage = {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            toolCallCount: 0,
+          };
+          aggregateToolCalls = [];
+          usedIndex++;
+          break;
+        }
 
-      return { usedModelId: target.modelId, switched: usedIndex !== 0 };
-    } catch (err) {
-      if ((err as { name?: string })?.name === "AbortError" || options.signal?.aborted) {
+        markModelSucceeded(target.modelId);
+        callbacks.onFinalToolCalls?.(
+          aggregateToolCalls.map((tc) => ({ toolName: tc.toolName, input: tc.input })),
+        );
+        recordFinalUsage({
+          target,
+          usage: aggregateUsage,
+          finishReason: attempt.finishReason,
+          startedAt: modelStartedAt,
+        });
         return { usedModelId: target.modelId, switched: usedIndex !== 0 };
-      }
-      const classified = classifyLlmError(err);
+      } catch (err) {
+        if ((err as { name?: string })?.name === "AbortError" || options.signal?.aborted) {
+          return { usedModelId: target.modelId, switched: usedIndex !== 0 };
+        }
+        // 1.2 修复：传 providerType 让 classifyLlmError 按国产 provider 专属规则匹配（中文错误体）
+        const classified = classifyLlmError(err, undefined, target.providerType);
 
-      // 是否尝试下一个模型？
-      if (!classified.shouldFallback || usedIndex >= models.length - 1) {
-        // 不可恢复 或 已是最后一个：标 failed，抛错
+        recordUsageEventOnly({
+          target,
+          usage: aggregateUsage,
+          finishReason: classified.category,
+          startedAt: modelStartedAt,
+        });
+
+        // 是否尝试下一个模型？
+        if (!classified.shouldFallback || usedIndex >= models.length - 1) {
+          // 不可恢复 或 已是最后一个：标 failed，抛错
+          markModelFailed(target.modelId);
+          throw err;
+        }
+
+        // 标记 failed（确认要切才标，避免不该切的也进 cooldown）
         markModelFailed(target.modelId);
-        throw err;
+
+        // 触发 onSwitched（cooldown 跳过的已经在上面触发过）
+        const next = models[usedIndex + 1]!;
+        callbacks.onSwitched?.(target, next, { kind: "error", category: classified.category });
+        callbacks.onRecovered?.("fallback_handoff");
+        const partialText = getPartialTextFromError(err);
+        if (partialText.trim()) {
+          activeMessages = buildRecoveryMessages(activeMessages, partialText, classified.category);
+        }
+
+        aggregateUsage = {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          toolCallCount: 0,
+        };
+        aggregateToolCalls = [];
+        usedIndex++;
+        break;
       }
-
-      // 标记 failed（确认要切才标，避免不该切的也进 cooldown）
-      markModelFailed(target.modelId);
-
-      // 触发 onSwitched（cooldown 跳过的已经在上面触发过）
-      const next = models[usedIndex + 1]!;
-      callbacks.onSwitched?.(target, next, { kind: "error", category: classified.category });
-
-      usedIndex++;
     }
   }
 

@@ -1,14 +1,14 @@
 // ProjectsPage - 重构为 "Cosmic Cyber" 视觉风格
 import { useEffect, useState } from "react";
-import { ArrowRight, Check, FolderKanban, Plus, Trash2, Calendar, Layout, MapPin, Activity } from "lucide-react";
+import { ArrowRight, Check, FolderKanban, Plus, Trash2, Pencil, Calendar, Layout, MapPin, Activity } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { BUILT_IN_TEMPLATES } from "@/lib/templates";
 import { cn } from "@/lib/utils";
 
 /** 内置模板 name → i18nKey 映射（给 ProjectsPage select 显示用） */
-const BUILT_IN_TEMPLATE_NAME_TO_KEY: Record<string, "fullstack_web" | "data_science" | "mobile_app" | "small_script"> = Object.fromEntries(
+const BUILT_IN_TEMPLATE_NAME_TO_KEY: Record<string, "default_eight_roles"> = Object.fromEntries(
   BUILT_IN_TEMPLATES.map((b) => [b.name, b.nameKey]),
-) as Record<string, "fullstack_web" | "data_science" | "mobile_app" | "small_script">;
+) as Record<string, "default_eight_roles">;
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -35,6 +35,7 @@ import {
   type Project,
   type ProjectTemplate,
 } from "@/lib/db";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 const STATUS_KEYS = ["pending", "active", "paused", "completed", "failed"] as const;
 const STATUS_COLORS: Record<typeof STATUS_KEYS[number], string> = {
@@ -56,6 +57,7 @@ export interface ProjectsPageProps {
 
 export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
   const { t, i18n } = useTranslation();
+  const { confirm } = useConfirm();
   const [items, setItems] = useState<Project[]>([]);
   const [templates, setTemplates] = useState<ProjectTemplate[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -67,6 +69,12 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
   const [description, setDescription] = useState("");
   const [workspacePath, setWorkspacePath] = useState("");
   const [templateId, setTemplateId] = useState<string>("");
+
+  // 编辑项目（标题 + 描述）
+  const [editing, setEditing] = useState<Project | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editDesc, setEditDesc] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
 
   async function load() {
     try {
@@ -110,9 +118,30 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
   }
 
   async function deleteProject(id: string) {
-    if (!confirm(t("projects.deleteConfirm"))) return;
+    if (!(await confirm({ description: t("projects.deleteConfirm"), destructive: true }))) return;
     await dbProjects.delete(id);
     await load();
+  }
+
+  function openEditDialog(p: Project) {
+    setEditing(p);
+    setEditName(p.name);
+    setEditDesc(p.description ?? "");
+  }
+
+  async function saveEdit() {
+    if (!editing || !editName.trim()) return;
+    setEditSaving(true);
+    try {
+      await dbProjects.update(editing.id, {
+        name: editName.trim(),
+        description: editDesc.trim() || null,
+      });
+      setEditing(null);
+      await load();
+    } finally {
+      setEditSaving(false);
+    }
   }
 
   const selectedTemplate = templates.find((tpl) => tpl.id === templateId) ?? null;
@@ -128,8 +157,8 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
-      <div className="max-w-6xl mx-auto space-y-10">
+    <div className="h-full w-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
+      <div className="space-y-10">
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-6">
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-primary">
@@ -187,17 +216,32 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
                         </div>
                         <p className="text-sm text-muted-foreground/60 line-clamp-1">{p.description || t("projects.noDescription")}</p>
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="rounded-xl hover:bg-red-500/10 hover:text-red-500 shrink-0"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void deleteProject(p.id);
-                        }}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="rounded-xl hover:bg-primary/10 hover:text-primary"
+                          title={t("projects.editButton")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEditDialog(p);
+                          }}
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="rounded-xl hover:bg-red-500/10 hover:text-red-500"
+                          title={t("common.delete")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void deleteProject(p.id);
+                          }}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
@@ -267,7 +311,7 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
                       {templates.map((tpl) => (
                         <SelectItem key={tpl.id} value={tpl.id} className="rounded-lg">
                           {tpl.isBuiltIn && tpl.name
-                            ? t(`builtinTemplates.${(BUILT_IN_TEMPLATE_NAME_TO_KEY[tpl.name] ?? "small_script")}.name`, { defaultValue: tpl.name })
+                            ? t(`builtinTemplates.${(BUILT_IN_TEMPLATE_NAME_TO_KEY[tpl.name] ?? "default_eight_roles")}.name`, { defaultValue: tpl.name })
                             : tpl.name}
                         </SelectItem>
                       ))}
@@ -345,6 +389,54 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps = {}) {
                 </Button>
               </>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 编辑项目：标题 + 描述 */}
+      <Dialog open={editing !== null} onOpenChange={(o) => { if (!o) setEditing(null); }}>
+        <DialogContent className="glass border-white/10 rounded-[2.5rem] max-w-lg p-0 overflow-hidden">
+          <DialogHeader className="p-8 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                <Pencil className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <DialogTitle className="text-xl font-bold tracking-tight">{t("projects.editDialog.title")}</DialogTitle>
+                <DialogDescription className="text-xs">{t("projects.editDialog.desc")}</DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+          <div className="p-8 pt-2 space-y-5">
+            <div className="space-y-2">
+              <Label htmlFor="edit-project-name" className="text-[10px] font-bold uppercase tracking-widest px-1">{t("projects.createDialog.nameLabel")}</Label>
+              <Input
+                id="edit-project-name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder={t("projects.createDialog.namePlaceholder")}
+                className="rounded-xl border-white/10 bg-white/5 h-12"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-project-desc" className="text-[10px] font-bold uppercase tracking-widest px-1">{t("projects.createDialog.descLabel")}</Label>
+              <Input
+                id="edit-project-desc"
+                value={editDesc}
+                onChange={(e) => setEditDesc(e.target.value)}
+                placeholder={t("projects.createDialog.descPlaceholder")}
+                className="rounded-xl border-white/10 bg-white/5 h-12"
+              />
+            </div>
+          </div>
+          <DialogFooter className="p-8 pt-0 gap-3">
+            <Button variant="ghost" onClick={() => setEditing(null)} className="rounded-xl h-11 flex-1">
+              {t("common.cancel")}
+            </Button>
+            <Button onClick={() => void saveEdit()} disabled={editSaving || !editName.trim()} className="rounded-xl h-11 flex-1 bg-primary">
+              {editSaving ? t("projects.createDialog.submitting") : t("common.save")}
+              <Check className="w-4 h-4 ml-2" />
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

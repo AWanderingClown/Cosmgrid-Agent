@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-fetch-url-rendered"
+description = "Enables the fetch_url_rendered command without any pre-configured scope."
+commands.allow = ["fetch_url_rendered"]
+
+[[permission]]
+identifier = "deny-fetch-url-rendered"
+description = "Denies the fetch_url_rendered command without any pre-configured scope."
+commands.deny = ["fetch_url_rendered"]

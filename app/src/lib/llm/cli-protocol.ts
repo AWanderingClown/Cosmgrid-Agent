@@ -14,7 +14,7 @@
 //   3. claude 的 stream-json 里 `rate_limit_event` 带订阅额度剩余，未来可接 Token Plan 显示。
 
 /** 支持的 CLI 引擎类型（对应 Provider.type） */
-export const CLI_PROVIDER_TYPES = ["claude-cli", "codex-cli"] as const;
+const CLI_PROVIDER_TYPES = ["claude-cli", "codex-cli"] as const;
 export type CliProviderType = (typeof CLI_PROVIDER_TYPES)[number];
 
 /** 该 provider type 是否走 CLI 引擎（而非 provider-factory / streamText） */
@@ -35,7 +35,7 @@ export const CLI_DEFAULT_PROGRAM: Record<CliProviderType, string> = {
  * 路由（如 MiniMax）或误判嵌套会话。抹掉后 claude 回落到订阅 OAuth 登录态。
  * 前缀匹配：任何以这些开头的 key 都清。
  */
-export const POLLUTING_ENV_PREFIXES = [
+const POLLUTING_ENV_PREFIXES = [
   "ANTHROPIC_", // BASE_URL / AUTH_TOKEN / API_KEY / MODEL / DEFAULT_*_MODEL …
   "CLAUDECODE",
   "CLAUDE_CODE_",
@@ -81,11 +81,14 @@ export function buildPromptFromMessages(messages: readonly CliMessage[]): string
   return parts.join("\n\n");
 }
 
-/** 构造 spawn 用的参数（不含 program 本身） */
+/** 构造 spawn 用的参数（不含 program 本身）。
+ *  systemPrompt：CosmGrid 核心规则，经 claude 的 --append-system-prompt 正式注入——
+ *  因为 --setting-sources "" 屏蔽了本机 CLAUDE.md，必须我们显式塞，CLI 才受同一套约束。 */
 export function buildCliArgs(
   providerType: CliProviderType,
   modelName: string,
   prompt: string,
+  systemPrompt?: string,
 ): string[] {
   if (providerType === "claude-cli") {
     // --output-format stream-json 需要配合 --verbose；--setting-sources "" 隔离被污染的本地配置
@@ -98,22 +101,58 @@ export function buildCliArgs(
       "--setting-sources",
       "",
     ];
+    if (systemPrompt?.trim()) args.push("--append-system-prompt", systemPrompt);
     if (modelName.trim()) args.push("--model", modelName);
     return args;
   }
-  // codex-cli：codex exec --json 输出 JSONL
+  // codex-cli：codex exec --json 输出 JSONL（codex 无 --append-system-prompt，规则随 prompt 文本带过去）
   const args = ["exec", prompt, "--json"];
   if (modelName.trim()) args.push("--model", modelName);
   return args;
 }
+
+export function buildCliResumeArgs(
+  providerType: CliProviderType,
+  modelName: string,
+  officialSessionId: string,
+  prompt: string,
+  systemPrompt?: string,
+): string[] {
+  if (providerType === "claude-cli") {
+    const args = [
+      "--resume",
+      officialSessionId,
+      "-p",
+      prompt,
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--setting-sources",
+      "",
+    ];
+    if (systemPrompt?.trim()) args.push("--append-system-prompt", systemPrompt);
+    if (modelName.trim()) args.push("--model", modelName);
+    return args;
+  }
+  const args = ["exec", "resume", officialSessionId, prompt, "--json"];
+  if (modelName.trim()) args.push("--model", modelName);
+  return args;
+}
+
+export type CliResumeCapability =
+  | { mode: "stateless"; reason: string }
+  | { mode: "resumable"; sessionId: string; resumeArgs: string[] };
 
 // ============ JSONL 输出解析 ============
 
 /** 归一化后的流事件：上层只认这几种，不关心 claude / codex 的原始结构差异 */
 export type CliStreamEvent =
   | { kind: "delta"; text: string }
+  | { kind: "status"; text: string }
+  | { kind: "model"; modelName: string }
   | { kind: "usage"; inputTokens: number; outputTokens: number }
   | { kind: "rate_limit"; resetsAt: number | null; limitType: string | null }
+  | { kind: "session"; sessionId: string }
   | { kind: "error"; message: string }
   | { kind: "done"; finishReason: string };
 
@@ -138,8 +177,19 @@ export function parseClaudeStreamLine(line: string): CliStreamEvent[] {
   const type = obj["type"];
   const events: CliStreamEvent[] = [];
 
+  if (type === "system" && obj["subtype"] === "init" && typeof obj["session_id"] === "string") {
+    events.push({ kind: "session", sessionId: obj["session_id"] });
+    if (typeof obj["model"] === "string" && obj["model"]) {
+      events.push({ kind: "model", modelName: obj["model"] });
+    }
+    return events;
+  }
+
   if (type === "assistant") {
-    const message = obj["message"] as { content?: ClaudeContentBlock[] } | undefined;
+    const message = obj["message"] as { content?: ClaudeContentBlock[]; model?: string } | undefined;
+    // Claude CLI 在鉴权失败时会先吐一条 model="<synthetic>" 的 assistant 文本，
+    // 随后才在 result 事件里标 is_error=true。这里不能把那条合成文本当成正常回复。
+    if (typeof obj["error"] === "string" || message?.model === "<synthetic>") return [];
     const blocks = message?.content ?? [];
     for (const b of blocks) {
       if (b.type === "text" && typeof b.text === "string" && b.text) {
@@ -200,27 +250,56 @@ export function parseCodexStreamLine(line: string): CliStreamEvent[] {
   const type = obj["type"];
   const events: CliStreamEvent[] = [];
 
-  // codex 文本增量：常见为 { type: "item.completed"/"agent_message", text/delta }
-  const text = (obj["delta"] ?? obj["text"]) as unknown;
+  if (type === "thread.started" && typeof obj["thread_id"] === "string") {
+    events.push({ kind: "session", sessionId: obj["thread_id"] });
+    return events;
+  }
+
+  const item = obj["item"] as Record<string, unknown> | undefined;
+
+  // codex 文本增量：
+  // - 旧格式：{ type: "agent_message", text: "..." }
+  // - 当前实测：{ type: "item.completed", item: { type: "agent_message", text: "..." } }
+  const text = (item?.["text"] ?? item?.["delta"] ?? obj["delta"] ?? obj["text"]) as unknown;
+  const itemType = item?.["type"];
   if (
     (type === "agent_message" || type === "item.completed" || type === "message") &&
+    (type !== "item.completed" || itemType === undefined || itemType === "agent_message") &&
     typeof text === "string" &&
     text
   ) {
     events.push({ kind: "delta", text });
   }
 
-  if (type === "token_count" || type === "usage") {
+  if (type === "token_count" || type === "usage" || type === "turn.completed") {
     const usage = (obj["usage"] ?? obj) as { input_tokens?: number; output_tokens?: number };
-    events.push({
-      kind: "usage",
-      inputTokens: usage.input_tokens ?? 0,
-      outputTokens: usage.output_tokens ?? 0,
-    });
+    if (typeof usage.input_tokens === "number" || typeof usage.output_tokens === "number") {
+      events.push({
+        kind: "usage",
+        inputTokens: usage.input_tokens ?? 0,
+        outputTokens: usage.output_tokens ?? 0,
+      });
+    }
+  }
+
+  if (type === "item.started" && itemType === "mcp_tool_call") {
+    const server = typeof item?.["server"] === "string" ? item.server : "tool";
+    const tool = typeof item?.["tool"] === "string" ? item.tool : "call";
+    events.push({ kind: "status", text: `正在调用 ${server}.${tool}...` });
+  }
+
+  if (type === "item.completed" && itemType === "mcp_tool_call") {
+    const status = item?.["status"];
+    if (status === "failed") {
+      const error = item?.["error"] as { message?: string } | null | undefined;
+      const message = typeof error?.message === "string" ? error.message : "工具调用失败";
+      events.push({ kind: "status", text: `工具调用失败：${message}` });
+    }
   }
 
   if (type === "error") {
-    const msg = typeof obj["message"] === "string" ? obj["message"] : "codex returned an error";
+    const rawMessage = obj["message"];
+    const msg = typeof rawMessage === "string" ? rawMessage : "codex returned an error";
     events.push({ kind: "error", message: msg });
   }
 
@@ -239,4 +318,32 @@ export function parseCliStreamLine(
   return providerType === "claude-cli"
     ? parseClaudeStreamLine(line)
     : parseCodexStreamLine(line);
+}
+
+export function extractOfficialSessionId(
+  providerType: CliProviderType,
+  line: string,
+): string | null {
+  const sessionEvent = parseCliStreamLine(providerType, line).find((event) => event.kind === "session");
+  return sessionEvent?.kind === "session" ? sessionEvent.sessionId : null;
+}
+
+export function detectCliResumeCapability(args: {
+  providerType: CliProviderType;
+  modelName: string;
+  officialSessionId: string | null;
+}): CliResumeCapability {
+  if (!args.officialSessionId) {
+    return { mode: "stateless", reason: "CLI output did not expose a stable official session id" };
+  }
+  return {
+    mode: "resumable",
+    sessionId: args.officialSessionId,
+    resumeArgs: buildCliResumeArgs(
+      args.providerType,
+      args.modelName,
+      args.officialSessionId,
+      "Continue from where you stopped. Do not repeat completed content.",
+    ),
+  };
 }

@@ -4,6 +4,11 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { withSseChunkTimeout } from "./sse-chunk-timeout";
+
+// 所有 provider 共用：给流式响应挂 SSE chunk 静默超时，防 provider 干完活不发结束信号导致
+// 连接僵死、isStreaming 永卡。见 sse-chunk-timeout.ts。
+const timeoutFetch = withSseChunkTimeout();
 
 export type LanguageModel = ReturnType<ReturnType<typeof createAnthropic>>;
 export type LanguageModelFactory = (
@@ -18,27 +23,25 @@ interface ProviderRegistryEntry {
 
 const REGISTRY = new Map<string, ProviderRegistryEntry>();
 
-export function registerProvider(type: string, factory: LanguageModelFactory): void {
-  REGISTRY.set(type, { factory });
-}
-
 REGISTRY.set("anthropic", {
   factory: (modelName, apiKey, baseUrl) => {
-    const provider = createAnthropic({ apiKey, ...(baseUrl && { baseURL: baseUrl }) });
+    const provider = createAnthropic({ apiKey, fetch: timeoutFetch, ...(baseUrl && { baseURL: baseUrl }) });
     return provider(modelName);
   },
 });
 
 REGISTRY.set("openai", {
   factory: (modelName, apiKey, baseUrl) => {
-    const provider = createOpenAI({ apiKey, ...(baseUrl && { baseURL: baseUrl }) });
-    return provider(modelName);
+    const provider = createOpenAI({ apiKey, fetch: timeoutFetch, ...(baseUrl && { baseURL: baseUrl }) });
+    // 必须用 .chat() 走 /chat/completions：@ai-sdk/openai 3.x 的 provider(id) 默认走 Responses API
+    // (/responses)，而绝大多数 OpenAI 兼容服务（含 OpenAI 自家旧模型、第三方）只实现 /chat/completions。
+    return provider.chat(modelName);
   },
 });
 
 REGISTRY.set("google", {
   factory: (modelName, apiKey, baseUrl) => {
-    const provider = createGoogleGenerativeAI({ apiKey, ...(baseUrl && { baseURL: baseUrl }) });
+    const provider = createGoogleGenerativeAI({ apiKey, fetch: timeoutFetch, ...(baseUrl && { baseURL: baseUrl }) });
     return provider(modelName);
   },
 });
@@ -51,8 +54,10 @@ REGISTRY.set("openai-compatible", {
     if (!baseUrl) {
       throw new Error("openai-compatible provider requires a baseUrl on the credential (e.g. https://api.deepseek.com/v1)");
     }
-    const provider = createOpenAI({ apiKey, baseURL: baseUrl });
-    return provider(modelName);
+    const provider = createOpenAI({ apiKey, baseURL: baseUrl, fetch: timeoutFetch });
+    // DeepSeek / GLM / Qwen / Kimi 等只实现 /chat/completions，没有 /responses。
+    // 必须 .chat()，否则 provider(id) 默认发到 /responses → 这些服务一律 404（误报"模型不存在"）。
+    return provider.chat(modelName);
   },
 });
 
@@ -110,8 +115,4 @@ export function getLanguageModel(
   const lm = entry.factory(modelName, apiKey, baseUrl);
   setCache(cacheKey, lm);
   return lm;
-}
-
-export function clearLanguageModelCache(): void {
-  languageModelCache.clear();
 }

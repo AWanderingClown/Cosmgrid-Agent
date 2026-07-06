@@ -15,7 +15,7 @@ export interface ShellAdapter {
   run(command: string, cwd: string): Promise<ShellResult>;
 }
 
-export const tauriShell: ShellAdapter = {
+const tauriShell: ShellAdapter = {
   run: (command, cwd) => invoke<ShellResult>("run_shell_command", { command, cwd }),
 };
 

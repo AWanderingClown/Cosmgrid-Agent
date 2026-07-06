@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "app",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["-C", "app", "dev"],
+      "port": 1420
+    },
+    {
+      "name": "app-preview",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["-C", "app", "dev", "--port", "4999"],
+      "port": 4999
+    }
+  ]
+}

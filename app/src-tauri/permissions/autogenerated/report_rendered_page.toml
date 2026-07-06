@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-report-rendered-page"
+description = "Enables the report_rendered_page command without any pre-configured scope."
+commands.allow = ["report_rendered_page"]
+
+[[permission]]
+identifier = "deny-report-rendered-page"
+description = "Denies the report_rendered_page command without any pre-configured scope."
+commands.deny = ["report_rendered_page"]

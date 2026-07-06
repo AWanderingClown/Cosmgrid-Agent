@@ -5,6 +5,20 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "allow-save-api-key",
+    "allow-get-api-key",
+    "allow-delete-api-key",
+    "allow-spawn-cli-stream",
+    "allow-kill-cli",
+    "allow-resolve-cli-program",
+    "allow-run-shell-command",
+    "allow-fetch-url-backend",
+    "allow-fetch-url-rendered",
+    "allow-git-commit-file",
+    "allow-git-read",
+    "allow-init-shadow-git-repo",
+    "allow-resolve-realpath",
+    "allow-set-menu-language",
     "sql:default",
     "sql:allow-load",
     "sql:allow-execute",
@@ -17,20 +31,28 @@
     "store:allow-save",
     "store:allow-load",
     {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*" }, { "url": "http://*" }]
+    },
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [{ "path": "**" }]
+    },
+    {
       "identifier": "fs:allow-read-text-file",
-      "allow": [{ "path": "$HOME/**" }]
+      "allow": [{ "path": "**" }]
     },
     {
       "identifier": "fs:allow-read-dir",
-      "allow": [{ "path": "$HOME/**" }]
+      "allow": [{ "path": "**" }]
     },
     {
       "identifier": "fs:allow-exists",
-      "allow": [{ "path": "$HOME/**" }]
+      "allow": [{ "path": "**" }]
     },
     {
       "identifier": "fs:allow-stat",
-      "allow": [{ "path": "$HOME/**" }]
+      "allow": [{ "path": "**" }]
     },
     {
       "identifier": "fs:allow-write-text-file",
@@ -39,6 +61,7 @@
     {
       "identifier": "fs:allow-mkdir",
       "allow": [{ "path": "$HOME/**" }]
-    }
+    },
+    "dialog:allow-open"
   ]
 }

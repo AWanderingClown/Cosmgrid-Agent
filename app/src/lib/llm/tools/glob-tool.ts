@@ -13,7 +13,7 @@ const paramsSchema = z.object({
 type GlobParams = z.infer<typeof paramsSchema>;
 
 /** 单次最多返回的匹配文件数 */
-export const GLOB_MAX_RESULTS = 200;
+const GLOB_MAX_RESULTS = 200;
 
 export const globTool: ToolDefinition<GlobParams> = {
   name: "glob",
@@ -22,7 +22,7 @@ export const globTool: ToolDefinition<GlobParams> = {
   readOnly: true,
   async execute(input, ctx): Promise<ToolResult> {
     const base = input.path ?? ".";
-    const check = checkPath(ctx.workspacePath, base);
+    const check = await checkPath(ctx.workspacePath, base);
     if (!check.ok) return { status: "denied", output: check.reason ?? "路径不允许" };
 
     const re = globToRegExp(input.pattern);

@@ -9,16 +9,23 @@ import { invoke } from "@tauri-apps/api/core";
 export interface GitSnapshotAdapter {
   /** 给单个文件做一次 commit；成功返回 true，非 git 仓库/失败返回 false */
   commitFile(workspace: string, absPath: string, message: string): Promise<boolean>;
+  /**
+   * 2.1 步骤2/3 修复（2026-07-02）：给非 git 工作文件夹开启"修改保护"——
+   * 在应用私有目录初始化一个影子 git 仓库（不在用户文件夹里冒出 `.git`），
+   * 之后 commitFile 在这个 workspace 上会自动走影子仓库提交。
+   */
+  initShadowRepo(workspace: string): Promise<void>;
 }
 
-export const tauriGitSnapshot: GitSnapshotAdapter = {
+const tauriGitSnapshot: GitSnapshotAdapter = {
   commitFile: (workspace, absPath, message) =>
     invoke<boolean>("git_commit_file", { workspace, relPath: absPath, message }),
+  initShadowRepo: (workspace) => invoke<void>("init_shadow_git_repo", { workspace }),
 };
 
 let active: GitSnapshotAdapter = tauriGitSnapshot;
 
-export function getGitSnapshot(): GitSnapshotAdapter {
+function getGitSnapshot(): GitSnapshotAdapter {
   return active;
 }
 
@@ -37,4 +44,13 @@ export async function snapshotWrite(
   } catch {
     return false;
   }
+}
+
+/**
+ * 2.1 步骤2/3 修复（2026-07-02）：用户点击"开启修改保护"按钮时调用。
+ * 抛错交给调用方处理（UI 要能告诉用户"开启失败"，不能像 snapshotWrite 那样静默吞掉——
+ * 这是用户主动发起的操作，失败了必须让用户知道，不然会以为开启成功了）。
+ */
+export async function enableWorkspaceProtection(workspace: string): Promise<void> {
+  await getGitSnapshot().initShadowRepo(workspace);
 }

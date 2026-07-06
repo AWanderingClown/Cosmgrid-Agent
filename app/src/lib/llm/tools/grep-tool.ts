@@ -15,7 +15,7 @@ const paramsSchema = z.object({
 type GrepParams = z.infer<typeof paramsSchema>;
 
 /** 单次最多返回的匹配行数 */
-export const GREP_MAX_MATCHES = 200;
+const GREP_MAX_MATCHES = 200;
 
 export const grepTool: ToolDefinition<GrepParams> = {
   name: "grep",
@@ -24,7 +24,7 @@ export const grepTool: ToolDefinition<GrepParams> = {
   readOnly: true,
   async execute(input, ctx): Promise<ToolResult> {
     const base = input.path ?? ".";
-    const check = checkPath(ctx.workspacePath, base);
+    const check = await checkPath(ctx.workspacePath, base);
     if (!check.ok) return { status: "denied", output: check.reason ?? "路径不允许" };
 
     let re: RegExp;

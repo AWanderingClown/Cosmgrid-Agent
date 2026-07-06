@@ -1,16 +1,5 @@
 // 共享 API 类型（v0.3：fetch wrapper 已移除，改用 src/lib/db.ts 直连 SQLite）
 
-/** API 调用错误 */
-export class ApiError extends Error {
-  constructor(
-    public readonly httpStatus: number,
-    public readonly userMessage: string,
-  ) {
-    super(userMessage);
-    this.name = "ApiError";
-  }
-}
-
 // ============ 共享数据类型 ============
 
 export interface ProviderListItem {
@@ -35,6 +24,8 @@ export interface ModelListItem {
   name: string;
   displayName: string | null;
   contextWindow: number | null;
+  inputPrice: number | null;
+  outputPrice: number | null;
   enabled: boolean;
   workRoles: string;
   /** 能力分 JSON 字符串（喂给 autoAssignModels 做评分） */

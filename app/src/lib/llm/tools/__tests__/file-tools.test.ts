@@ -102,6 +102,21 @@ describe("glob 工具", () => {
     const r = await globTool.execute({ pattern: "**/*.py" }, ctx);
     expect(r.output).toMatch(/没有匹配/);
   });
+
+  it("尊重 .gitignore：排除的目录不被搜到（修复一头扎进 技术参考/ 的 bug）", async () => {
+    setFsAdapter(makeFakeFs({
+      "/ws/.gitignore": "/技术参考/\n/项目文档/\nbuild/",
+      "/ws/app/src/db.ts": "export const db = 1;",
+      "/ws/技术参考/opencode/huge.ts": "noise",
+      "/ws/项目文档/plan.ts": "noise",
+      "/ws/build/out.ts": "noise",
+    }));
+    const r = await globTool.execute({ pattern: "**/*.ts" }, ctx);
+    expect(r.output).toContain("app/src/db.ts"); // 真源码搜得到
+    expect(r.output).not.toContain("技术参考"); // gitignore 排除目录不下钻
+    expect(r.output).not.toContain("项目文档");
+    expect(r.output).not.toContain("build/out.ts");
+  });
 });
 
 describe("grep 工具", () => {

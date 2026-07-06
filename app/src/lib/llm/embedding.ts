@@ -2,19 +2,22 @@
 //
 // 决策点②：transformers.js（all-mpnet-base-v2，110MB）在 Tauri WebView 兼容性未验证，
 // 且体积大。先实现「零依赖关键词哈希 embedding」作默认 provider——语义缓存今天就能真跑；
-// 接口留好（EmbeddingProvider），日后 spike 通过可无缝换 transformers.js（v0.9.1）。
+// 接口留好（EmbeddingProvider），语义缓存继续默认走它，避免重复问题缓存变慢或额外花钱。
+// 项目记忆的真实 embedding 已拆到 memory/embedding-provider.ts：可在设置页显式启用远程
+// OpenAI / OpenAI-compatible embedding，并手动同步索引。
 //
 // 关键词哈希 embedding 原理：把文本切成 token（拉丁词 + CJK 单字 + CJK 二/三元组），
 // 每个 token 哈希到固定维度的桶里累加，再 L2 归一化。同义改写共享 token → 余弦高；
 // 无关文本 token 几乎不重叠 → 余弦低。质量不如神经 embedding，但确定性、离线、零成本。
 //
 // v0.9.1 改进：CJK 三元组 + 中文停用词过滤——把"只切到二元"升级为"1/2/3 元组 + 过滤"，
-// 显著提升中文同义改写的命中率（不引依赖，保底方案；transformers.js spike 见
-// `项目文档/Cosmgrid-Agent-embedding-spike-2026-06-22.md`）。
+// 显著提升中文同义改写的命中率（不引依赖，保底方案）。
 
 export interface EmbeddingProvider {
   readonly name: string;
   readonly dim: number;
+  /** true 表示可以在聊天检索时顺手补索引；远程 provider 默认不允许，避免热路径烧钱/卡顿。 */
+  readonly supportsHotBackfill?: boolean;
   embed(text: string): Promise<number[]>;
 }
 
@@ -93,10 +96,11 @@ export function keywordEmbed(text: string, dim = DEFAULT_DIM): number[] {
 
 /** 默认 provider：关键词哈希 v2（v0.9.1 加入三元组 + 中文停用词过滤）。
  *  name 含 v2 后缀是为了让 semantic-cache lookup 区分新旧算法——vec 不兼容，混用会全 miss。
- *  日后换 transformers.js 时 name 再升级到 v3 即可。 */
+ *  语义缓存若日后换算法，name 再升级即可。 */
 export const keywordEmbeddingProvider: EmbeddingProvider = {
   name: "keyword-hash-v2",
   dim: DEFAULT_DIM,
+  supportsHotBackfill: true,
   embed: async (text: string) => keywordEmbed(text, DEFAULT_DIM),
 };
 
@@ -105,9 +109,4 @@ let activeProvider: EmbeddingProvider = keywordEmbeddingProvider;
 /** 取当前激活的 embedding provider */
 export function getEmbeddingProvider(): EmbeddingProvider {
   return activeProvider;
-}
-
-/** 替换 provider（测试 / 未来接 transformers.js 用） */
-export function setEmbeddingProvider(p: EmbeddingProvider): void {
-  activeProvider = p;
 }

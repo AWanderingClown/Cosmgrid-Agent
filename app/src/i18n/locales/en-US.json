@@ -2,15 +2,15 @@
   "common": {
     "cancel": "Cancel",
     "confirm": "Confirm",
+    "confirmTitle": "Confirm action",
+    "noticeTitle": "Notice",
+    "ok": "OK",
     "delete": "Delete",
     "edit": "Edit",
+    "close": "Close",
     "save": "Save",
-    "create": "Create",
     "loading": "Loading...",
     "error": "Error",
-    "success": "Success",
-    "optional": "(optional)",
-    "required": "*",
     "dbErrorTitle": "Failed to open the local database",
     "dbErrorDesc": "The app could not initialize its database (it may be locked by a backup, the disk is full, or the data directory is not writable). Try restarting; if it persists, check the data directory.",
     "dbErrorRetry": "Restart"
@@ -23,38 +23,120 @@
     "rate_limit": "Plan quota exhausted or rate-limited — wait a moment or check your plan status",
     "server_error": "AI service temporarily unavailable — please try again later",
     "timeout": "Request timed out — check your network or try again later",
+    "stream_stalled": "The model's response stalled (it may have finished but didn't close properly) — switching to the next model to continue",
     "network": "Network connection failed — check network or Base URL config",
+    "web_content_unavailable": "External link content could not be loaded. WeChat articles often require login or block scraping. Paste the article text, send screenshots, or export the file, and I can rewrite from those references.",
+    "tool_budget_exhausted": "This task needed more steps than the budget allowed. Try breaking it into smaller steps, or switch to a different model.",
     "unknown": "Conversation failed — please try again later"
   },
   "app": {
     "brandSubtitle": "Intelligent Core Manager",
     "sidebar": {
       "chat": "Chat",
-      "projects": "Projects",
       "providers": "Providers",
       "templates": "Templates",
       "tokenPlans": "Usage",
       "debate": "Debate",
-      "stats": "Savings",
-      "settings": "Settings"
+      "stats": "Usage Details",
+      "settings": "Settings",
+      "collapse": "Collapse sidebar",
+      "expand": "Expand sidebar"
     },
     "alerts": {
-      "goToHandle": "Go to",
-      "dismiss": "Dismiss"
+      "goToHandle": "Go to"
     }
   },
   "chat": {
     "userLabel": "You",
-    "assistantLabel": "CosmGrid Assistant",
+    "assistantLabel": "CosmGrid Ai",
+    "altBot": "Bot",
+    "altEmpty": "Empty",
+    "newChat": "New Chat",
+    "untitledChat": "Untitled chat",
+    "conversations": "Conversations",
+    "renameChat": "Rename",
+    "deleteConvConfirm": "Delete this conversation? This cannot be undone.",
+    "deleteConvFailed": "Delete failed — the database may be busy right now. Please try again in a moment. This conversation is still in your list, nothing was lost.",
     "loadError": "Failed to load",
+    "newChatFailed": "Failed to create a new chat — the app may be running twice and locking the database. Please restart the app and try again.",
     "noCredential": "API credential not found",
     "noApiKey": "API Key missing",
     "constructError": "Failed to construct model",
-    "switchedTo": "Switched to {{name}}",
+    "switchedTo": "Continuing with fallback model: {{name}}",
+    "recovery": {
+      "native_resume": "Recovered with the CLI's native resume session",
+      "context_replay": "Recovered by continuing from the interruption point without repeating earlier content",
+      "fallback_handoff": "Primary model stopped; continuing with a fallback model"
+    },
     "cacheHit": "Cache hit · answered {{days}}d ago",
     "contextTrimmed": "[{{count}} earlier messages omitted to save tokens]",
-    "requestInterrupted": "Request interrupted",
+    "writeGuardNotice": {
+      "noWorkspace": "⚠️ This looks like a file-editing request, but no folder is bound to this chat — the AI has no read/write tools, so the reply below may just be discussion, not an actual edit. Click \"Choose Folder\" next to the input box to bind a working folder, then send this again.",
+      "readOnly": "⚠️ This looks like a file-editing request, but the current permission is \"Read-only\" — the AI can look but can't change anything. If you really want it to edit files, switch the permission to \"Confirm before editing\" or \"Auto-edit\" and send this again."
+    },
+    "permissionEscalation": {
+      "title": "Switch to writable permission?",
+      "description": "Looks like you want the AI to create or edit files, but the current permission is \"Read-only\". Confirming switches to \"Confirm before editing\" — the AI can then actually write files, but will still check with you before each specific action.",
+      "confirmText": "Switch now",
+      "cancelText": "Not now"
+    },
+    "harnessRetry": "Possible fabrication · asking the model to self-check and redo",
+      "intentNudgeRetry": "Said you'd act but didn't call any tool · asking again…",
     "smartPick": "Smart Pick",
+    "workspace": {
+      "choose": "Workspace",
+      "clear": "Unbind folder",
+      "pickTitle": "Choose the AI's working folder"
+    },
+    "permission": {
+      "read": "Read-only",
+      "confirm": "Confirm writes",
+      "auto": "Auto",
+      "readHint": "Read-only: AI can read files, search, and view git — it changes nothing",
+      "confirmHint": "Confirm writes: read-only actions (viewing files, git log, etc.) run freely; only changes like writing files or installing deps ask you to confirm or cancel, with steps shown in the chat",
+      "autoHint": "Auto: AI writes files / runs commands without per-action prompts (use for trusted work)"
+    },
+    "tools": {
+      "confirmTitle": "AI requests a write or command — confirm first",
+      "approve": "Confirm",
+      "reject": "Cancel",
+      "confirmHint": "This action changes things; it runs only after you confirm."
+    },
+    "working": {
+      "idle": "Idle — your turn",
+      "working": "Working",
+      "replying": "Model is replying",
+      "done": "Done",
+      "awaitingApproval": "Waiting for your approval"
+    },
+    "steps": {
+      "processed": "Processed {{count}} steps"
+    },
+    "toolSteps": {
+      "read": "Read {{file}}",
+      "write": "Write {{file}} ({{lines}} lines)",
+      "edit": "Edit {{file}}",
+      "bash": "Run command: {{command}}",
+      "glob": "Find files: {{pattern}}",
+      "grep": "Search text: {{pattern}}",
+      "git_read": "Read Git status",
+      "unknown": "{{tool}}",
+      "reversible": "Reversible",
+      "notReversible": "Not reversible",
+      "protectHint": "This folder has no undo protection — if the AI writes something wrong, it can't be reverted",
+      "enableProtection": "Enable undo protection",
+      "enableProtectionFailed": "Failed to enable — you may need to install git first, then retry"
+    },
+    "smartPickResult": {
+      "title": "Smart Pick",
+      "noModels": "No models available yet. Add and enable at least one model in Providers before using Smart Pick.",
+      "noPick": "Couldn't find a suitable model to recommend — please check your model setup.",
+      "switched": "Switched to {{name}} based on your question.",
+      "switchedRule": "Switched to {{name}} (recommended by role-capability score).",
+      "alreadyBest": "{{name}} is already the best pick — no switch needed.",
+      "reasonLabel": "Why: ",
+      "emptyHint": "Tip: type your question below first, then click Smart Pick for a more accurate, content-based recommendation."
+    },
     "usage": "Usage",
     "inputTokens": "In: {{count}}",
     "outputTokens": "Out: {{count}}",
@@ -68,18 +150,179 @@
     "inputPlaceholderFallback": "Type a message...",
     "suggestDebate": "This question has multiple viable approaches — let 3 models debate it (propose / critique / judge)",
     "suggestDebateBtn": "Open debate",
-    "footer": "Secure connection • {{version}} • Powered by CosmGrid",
+    "debate": {
+      "running": "Model debate is running...",
+      "completed": "Debate completed with {{count}} available models.",
+      "singleModelNotice": "Only 1 model is currently available, so this is not a true multi-model PK. Below is a single-model self-review.",
+      "noParticipants": "No model is available for debate. Check model and API key settings first.",
+      "failed": "Model debate failed. Check model settings and retry.",
+      "costWarning": "Starting multi-model debate — will use about {{count}} model calls.",
+      "processLabel": "View debate process"
+    },
+    "attachments": {
+      "dropHere": "Drop files or images",
+      "dragOver": "Drop to attach",
+      "addFile": "Add file",
+      "removeAttachment": "Remove",
+      "imageTooLarge": "Image too large (>{{mb}}MB), compress or put it in workspace for AI to read",
+      "fileTooLarge": "File too large: {{name}}, put it in workspace for AI to read",
+      "unsupportedType": "Unsupported file type, put it in workspace for AI to read",
+      "cliNoImage": "CLI models do not support image drop, use an API model",
+      "imageLabel": "Image",
+      "fileLabel": "File",
+      "folderSetAsWorkspace": "Bound as AI's working folder: {{path}}. Tell AI \"read the files in it\""
+    },
     "workPanel": {
       "title": "Work Panel",
       "close": "Collapse",
       "empty": "No model activity in this session yet",
+      "tokenUsage": "Token Usage",
       "sessionTotal": "Session Usage",
       "turnLabel": "Turn {{n}}",
+      "showMoreTurns": "Show {{count}} more",
       "primary": "Primary",
       "fallback": "Fallback",
-      "switchedNote": "Auto-switched on limit",
+      "switchReason": {
+        "auth_invalid": "Switched: auth failed",
+        "auth_forbidden": "Switched: forbidden",
+        "rate_limit": "Switched: quota limit",
+        "timeout": "Switched: timeout",
+        "network": "Switched: network error",
+        "web_content_unavailable": "Switched: page fetch failed",
+        "context_overflow": "Switched: context overflow",
+        "model_not_found": "Switched: model offline",
+        "server_error": "Switched: server error",
+        "cli_not_installed": "Switched: CLI not installed",
+        "cli_not_logged_in": "Switched: CLI not logged in",
+        "tool_budget_exhausted": "Switched: step budget exceeded",
+        "unknown": "Switched: unknown error",
+        "cooldown": "Skipped: prior model cooling down",
+        "recovery": "Auto handoff: abnormal finish"
+      },
       "inTokens": "In",
-      "outTokens": "Out"
+      "outTokens": "Out",
+      "currentActivity": "Current Activity",
+      "idle": "Idle — your turn",
+      "chainGraph": "Workflow",
+      "changeNodeModel": "Change model for {{step}}",
+      "dynamicModelPool": "Dynamic pool",
+      "chainSteps": {
+        "leader": "Leader",
+        "architect": "Plan",
+        "frontend": "Frontend Build",
+        "backend": "Backend Build",
+        "runner": "Run Checks",
+        "tester": "Test",
+        "reviewer": "Final Review",
+        "security": "Security Review",
+        "debate": "Model Debate"
+      },
+      "ideTitle": "IDE View",
+      "noFileOpen": "No file open",
+      "noFileOpenHint": "Files written or edited by AI open here automatically. You can also open files from the tree.",
+      "noWorkspaceHint": "Bind a workspace first. AI-produced files will appear here.",
+      "streamingLines": "Writing line {{current}} / {{total}}",
+      "fileTree": "File tree",
+      "loading": "Loading...",
+      "noFiles": "No files to show",
+      "openTabs": "Open files",
+      "closeTab": "Close {{name}}",
+      "readOnlyCode": "Read-only code view",
+      "artifacts": "Artifacts",
+      "artifactsEmpty": "No files or commands produced yet",
+      "debateHistory": "Debate History",
+      "debateHistoryEmpty": "No debates yet",
+      "debateHistoryFinal": "Final solution",
+      "debateHistoryDeleteConfirm": "Delete this debate record? This can't be undone.",
+      "files": "Files",
+      "terminals": "Terminal",
+      "truncated": "{{total}} lines total, showing first {{shown}}",
+      "htmls": "HTML previews",
+      "htmlSandboxTitle": "HTML preview (scripts disabled)",
+      "htmlJsDisabledHint": "JavaScript is disabled in this preview for safety. Download the file to view in a browser for full effect.",
+      "htmlTooLarge": "HTML artifact is too large ({{size}} bytes) — showing raw source instead of sandboxed preview",
+      "diffNoChange": "No changes",
+      "diffTooLarge": "{{total}} lines, showing first {{shown}}"
+    },
+    "workflow": {
+      "title": "Task Progress",
+      "optional": "Optional",
+      "current": "Current phase: {{phase}}",
+      "phase": {
+        "read_project": "Read Project",
+        "plan": "Plan",
+        "review": "Review Plan",
+        "debate": "Multi-model Debate",
+        "execute": "Execute Plan",
+        "verify": "Verify"
+      },
+      "status": {
+        "running": "Running",
+        "waiting_user": "Waiting",
+        "paused": "Paused",
+        "completed": "Completed",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      },
+      "nextActions": {
+        "title": "Next",
+        "recommended": "Recommended",
+        "makePlan": "Create plan",
+        "reviewPlan": "Ask another model to review",
+        "debateOptions": "Start multi-model debate",
+        "executePlan": "Execute plan",
+        "verifyChanges": "Run checks"
+      }
+    },
+    "handoff": {
+      "inProgress": "Handing off to {{role}}…",
+      "transferred": "Transferred to {{role}}: {{reason}}",
+      "path": "Handoff path: {{path}}",
+      "truncated": "Handoff reached the {{max}} step limit",
+      "error": "Handoff failed: {{message}}",
+      "reason": "Reason",
+      "stepStreaming": "streaming…",
+      "stepDone": "done"
+    },
+    "thinking": "Thinking",
+    "thinkingDone": "Reasoning",
+    "toolCall": "Calling tool",
+    "toolCallDone": "Tool call",
+    "jumpToBottom": "Jump to bottom",
+    "replying": "Replying",
+    "stopped": "Stopped",
+    "queued": "Queued",
+    "inputDraftHint": "Model is replying… keep typing, messages are queued and handled in order",
+    "orchestrator": {
+      "roles": {
+        "leader": "Leader",
+        "architect": "Architect",
+        "frontend": "Frontend",
+        "backend": "Backend",
+        "runner": "Runner",
+        "tester": "Tester",
+        "reviewer": "Reviewer",
+        "security": "Security"
+      },
+      "receiptPlanned": "Planned {{count}} work nodes · current \"{{node}}\" uses {{model}}",
+      "receiptEntered": "Entered \"{{node}}\" node · auto-using {{model}}",
+      "receiptSwitched": "\"{{node}}\" node auto-switched to {{model}}",
+      "receiptReason": "Why: {{reason}}",
+      "receiptNoModel": "(No usable model — configure one on the providers page)",
+      "detailNodes": "Node plan",
+      "chainProgressTitle": "Chain Progress",
+      "chainProgressIdle": "No chain running.",
+      "chainProgressLabel": "{{done}} / {{total}}",
+      "chainRoleStart": "Start",
+      "chainRolePending": "Pending",
+      "chainRoleExecuting": "Executing…",
+      "chainRoleDone": "Done",
+      "chainRoleSkipped": "Skipped",
+      "chainRoleAborted": "Aborted",
+      "chainStopButton": "Abort chain",
+      "chainStarted": "▶ Running: {{path}}",
+      "chainStopped": "⛔ Chain aborted (stopped at {{role}})",
+      "chainCompleted": "✓ Completed: {{path}}"
     }
   },
   "providers": {
@@ -108,12 +351,46 @@
     "deleteModel": "Delete this model?",
     "deleteFailed": "Delete failed",
     "updateFailed": "Update failed",
-    "loadFailed": "Failed to load providers",
-    "deleteProviderFull": "Delete Provider Configuration"
+    "deleteProviderFull": "Delete Provider Configuration",
+    "editProviderName": "Edit name",
+    "edit": {
+      "providerTitle": "Edit provider",
+      "providerDesc": "Change the provider's display name",
+      "credentialTitle": "Edit credential",
+      "credentialDesc": "Change the credential name, endpoint URL and API Key",
+      "modelTitle": "Edit model",
+      "modelDesc": "Change the model's display name, context window and roles",
+      "nameLabel": "Name",
+      "displayNameLabel": "Display name",
+      "contextWindowLabel": "Context window (tokens)",
+      "apiKeyKeep": "Leave blank to keep current key",
+      "apiKeyHint": "Only overwrites when you enter a new key; blank means no change."
+    }
   },
   "addProvider": {
     "title": "Add Provider",
     "desc": "One form creates the Provider, credential, and model together.",
+    "presetLabel": "Quick pick a provider (auto-fills URL & model — just paste your API key)",
+    "presetCustom": "Custom",
+    "getApiKey": "Get an API key here",
+    "fetchModels": {
+      "button": "Fetch available models",
+      "loading": "Fetching…",
+      "pickLabel": "Pick a model",
+      "pickPlaceholder": "Choose from fetched models",
+      "pickHint": "Fetched {{count}} real available models — pick one, no typos possible",
+      "errors": {
+        "unauthorized": "Invalid or unauthorized API key — please check it",
+        "notFound": "Wrong endpoint (404) — please check the Base URL",
+        "unsupported": "This type can't auto-fetch models (e.g. CLI subscription) — enter the model name manually",
+        "noBaseUrl": "Please enter a Base URL first",
+        "noKey": "Please paste an API key first",
+        "empty": "No models returned — enter the model name manually",
+        "timeout": "Fetch timed out — retry or check your network",
+        "network": "Network error — fetch failed",
+        "unknown": "Fetch failed — enter the model name manually"
+      }
+    },
     "providerName": "Provider Name",
     "providerNamePlaceholder": "My Claude",
     "website": "Website",
@@ -130,13 +407,16 @@
       "codex-cli": "Codex local CLI (uses subscription)"
     },
     "cliPathLabel": "CLI executable path (optional)",
-    "cliHint": "Leave blank to auto-use claude/codex from your PATH. No API key needed — uses the subscription you're already logged into locally.",
+    "cliHint": "The app auto-detects the local claude/codex path. If detection fails, leaving this blank still uses the system default. No API key needed — it uses your local subscription login.",
+    "cliDetectButton": "Detect again",
+    "cliDetecting": "Detecting local CLI path...",
+    "cliDetected": "Detected the local CLI path. You can still edit it manually.",
+    "cliPricingHint": "CLI subscriptions are not billed by API token price here. The app stores the model and context only; usage is tracked against the local subscription.",
+    "modelMetadataHint": "Known models auto-fill context and catalog prices. You can still edit them manually.",
     "apiKey": "API Key",
-    "apiKeyPlaceholder": "Paste your API key",
     "show": "Show",
     "hide": "Hide",
     "baseUrl": "Base URL",
-    "baseUrlPlaceholder": "https://api.example.com/v1",
     "testConnection": "Test Connection",
     "testing": "Testing...",
     "connectSuccess": "Connected",
@@ -148,9 +428,11 @@
     "displayName": "Display Name",
     "displayNamePlaceholder": "e.g. Opus 4.8",
     "contextWindow": "Context Window",
-    "contextWindowPlaceholder": "e.g. 200000",
+    "inputPrice": "Input price (USD / 1M)",
+    "outputPrice": "Output price (USD / 1M)",
     "workRoles": "Work Roles",
     "workRolesHint": "Pick at least one",
+    "autoRolesHint": "Model usage is assigned automatically from the model name. Fine-tune stage-to-model routing in Role Templates.",
     "submitting": "Adding...",
     "submit": "Add",
     "fillRequired": "Please fill in all required fields",
@@ -158,7 +440,7 @@
     "rollbackFailed": "Rollback failed"
   },
   "workRoles": {
-    "main_chat": "Main Chat",
+    "main_chat": "Leader",
     "main_chat_desc": "Direct conversation with the user",
     "planning": "Planning",
     "planning_desc": "Task breakdown and architecture design",
@@ -193,25 +475,13 @@
     "other": "Other"
   },
   "builtinTemplates": {
-    "fullstack_web": {
-      "name": "Full-Stack Web Project",
-      "desc": "main_chat / planning / review / frontend / backend / testing / final_review"
-    },
-    "data_science": {
-      "name": "Data Science Project",
-      "desc": "main_chat / planning / review / data_exploration / modeling / testing / final_review"
-    },
-    "mobile_app": {
-      "name": "Mobile App",
-      "desc": "main_chat / planning / review / ios / android / testing / final_review"
-    },
-    "small_script": {
-      "name": "Small Script",
-      "desc": "main_chat / direct_generation / testing (for one-off scripts)"
+    "default_eight_roles": {
+      "name": "Default Roles",
+      "desc": ""
     }
   },
   "handoffMarkdown": {
-    "title": "Handoff → {{role}}",
+    "title": "Transfer Packet → {{role}}",
     "sourceCheckpoint": "_Source checkpoint: {{title}}_",
     "generatedAt": "_Generated: {{time}}_",
     "empty": "(empty)"
@@ -219,26 +489,48 @@
   "templates": {
     "sectionLabel": "Pipeline Architect",
     "title": "Project Role Templates",
-    "desc": "Define AI expert combinations for different collaboration scenarios. The system auto-recommends the best-suited AI for each role based on model ratings.",
+    "desc": "Bind the best model to each role, or add your own custom template directly.",
     "available": "Available Templates",
     "builtIn": "Built-in",
-    "noRoles": "No roles assigned",
     "rolesCount": "{{count}} collaboration nodes",
+    "addTemplate": "Add Template",
+    "deleteTemplate": "Delete Template",
+    "createTemplate": "Create Template",
+    "templateName": "Template Name",
+    "templateNamePlaceholder": "e.g. My Daily Dev Template",
+    "newTemplateDefaultName": "My Role Template",
+    "deleteConfirm": "Delete this custom template? The built-in default template will not be deleted.",
     "smartAssign": "Smart Auto-Assign",
-    "saveAs": "Save as Template",
+    "addRole": "Add Role",
+    "deleteRole": "Delete Role",
     "noModels": "No AI models connected. Please go to \"Providers\" first.",
     "primaryModel": "Primary Model",
     "primaryModelPlaceholder": "Select primary model",
     "fallbackModel": "Fallback Model",
     "fallbackModelPlaceholder": "No backup",
     "fallbackDisabled": "Don't use a backup",
-    "selectTemplateHint": "Select a template on the left"
+    "selectTemplateHint": "Select a template on the left",
+    "eightRole": {
+      "leader_desc": "Break down tasks, steer flow, answer daily questions",
+      "architect_desc": "Design plans and architecture tradeoffs",
+      "frontend_desc": "UI, components, and interactions",
+      "backend_desc": "APIs, database, and service logic",
+      "runner_desc": "Run builds, tests, and command checks",
+      "tester_desc": "Test cases and regression checks",
+      "reviewer_desc": "Code quality and maintainability review",
+      "security_desc": "Secrets, injection, permissions, and security risks"
+    }
   },
   "projects": {
-    "sectionLabel": "Active Project Center",
-    "title": "Project Workspace",
-    "desc": "Manage multi-agent collaboration projects. Build on industrial-grade workflow templates to let your AI team automate complex development, review, and deployment tasks.",
+    "sectionLabel": "Advanced Asset Management",
+    "title": "Project Assets",
+    "desc": "This keeps legacy projects, checkpoints, transfer packets, project memory, and project-level tool safety settings. For daily work, bind a working folder from the chat page first.",
     "createButton": "New Project",
+    "editButton": "Edit project",
+    "editDialog": {
+      "title": "Edit project",
+      "desc": "Change the project's title and description"
+    },
     "empty": {
       "title": "Nothing Here Yet",
       "desc": "Create a new project to launch your first AI automation pipeline."
@@ -279,18 +571,9 @@
     "interrupted": "Interrupted",
     "ready": "Ready"
   },
-  "stageStatus": {
-    "pending": "Pending Start",
-    "active": "Running",
-    "paused": "Paused",
-    "completed": "Archived",
-    "failed": "System Failure",
-    "ready": "Awaiting Start",
-    "running": "Processing"
-  },
   "tokenPlans": {
     "sectionLabel": "Real-time Monitoring",
-    "title": "Usage Plans",
+    "title": "Usage Monitoring",
     "desc": "Centrally monitor API quota usage across providers. The system will auto-trigger alerts and model fallback strategies based on your plans.",
     "createButton": "New Usage Plan",
     "emptyNoProvider": {
@@ -310,6 +593,12 @@
     "custom": "Custom",
     "reset": "Reset: {{rule}}",
     "used": "Updated usage",
+    "autoRecorded": "Auto-tracked",
+    "recordedEvents": "From {{n}} local calls",
+    "priceIncomplete": "{{n}} calls have missing prices, so USD cost may be low",
+    "editDialog": {
+      "title": "Edit Usage Plan"
+    },
     "createDialog": {
       "title": "Add Usage Plan",
       "provider": "Provider",
@@ -341,41 +630,74 @@
     },
     "deleteConfirm": "Remove this usage plan?"
   },
-  "debate": {
-    "sectionLabel": "Multi-Model Collaboration",
-    "title": "Model Debate",
-    "desc": "Three AIs collaborate on one topic: propose → critique → judge, killing the blind spots of a single model talking to itself.",
-    "topicPlaceholder": "Enter a topic to debate, e.g. should v0.7 build a tool sandbox?",
-    "quickMode": "Quick mode (skip critique, save 1/3 tokens)",
-    "start": "Start debate",
-    "running": "Debating…",
-    "finalSolution": "Final solution (judge's verdict)",
-    "history": "Debate history",
-    "quickTag": "Quick",
-    "noModels": "No usable model — configure and enable at least one under Providers first.",
-    "failed": "Debate failed, please retry or check model config.",
-    "role": {
-      "solver": "Solver",
-      "critic": "Critic",
-      "judge": "Judge"
-    }
+  "usageMonitor": {
+    "detailsTab": "Actual Usage",
+    "plansTab": "Quota Setup",
+    "priceCatalog": "Price Catalog",
+    "priceUpdatedAt": "Last synced: {{time}}",
+    "priceNeverSynced": "Remote prices have not been synced yet. Using built-in prices or your manual overrides for now.",
+    "priceVersionSummary": "Current price version: {{version}} · enabled {{enabled}} / {{total}} entries · {{history}} historical versions",
+    "priceSyncNow": "Refresh Prices",
+    "priceSyncing": "Refreshing…",
+    "priceSyncFailed": "Last refresh failed: {{reason}}"
   },
   "stats": {
     "sectionLabel": "Usage Analytics",
-    "title": "Savings & Usage",
-    "desc": "See what you spend each day, which model costs most, and how much smart routing saves you.",
+    "title": "Usage Details",
+    "desc": "See daily spend, which models cost most, which roles consume the most, and what tools the AI actually ran.",
     "loading": "Loading stats…",
     "today": "Today",
     "last7d": "Last 7d",
     "last30d": "Last 30d",
     "cacheHits": "Cache hits",
+    "cacheEntries": "Cache entries: {{count}}",
+    "clearCache": "Clear cache",
+    "savingsTitle": "Verified Savings",
+    "savingsTotal": "Total Saved",
+    "savingsEmpty": "No explainable savings yet. Cache hits, smart model picks, and context compression will show up here with details.",
+    "savingsExplain": "Would have been about {{baseline}}, actually about {{actual}}",
+    "savingsTraceSummary": "{{traceable}} / {{total}} records trace back to price rows; {{missing}} records are missing price references",
+    "savingsFormula": "Formula {{version}}",
+    "savingsPriceTrace": "Price refs: actual {{actual}} / baseline {{baseline}}",
+    "savingsCacheDetail": "Cache hit {{tokens}} tokens, full input {{input}} / 1M, cache read {{cache}} / 1M",
+    "savingsRoutingDetail": "Using {{baseline}} would have cost more; this run actually used {{actual}}",
+    "savingsCompressionDetail": "Before compression about {{before}} tokens, after compression about {{after}} tokens",
+    "savingsKinds": {
+      "cache": "Cache Savings",
+      "routing": "Routing Savings",
+      "compression": "Compression Savings"
+    },
     "trendTitle": "Cost trend (7 days)",
     "byModelTitle": "Cost by model",
     "calls": "{{n}} calls",
     "noData": "No usage yet — chat a bit and it'll show up here.",
+    "byModelDrilldownTitle": "By actor role (clicked model)",
+    "byModelDrilldownHint": "Click a model row to see which roles used it",
+    "pricingMissingCalls": "{{n}} missing price",
+    "actorRoleUnknown": "(Uncategorized)",
+    "stage": "Project assets",
+    "actorRoleEmptyHint": "No role usage for this model",
+    "actorRoleInputTokensCol": "In",
+    "actorRoleOutputTokensCol": "Out",
     "perfTitle": "Real model performance (routing basis)",
-    "perfEmpty": "Building samples — once each model has 30+ calls per task type, smart routing scores models from this.",
-    "perfWindow": "samples",
+    "perfEmpty": "Building samples — after a model has at least 1 call, smart routing starts using real performance with smoothing to avoid small-sample overconfidence.",
+    "perfUnknownModel": "Unknown model",
+    "perfProviderLine": "{{provider}} · {{model}}",
+    "perfMissingModelLine": "Model config was deleted or not found",
+    "perfTaskType": "Task type",
+    "perfSuccessRate": "Call stability",
+    "perfAvgCost": "Avg. cost",
+    "perfAvgLatency": "Avg. latency",
+    "perfPerCall": "{{value}} / call",
+    "perfMilliseconds": "{{value}} ms",
+    "perfSeconds": "{{value}} sec",
+    "perfSampleHint": "Based on {{n}} real model calls. Call stability means the model call finished normally when the user did not stop it, or Cosmgrid recovered it automatically. It is not cache hit rate or tool success rate.",
+    "perfTaskTypes": {
+      "simple": "Simple question",
+      "standard": "Standard task",
+      "hard": "Complex task",
+      "main_chat": "Leader"
+    },
     "toolsTitle": "AI tool activity",
     "toolsEmpty": "The AI hasn't touched files or commands yet. Once a project has a workspace path, its reads/edits/commands show up here.",
     "toolStatus": {
@@ -403,7 +725,46 @@
     "smartRouting": {
       "title": "Smart Routing",
       "toggleTitle": "Smart Routing (v2)",
-      "toggleDesc": "When on, the app picks cheaper, more reliable models based on each model's real track record (success rate / cost / latency), and serves repeated questions from a semantic cache to save tokens. Falls back to rule-based routing when samples are insufficient. Turn off to use basic rule-based routing only."
+      "toggleDesc": "When on, the app picks cheaper, more reliable models based on each model's real track record (call stability / cost / latency), and serves repeated questions from a semantic cache to save tokens. Falls back to rule-based routing when samples are insufficient. Turn off to use basic rule-based routing only."
+    },
+    "pureMode": {
+      "title": "Pure Single-Model Mode",
+      "toggleTitle": "Debug: single-model chat only",
+      "toggleDesc": "When on, it skips the intent judge, background auto-orchestration/model switching, auto debate triggering, semantic cache, project memory retrieval, the self-check retry loop, and failover to backup models on error — leaving only the most basic path: send a message, get a reply from the model you picked, and a real error if it fails (no silent model swap). Use it to check whether single-model chat itself works. Doesn't affect other settings; toggle off anytime."
+    },
+    "webSearch": {
+      "title": "Web Search",
+      "desc": "Once configured, the AI can use the web_search tool to search the public web (for when you don't know the exact URL — if you already have a URL, web_fetch handles that without any setup). Backed by Tavily, free tier is about 1000 requests/month.",
+      "apiKeyLabel": "Tavily API Key",
+      "apiKeyPlaceholder": "tvly-xxxxxxxxxxxxxxxx",
+      "save": "Save",
+      "clear": "Clear",
+      "configured": "Configured",
+      "notConfigured": "Not configured",
+      "saved": "Saved",
+      "cleared": "Cleared"
+    },
+    "memoryEmbedding": {
+      "title": "Cross-Project Memory Search",
+      "modeTitle": "How AI finds relevant memories",
+      "modeDesc": "Fast mode: no setup, works immediately, keyword-based, no extra cost. Precise mode: lets AI connect decisions and lessons from your other projects more accurately, but needs an embedding-capable model account configured, and you must click \"Update Memory Index\" for it to take effect.",
+      "local": "Fast mode (default, no setup)",
+      "remote": "Precise mode (needs setup)",
+      "credential": "Account to use for matching",
+      "credentialPlaceholder": "Choose a credential with embedding support",
+      "model": "Embedding Model",
+      "sync": "Update Memory Index",
+      "syncing": "Updating...",
+      "syncDone": "Updated the index for {{count}} project memories.",
+      "syncFailed": "Update failed. Check the API key, Base URL, and embedding model name.",
+      "noCredential": "No OpenAI / OpenAI-compatible credential is available yet. Add a provider that supports embeddings first to enable precise mode.",
+      "remoteHint": "After enabling precise mode, click \"Update Memory Index\" above for it to take effect. It won't auto-update during chat, to avoid slowdowns or extra cost."
+    },
+    "projectAssets": {
+      "title": "Project Assets (Advanced)",
+      "entryTitle": "View legacy projects, checkpoints, and transfer packets",
+      "entryDesc": "Project assets are no longer a primary entry. Use this only for legacy projects, checkpoints, transfer packets, project memory, and project-level tool safety settings.",
+      "open": "Open Project Assets"
     },
     "security": {
       "title": "Security & Local Data",
@@ -411,12 +772,11 @@
         "title": "Local Database",
         "desc": "All conversations, API credentials, and project data are stored in a local SQLite database."
       },
-      "manageDb": "Manage Database",
       "apiKey": {
         "title": "API Key Storage",
-        "desc": "Keys are stored in a separate local file (cosmgrid-keys.json), kept out of the database. Note: this file is plaintext — avoid using on shared or untrusted machines."
+        "desc": "API keys are stored in your operating system's secure credential store and are not written to the project database. Linux requires Secret Service, such as GNOME Keyring or KWallet."
       },
-      "encrypted": "Local file"
+      "encrypted": "System keychain"
     },
     "about": {
       "title": "About CosmGrid",
@@ -429,13 +789,12 @@
     "skip": "Skip Guide",
     "neverShow": "Don't show again",
     "prev": "Back",
-    "next": "Next",
     "done": "Got it, let's start",
     "nextWithTarget": "Next (jump to {{target}})",
     "nextTarget": {
       "providers": "Providers",
       "templates": "Templates",
-      "projects": "Projects"
+      "chat": "Chat"
     },
     "steps": {
       "addApiKey": {
@@ -444,15 +803,15 @@
       },
       "addSecondModel": {
         "title": "Add a Second Model (Recommended)",
-        "desc": "At least 2 models are needed to showcase multi-AI collaboration — e.g. Opus for chat, Gemini for coding, Haiku for testing."
+        "desc": "At least 2 models are needed to showcase multi-AI collaboration — e.g. Opus as the leader, Gemini for coding, Haiku for testing."
       },
       "browseTemplates": {
-        "title": "Browse the 4 Built-in Templates",
-        "desc": "Full-Stack Web / Data Science / Mobile App / Small Scripts — each template auto-assigns the best model to every role."
+        "title": "Review the Default Roles",
+        "desc": "Default Roles include Leader, Architect, Frontend, Backend, Execution Runner, Tester, Reviewer, and Security. You can add your own templates later."
       },
-      "createFirstProject": {
-        "title": "Create Your First Project",
-        "desc": "Pick a template, set the project name and workspace path (you can change it later), and you're done."
+      "bindWorkspace": {
+        "title": "Return to chat and bind a working folder",
+        "desc": "Most work happens in the chat page. Click \"Workspace\" beside the input, choose your project folder, and the AI can read files, edit code, and run checks."
       }
     }
   },
@@ -468,26 +827,35 @@
       "saved": "Saved"
     },
     "notFound": "Project not found",
-    "coreWorkflow": "Core Workflow",
-    "timeline": "Timeline",
-    "checkpoints": "Checkpoints",
-    "memories": "Memories",
+    "returnToHub": "Return to Hub",
+    "descFallback": "Experimental Neural Project",
+    "activeSequence": "Active Sequence",
+    "initialization": "Initialization",
+    "accumulatedCost": "Accumulated Cost",
+    "neuralLoad": "Neural Load",
+    "deployFinish": "Deploy & Finish",
+    "operationalTimeline": "Operational Timeline",
+    "coreCheckpoints": "Core Checkpoints",
+    "neuralMemory": "Neural Memory",
     "emptyBuffer": "Empty Buffer",
     "loadError": "Load Failed",
     "altBot": "Bot",
-    "altUser": "User",
     "chat": {
       "userLabel": "You",
-      "assistantLabel": "CosmGrid Assistant",
+      "assistantLabel": "CosmGrid Ai",
       "placeholder": "Command the agent...",
       "awaiting": "Awaiting Instruction",
       "endpointFailed": "Endpoint Failed",
-      "streamFailed": "Stream Failed",
       "failsafeSwitched": "Failsafe: Switched to {{name}}",
-      "switching": "Switching",
+      "recovery": {
+        "native_resume": "Recovered with the CLI's native resume session",
+        "context_replay": "Recovered by continuing from the interruption point without repeating earlier content",
+        "fallback_handoff": "Primary model stopped; continuing with a fallback model"
+      },
       "apiKeyMissing": "API Key Missing",
       "initFailed": "Initialization Failed",
-      "syncing": "Synchronizing Environment..."
+      "syncing": "Synchronizing Environment...",
+      "errorPrefix": "ERROR"
     },
     "stageStatus": {
       "ready": "Ready",
@@ -506,6 +874,7 @@
       "failed": "System Failure"
     },
     "deleteCheckpoint": "Delete this checkpoint? Associated handoff packets will also be removed.",
+    "deleteMemory": "Delete this memory? This cannot be undone.",
     "systemModel": "System Model",
     "startSequence": "Start Sequence",
     "closeLogs": "Close Logs",
@@ -528,7 +897,6 @@
       "saveFailed": "Save failed",
       "titleLabel": "Title *",
       "titlePlaceholder": "e.g. Frontend v1 done, ready for backend integration",
-      "cancel": "Cancel",
       "create": "Create",
       "saving": "Saving…"
     },
@@ -564,7 +932,6 @@
       "targetRole": "Target Role",
       "targetRolePlaceholder": "Pick the next role to hand off to",
       "hint": "The handoff packet combines all checkpoint fields into markdown and saves it as a handoff_packets record.",
-      "cancel": "Cancel",
       "generate": "Generate",
       "generating": "Generating…",
       "failed": "Generation failed"
@@ -579,14 +946,19 @@
       "titleRequired": "Title and content are both required",
       "saveFailed": "Save failed",
       "titleLabel": "Title *",
-      "titlePlaceholder": "e.g. API Keys stored in keychain plugin, not in DB",
+      "titlePlaceholder": "e.g. API Keys stored in the system keychain, not in SQLite",
       "contentLabel": "Content *",
       "contentPlaceholder": "What this memory covers / why the decision / future project use",
       "tagsLabel": "Tags (optional, comma-separated)",
       "tagsPlaceholder": "e.g. auth, ux, v0.3",
       "tagsHint": "Tags help cross-project search match this memory with descriptions / other memories",
-      "cancel": "Cancel",
       "save": "Save"
+    },
+    "relatedMemories": {
+      "title": "Cross-Project References",
+      "hint": "Only high-importance entries, max 1 per project",
+      "fromProject": "From {{name}}",
+      "unknownProject": "Unnamed Project"
     }
   }
 }

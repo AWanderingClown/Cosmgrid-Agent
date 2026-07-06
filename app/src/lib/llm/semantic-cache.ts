@@ -86,3 +86,8 @@ export async function writeCache(
 export async function cleanupExpiredCache(): Promise<void> {
   await semanticCache.deleteExpired();
 }
+
+/** 清空全部缓存（用量页手动重置；旧脏缓存一键清掉） */
+export async function clearAllCache(): Promise<void> {
+  await semanticCache.deleteAll();
+}

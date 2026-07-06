@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kill-cli"
+description = "Enables the kill_cli command without any pre-configured scope."
+commands.allow = ["kill_cli"]
+
+[[permission]]
+identifier = "deny-kill-cli"
+description = "Denies the kill_cli command without any pre-configured scope."
+commands.deny = ["kill_cli"]

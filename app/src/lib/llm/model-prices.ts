@@ -28,10 +28,10 @@ export interface ModelPrice {
 export const MODEL_PRICES: Record<string, ModelPrice> = {
   // ============ Anthropic ============
   "claude-opus-4-8": {
-    input: 15,
-    output: 75,
-    cacheRead: 1.5, // input 的 10%
-    cacheWrite: 18.75, // input 的 125%
+    input: 5,
+    output: 25,
+    cacheRead: 0.5, // input 的 10%
+    cacheWrite: 6.25, // input 的 125%
     contextWindow: 1_000_000,
   },
   "claude-sonnet-4-6": {
@@ -54,6 +54,12 @@ export const MODEL_PRICES: Record<string, ModelPrice> = {
     input: 5,
     output: 20,
     contextWindow: 256_000,
+  },
+  "gpt-5.5": {
+    input: 5,
+    output: 30,
+    cacheRead: 0.5,
+    contextWindow: 1_050_000,
   },
   "gpt-5-mini": {
     input: 0.5,

@@ -7,14 +7,24 @@
 //   - 若有裁掉，插一条 system 提示"前 N 条较早消息已省略"
 // LLM 摘要版（保留关键决策再压缩）留到 v0.9.1。
 
+import type { UserContentPart } from "./attachments";
+
 export interface ChatMsg {
   role: "user" | "assistant" | "system";
-  content: string;
+  content: string | UserContentPart[];
 }
 
-/** 粗略 token 估算：CJK 约 1 token/字，拉丁约 1 token/4 字符。取折中 chars/3。 */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 3);
+/** 粗略 token 估算：CJK 约 1 token/字，拉丁约 1 token/4 字符。取折中 chars/3。
+ *  兼容多模态 content（数组）：text part 按 chars/3，每图固定估 1000 token（base64 占位粗估）。 */
+export function estimateTokens(content: string | UserContentPart[]): number {
+  if (typeof content === "string") return Math.ceil(content.length / 3);
+  let len = 0;
+  let images = 0;
+  for (const p of content) {
+    if (p.type === "text") len += p.text.length;
+    else images++;
+  }
+  return Math.ceil(len / 3) + images * 1000;
 }
 
 export function estimateMessagesTokens(messages: ChatMsg[]): number {
@@ -25,6 +35,8 @@ export interface CompressResult {
   messages: ChatMsg[];
   compressed: boolean;
   droppedCount: number;
+  beforeTokens: number;
+  afterTokens: number;
 }
 
 export interface CompressOptions {
@@ -44,10 +56,11 @@ export function compressHistory(messages: ChatMsg[], opts: CompressOptions = {})
   const maxTokens = opts.maxTokens ?? 12000;
   const minRecent = opts.minRecent ?? 4;
   const noticeText = opts.noticeText ?? ((n: number) => `[${n} earlier messages omitted to save tokens]`);
+  const beforeTokens = estimateMessagesTokens(messages);
 
   // 在预算内：原样返回
-  if (estimateMessagesTokens(messages) <= maxTokens) {
-    return { messages: [...messages], compressed: false, droppedCount: 0 };
+  if (beforeTokens <= maxTokens) {
+    return { messages: [...messages], compressed: false, droppedCount: 0, beforeTokens, afterTokens: beforeTokens };
   }
 
   const systemMsgs = messages.filter((m) => m.role === "system");
@@ -71,13 +84,16 @@ export function compressHistory(messages: ChatMsg[], opts: CompressOptions = {})
 
   const droppedCount = nonSystem.length - kept.length;
   if (droppedCount <= 0) {
-    return { messages: [...messages], compressed: false, droppedCount: 0 };
+    return { messages: [...messages], compressed: false, droppedCount: 0, beforeTokens, afterTokens: beforeTokens };
   }
 
   const notice: ChatMsg = { role: "system", content: noticeText(droppedCount) };
+  const outputMessages = [...systemMsgs, notice, ...kept];
   return {
-    messages: [...systemMsgs, notice, ...kept],
+    messages: outputMessages,
     compressed: true,
     droppedCount,
+    beforeTokens,
+    afterTokens: estimateMessagesTokens(outputMessages),
   };
 }

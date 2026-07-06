@@ -9,7 +9,6 @@ import {
   MessageSquare,
   Plus,
   Send,
-  Sparkles,
   Square,
   Trash2,
   User,
@@ -24,26 +23,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
-import { WORK_ROLES } from "@/lib/api";
 import {
   projects as dbProjects,
   workspaceConfigs as dbWorkspaceConfigs,
@@ -66,21 +49,23 @@ import {
 } from "@/lib/db";
 import { getApiKey } from "@/lib/keystore";
 import { streamWithFallback, toModelEndpoint } from "@/lib/llm/chat-fallback";
-import { createDefaultToolRegistry, buildAiSdkTools, type ToolConfirmRequest } from "@/lib/llm/tools";
-import { generateCheckpointDraft } from "@/lib/llm/checkpoint-generator";
+import { type ToolConfirmRequest } from "@/lib/llm/tools";
+import { prepareWorkspaceToolRuntime, type WorkspaceToolRuntime } from "@/lib/llm/workspace-tool-runtime";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
-import { getLanguageModel } from "@/lib/llm/provider-factory";
+import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble, buildProjectMemoryPreamble } from "@/lib/llm/context-preamble";
+import { retrieveCrossProjectMemoriesForPrompt, searchAcrossProjectsHybrid } from "@/lib/memory/retrieval";
 import {
   projectMemories as dbMemories,
   memoryKindLabel,
   type ProjectMemory,
 } from "@/lib/db";
+import { CreateCheckpointDialog, CheckpointDetailDialog } from "@/components/project-detail/CheckpointDialogs";
+import { GenerateHandoffDialog, HandoffDetailDialog } from "@/components/project-detail/HandoffDialogs";
+import { AddMemoryDialog } from "@/components/project-detail/MemoryDialogs";
+import { formatTime, roleLabel } from "@/components/project-detail/project-detail-utils";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 
 // ============ 静态映射 ============
-
-// ROLE_LABEL 改成函数（v0.7 i18n 化）— 原本用 r.label 硬编码
-const ROLE_LABEL = (value: string, t: (k: string) => string): string => t(`workRoles.${value}`);
 
 const STAGE_STATUS_COLOR: Record<string, { color: string; bg: string }> = {
   pending: { color: "text-muted-foreground", bg: "bg-muted/10" },
@@ -107,10 +92,6 @@ const PROJECT_STATUS_COLOR: Record<string, { color: string; bg: string }> = {
 function projectStatusLabel(status: string, t: (k: string) => string): string {
   const key = ["pending", "active", "paused", "completed", "failed"].includes(status) ? status : "pending";
   return t(`projectDetail.projectStatus.${key}`);
-}
-
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleString("zh-CN", { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function formatCost(v: number): string {
@@ -240,20 +221,29 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
 
     const chain = fallback ? [primary, toModelEndpoint(fallback.model, fallback.credential, fallback.apiKey)] : [primary];
 
-    // v0.7 阶段4：项目设了工作区路径，就给 AI 挂上读文件/搜索工具（read/glob/grep）
-    let tools: ReturnType<typeof buildAiSdkTools> | undefined;
+    // 项目设了工作区路径，就给 AI 挂上工作区工具；写工具仍走确认弹窗。
+    let tools: WorkspaceToolRuntime["tools"];
+    let workspacePreamble: string | null = null;
+    let projectMemoryPreamble: string | null = null;
+    let crossProjectPreamble: string | null = null;
     try {
       const proj = await dbProjects.getById(stage.projectId);
+      const memories = await dbMemories.listByProject(stage.projectId);
+      projectMemoryPreamble = buildProjectMemoryPreamble(proj?.name, memories);
+      crossProjectPreamble = (await retrieveCrossProjectMemoriesForPrompt(stage.projectId, text)).preamble;
       if (proj?.workspacePath) {
-        // includeWrite：项目有工作区就给 AI 读写工具；写工具运行时强制走 requestConfirm 确认
         const blockedCommands = await dbWorkspaceConfigs.getBlockedCommands(stage.projectId);
-        tools = buildAiSdkTools(createDefaultToolRegistry({ includeWrite: true }), {
+        const runtime = await prepareWorkspaceToolRuntime({
           workspacePath: proj.workspacePath,
+          includeWrite: true,
           projectId: stage.projectId,
           conversationId,
           confirm: requestConfirm,
           blockedCommands,
+          includePreamble: true,
         });
+        tools = runtime.tools;
+        workspacePreamble = runtime.workspacePreamble;
       }
     } catch {
       // 取工作区失败不影响对话，只是没有工具
@@ -263,7 +253,15 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
     try {
       await streamWithFallback(
         chain,
-        [...history, userMsg].map((m) => ({ role: m.role as any, content: m.content })),
+        [
+          { role: "system" as const, content: buildTimePreamble() },
+          ...(projectMemoryPreamble ? [{ role: "system" as const, content: projectMemoryPreamble }] : []),
+          ...(crossProjectPreamble ? [{ role: "system" as const, content: crossProjectPreamble }] : []),
+          ...(workspacePreamble ? [{ role: "system" as const, content: workspacePreamble }] : []),
+          ...(tools ? [{ role: "system" as const, content: buildImageGuardPreamble() }] : []),
+          ...(!tools ? [{ role: "system" as const, content: buildNoToolsPreamble() }] : []),
+          ...[...history, userMsg].map((m) => ({ role: m.role as any, content: m.content })),
+        ],
         {
           onDelta: (delta) => {
             full += delta;
@@ -271,6 +269,9 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
           },
           onSwitched: (_from, to) => {
             setSwitchNotice(t("projectDetail.chat.failsafeSwitched", { name: to.displayLabel || to.modelName }));
+          },
+          onRecovered: (mode) => {
+            setSwitchNotice(t(`projectDetail.chat.recovery.${mode}`));
           },
           onUsage: async (usage, usedEndpoint) => {
             const finalAssistant = await dbMessages.create({
@@ -284,7 +285,7 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
           },
         },
         // role 不传：chat-fallback 内部按最后一条 user 消息推断难度桶
-        { signal: controller.signal, projectId: stage.projectId, ...(tools ? { tools } : {}) },
+        { signal: controller.signal, projectId: stage.projectId, actorRole: "stage", ...(tools ? { tools } : {}) },
       );
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
@@ -299,16 +300,17 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
     <div className="relative flex flex-col h-[500px] glass border-x-0 border-b-0">
       {/* v0.7 阶段4b：写操作确认弹窗 */}
       {pendingConfirm && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-6">
-          <div className="glass border border-white/15 rounded-2xl max-w-2xl w-full max-h-[80%] flex flex-col shadow-2xl">
-            <div className="flex items-center gap-2 px-5 py-4 border-b border-white/10">
+        <div className="absolute top-4 right-4 z-50 w-[28rem] max-w-[calc(100%-2rem)]">
+          <div className="glass border border-white/15 rounded-[1.75rem] overflow-hidden shadow-2xl shadow-black/35">
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-white/10 bg-black/20">
               <ShieldAlert className="w-4 h-4 text-amber-500" />
               <span className="font-bold text-sm">{t("projectDetail.tools.confirmTitle")}</span>
               <span className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500 uppercase">{pendingConfirm.toolName}</span>
             </div>
-            <div className="px-5 py-3 text-xs font-bold text-muted-foreground">{pendingConfirm.summary}</div>
-            {pendingConfirm.diff && (
-              <pre className="flex-1 overflow-auto mx-5 mb-3 p-3 rounded-xl bg-black/30 text-[11px] leading-relaxed font-mono custom-scrollbar">
+            <div className="px-4 py-3 space-y-3">
+              <div className="text-xs font-bold text-muted-foreground leading-relaxed">{pendingConfirm.summary}</div>
+              {pendingConfirm.diff && (
+              <pre className="max-h-48 overflow-auto rounded-xl bg-black/30 p-3 text-[11px] leading-relaxed font-mono custom-scrollbar">
                 {pendingConfirm.diff.split("\n").map((line, i) => (
                   <div
                     key={i}
@@ -322,8 +324,9 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
                   </div>
                 ))}
               </pre>
-            )}
-            <div className="flex justify-end gap-3 px-5 py-4 border-t border-white/10">
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-4 py-3 border-t border-white/10 bg-black/10">
               <Button variant="outline" size="sm" className="rounded-xl" onClick={() => resolveConfirm(false)}>
                 {t("projectDetail.tools.reject")}
               </Button>
@@ -357,7 +360,7 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
         )}
         {streamErr && (
           <div className="px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-xl text-[10px] font-bold text-red-500">
-            ERROR: {streamErr}
+            {t("projectDetail.chat.errorPrefix")}: {streamErr}
           </div>
         )}
       </div>
@@ -395,6 +398,7 @@ export interface ProjectDetailPageProps {
 
 export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps) {
   const { t } = useTranslation();
+  const { confirm } = useConfirm();
   const [project, setProject] = useState<Project | null>(null);
   const [stages, setStages] = useState<ProjectStage[]>([]);
   const [models, setModels] = useState<Model[]>([]);
@@ -409,7 +413,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
   const [genCp, setGenCp] = useState<Checkpoint | null>(null);
   const [viewHandoff, setViewHandoff] = useState<HandoffPacket | null>(null);
   const [addMemoryOpen, setAddMemoryOpen] = useState(false);
-  const [, setRelatedMemories] = useState<ProjectMemory[]>([]);
+  const [relatedMemories, setRelatedMemories] = useState<ProjectMemory[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   // v0.7 阶段4b：项目级命令黑名单（换行/逗号分隔）
   const [blockedInput, setBlockedInput] = useState("");
@@ -432,7 +436,16 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
       setBlockedInput(blocked.join("\n"));
       if (p.templateId) setTemplateRoles(await dbTemplateRoles.listByTemplate(p.templateId));
       const query = [p.name, p.description].filter(Boolean).join(" ");
-      if (query) setRelatedMemories(await dbMemories.searchAcrossProjects(query, { excludeProjectId: projectId, limit: 3 }).catch(() => []));
+      if (query) {
+        setRelatedMemories(await searchAcrossProjectsHybrid(query, {
+          excludeProjectId: projectId,
+          limit: 3,
+          minImportance: 60,
+          perProjectLimit: 1,
+        }).catch(() => []));
+      } else {
+        setRelatedMemories([]);
+      }
       setLoadError(null);
     } catch (err) { setLoadError(err instanceof Error ? err.message : t("projectDetail.loadError")); }
   }
@@ -465,8 +478,14 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
   }
 
   async function deleteCheckpoint(id: string) {
-    if (!confirm(t("projectDetail.deleteCheckpoint"))) return;
+    if (!(await confirm({ description: t("projectDetail.deleteCheckpoint"), destructive: true }))) return;
     await dbCheckpoints.delete(id);
+    await load();
+  }
+
+  async function deleteMemory(id: string) {
+    if (!(await confirm({ description: t("projectDetail.deleteMemory"), destructive: true }))) return;
+    await dbMemories.delete(id);
     await load();
   }
 
@@ -486,13 +505,13 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
   };
 
   return (
-    <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
-      <div className="max-w-6xl mx-auto space-y-12 pb-20">
+    <div className="h-full w-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
+      <div className="space-y-12 pb-20">
         {/* Header Section */}
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-8 animate-in fade-in slide-in-from-top-4 duration-700">
           <div className="space-y-4 flex-1">
             <Button variant="ghost" size="sm" onClick={onBack} className="-ml-3 rounded-xl hover:bg-white/10 text-muted-foreground">
-              <ArrowLeft className="w-4 h-4 mr-2" /> Return to Hub
+              <ArrowLeft className="w-4 h-4 mr-2" /> {t("projectDetail.returnToHub")}
             </Button>
             <div className="space-y-1">
               <div className="flex items-center gap-3">
@@ -501,21 +520,21 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                   {projectStatus.label}
                 </div>
               </div>
-              <p className="text-muted-foreground text-sm font-medium opacity-60">{project.description || "Experimental Neural Project"}</p>
+              <p className="text-muted-foreground text-sm font-medium opacity-60">{project.description || t("projectDetail.descFallback")}</p>
             </div>
             <div className="flex flex-wrap items-center gap-6 pt-2">
               <div className="flex flex-col gap-0.5">
-                <span className="text-[9px] font-black text-muted-foreground/40 uppercase tracking-widest">Active Sequence</span>
-                <span className="text-xs font-bold text-primary">{ROLE_LABEL(project.currentStage, t) || "Initialization"}</span>
+                <span className="text-[9px] font-black text-muted-foreground/40 uppercase tracking-widest">{t("projectDetail.activeSequence")}</span>
+                <span className="text-xs font-bold text-primary">{roleLabel(project.currentStage, t) || t("projectDetail.initialization")}</span>
               </div>
               <div className="w-px h-8 bg-white/5" />
               <div className="flex flex-col gap-0.5">
-                <span className="text-[9px] font-black text-muted-foreground/40 uppercase tracking-widest">Accumulated Cost</span>
+                <span className="text-[9px] font-black text-muted-foreground/40 uppercase tracking-widest">{t("projectDetail.accumulatedCost")}</span>
                 <span className="text-xs font-bold font-mono text-emerald-400">{formatCost(totalCost)}</span>
               </div>
               <div className="w-px h-8 bg-white/5" />
               <div className="flex flex-col gap-0.5">
-                <span className="text-[9px] font-black text-muted-foreground/40 uppercase tracking-widest">Neural Load</span>
+                <span className="text-[9px] font-black text-muted-foreground/40 uppercase tracking-widest">{t("projectDetail.neuralLoad")}</span>
                 <span className="text-xs font-bold font-mono">{totalTokens.toLocaleString()} <span className="text-[9px] opacity-40">TKN</span></span>
               </div>
             </div>
@@ -529,7 +548,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                 onClick={() => dbProjects.update(project.id, { status: "completed", currentStage: "completed" }).then(load)}
                 className="h-12 px-6 rounded-2xl bg-primary shadow-xl shadow-primary/20 font-bold gap-2"
               >
-                <CheckCircle2 className="w-4 h-4" /> Deploy & Finish
+                <CheckCircle2 className="w-4 h-4" /> {t("projectDetail.deployFinish")}
               </Button>
             )}
           </div>
@@ -541,7 +560,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
           <div className="lg:col-span-2 space-y-6">
             <div className="flex items-center justify-between px-2">
               <h2 className="text-xs font-black uppercase tracking-[0.3em] text-muted-foreground/40 flex items-center gap-2">
-                <Workflow className="w-4 h-4" /> Operational Timeline
+                <Workflow className="w-4 h-4" /> {t("projectDetail.operationalTimeline")}
               </h2>
             </div>
             <div className="space-y-4">
@@ -573,13 +592,13 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                         </div>
                         <div className="space-y-1">
                           <div className="flex items-center gap-2">
-                            <h3 className="text-lg font-bold tracking-tight">{ROLE_LABEL(st.workRole, t) || st.workRole}</h3>
+                            <h3 className="text-lg font-bold tracking-tight">{roleLabel(st.workRole, t) || st.workRole}</h3>
                             <div className={cn("px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-tighter border border-current/20", status.color, status.bg)}>
                               {status.label}
                             </div>
                           </div>
                           <div className="flex items-center gap-3 text-[10px] font-bold text-muted-foreground/40 uppercase tracking-widest">
-                            <span className="flex items-center gap-1"><Cpu className="w-3 h-3" /> {m?.displayName || "System Model"}</span>
+                            <span className="flex items-center gap-1"><Cpu className="w-3 h-3" /> {m?.displayName || t("projectDetail.systemModel")}</span>
                             <span>•</span>
                             <span className="flex items-center gap-1"><Terminal className="w-3 h-3" /> {st.outputTokens} tkn</span>
                           </div>
@@ -589,7 +608,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                       <div className="flex items-center gap-2">
                         {st.status === "pending" ? (
                           <Button onClick={() => startStage(st)} className="rounded-xl h-10 px-5 bg-primary/20 hover:bg-primary text-primary hover:text-primary-foreground transition-all font-bold text-xs uppercase">
-                            Start Sequence
+                            {t("projectDetail.startSequence")}
                           </Button>
                         ) : (
                           <Button
@@ -599,7 +618,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                             className={cn("h-10 px-4 rounded-xl gap-2 font-bold text-xs uppercase", isOpen ? "bg-primary text-primary-foreground" : "hover:bg-white/10")}
                           >
                             <MessageSquare className="w-4 h-4" />
-                            {isOpen ? "Close Logs" : "View Dialog"}
+                            {isOpen ? t("projectDetail.closeLogs") : t("projectDetail.viewDialog")}
                           </Button>
                         )}
                         {isRunning && (
@@ -626,7 +645,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
             <div className="space-y-4">
                <div className="flex items-center justify-between px-2">
                   <h2 className="text-xs font-black uppercase tracking-[0.3em] text-muted-foreground/40 flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4" /> Core Checkpoints
+                    <CheckCircle2 className="w-4 h-4" /> {t("projectDetail.coreCheckpoints")}
                   </h2>
                   <Button size="sm" variant="ghost" onClick={() => setCreateCpOpen(true)} className="h-7 w-7 p-0 rounded-lg bg-primary/10 text-primary hover:bg-primary hover:text-white">
                     <Plus className="w-4 h-4" />
@@ -635,7 +654,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                <div className="space-y-3">
                   {checkpoints.length === 0 ? (
                     <div className="glass border-dashed rounded-[2rem] p-8 text-center opacity-30">
-                       <p className="text-[10px] font-black uppercase tracking-widest">No Records</p>
+                       <p className="text-[10px] font-black uppercase tracking-widest">{t("projectDetail.noRecords")}</p>
                     </div>
                   ) : checkpoints.map(cp => (
                     <Card key={cp.id} className="glass border-white/5 rounded-[1.5rem] p-5 space-y-4 hover:border-primary/30 transition-all">
@@ -649,8 +668,8 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                           <Clock className="w-3 h-3" /> {formatTime(cp.createdAt)}
                        </div>
                        <div className="flex gap-2">
-                          <Button variant="outline" size="sm" onClick={() => setViewCp(cp)} className="flex-1 h-8 rounded-lg text-[10px] uppercase font-bold border-white/10 hover:bg-white/5">Details</Button>
-                          <Button size="sm" onClick={() => setGenCp(cp)} className="flex-1 h-8 rounded-lg text-[10px] uppercase font-bold bg-primary shadow-lg shadow-primary/10">Handoff</Button>
+                          <Button variant="outline" size="sm" onClick={() => setViewCp(cp)} className="flex-1 h-8 rounded-lg text-[10px] uppercase font-bold border-white/10 hover:bg-white/5">{t("projectDetail.details")}</Button>
+                          <Button size="sm" onClick={() => setGenCp(cp)} className="flex-1 h-8 rounded-lg text-[10px] uppercase font-bold bg-primary shadow-lg shadow-primary/10">{t("projectDetail.handoff")}</Button>
                        </div>
                     </Card>
                   ))}
@@ -661,7 +680,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
             <div className="space-y-4">
                <div className="flex items-center justify-between px-2">
                   <h2 className="text-xs font-black uppercase tracking-[0.3em] text-muted-foreground/40 flex items-center gap-2">
-                    <BrainCircuit className="w-4 h-4" /> Neural Memory
+                    <BrainCircuit className="w-4 h-4" /> {t("projectDetail.neuralMemory")}
                   </h2>
                   <Button size="sm" variant="ghost" onClick={() => setAddMemoryOpen(true)} className="h-7 w-7 p-0 rounded-lg bg-accent/10 text-accent hover:bg-accent hover:text-white">
                     <Plus className="w-4 h-4" />
@@ -670,7 +689,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                <div className="space-y-3">
                   {memories.length === 0 ? (
                     <div className="glass border-dashed rounded-[2rem] p-8 text-center opacity-30">
-                       <p className="text-[10px] font-black uppercase tracking-widest">Empty Buffer</p>
+                       <p className="text-[10px] font-black uppercase tracking-widest">{t("projectDetail.emptyBuffer")}</p>
                     </div>
                   ) : memories.map(m => (
                     <Card key={m.id} className="glass border-white/5 rounded-[1.5rem] p-5 space-y-2 group transition-all">
@@ -680,7 +699,7 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                           )}>
                              {memoryKindLabel(m.kind, t)}
                           </div>
-                          <button onClick={() => dbMemories.delete(m.id).then(load)} className="opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => void deleteMemory(m.id)} className="opacity-0 group-hover:opacity-100 transition-opacity">
                             <XCircle className="w-3 h-3 text-red-500/50 hover:text-red-500" />
                           </button>
                        </div>
@@ -689,6 +708,32 @@ export function ProjectDetailPage({ projectId, onBack }: ProjectDetailPageProps)
                     </Card>
                   ))}
                </div>
+               {relatedMemories.length > 0 && (
+                 <div className="space-y-3 pt-2">
+                   <div className="flex items-center justify-between px-1">
+                     <h3 className="text-[10px] font-black uppercase tracking-[0.25em] text-muted-foreground/45 flex items-center gap-2">
+                       <Workflow className="w-3.5 h-3.5" /> {t("projectDetail.relatedMemories.title")}
+                     </h3>
+                     <span className="text-[9px] text-muted-foreground/45">{t("projectDetail.relatedMemories.hint")}</span>
+                   </div>
+                   {relatedMemories.map((m) => (
+                     <Card key={`related-${m.id}`} className="border border-white/8 bg-white/[0.03] rounded-[1.25rem] p-4 space-y-2">
+                       <div className="flex items-center justify-between gap-3">
+                         <div className={cn("px-2 py-0.5 rounded text-[8px] font-black uppercase",
+                           m.kind === "decision" ? "bg-indigo-500/10 text-indigo-400" : "bg-accent/10 text-accent"
+                         )}>
+                           {memoryKindLabel(m.kind, t)}
+                         </div>
+                         <div className="text-[9px] font-bold text-amber-300/80">
+                           {t("projectDetail.relatedMemories.fromProject", { name: m.projectName || t("projectDetail.relatedMemories.unknownProject") })}
+                         </div>
+                       </div>
+                       <h4 className="text-sm font-bold">{m.title}</h4>
+                       <p className="text-[11px] text-muted-foreground/70 line-clamp-3 leading-relaxed">{m.content}</p>
+                     </Card>
+                   ))}
+                 </div>
+               )}
             </div>
           </div>
         </div>
@@ -768,577 +813,4 @@ function StageConversationLoader({ stage, model, credential, models, credentials
   if (!conversationId || !apiKey) return <div className="p-10 flex items-center justify-center gap-3"><Loader2 className="w-5 h-5 text-primary animate-spin" /><span className="text-xs font-black uppercase tracking-widest opacity-30">{t("projectDetail.chat.syncing")}</span></div>;
 
   return <StageChat stage={stage} model={model} credential={credential} apiKey={apiKey} conversationId={conversationId} fallback={fallback} />;
-}
-
-// ============ 创建检查点对话框 ============
-
-function CreateCheckpointDialog({
-  open,
-  onOpenChange,
-  projectId,
-  stages,
-  models,
-  credentials,
-  onCreated,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  projectId: string;
-  stages: ProjectStage[];
-  models: Model[];
-  credentials: ApiCredential[];
-  onCreated: () => void;
-}) {
-  const { t } = useTranslation();
-  const [title, setTitle] = useState("");
-  const [goal, setGoal] = useState("");
-  const [completedSummary, setCompletedSummary] = useState("");
-  const [currentContext, setCurrentContext] = useState("");
-  const [decisions, setDecisions] = useState("");
-  const [failedAttempts, setFailedAttempts] = useState("");
-  const [blockers, setBlockers] = useState("");
-  const [nextSteps, setNextSteps] = useState("");
-  const [doNotRepeat, setDoNotRepeat] = useState("");
-  const [acceptanceCriteria, setAcceptanceCriteria] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // 阶段已经开始过（有进行中/已完成/失败状态）才可能有对话历史，AI 生成才有意义
-  const stagesWithConversation = stages.filter((s) => s.status !== "pending");
-  const [selectedStageId, setSelectedStageId] = useState<string>("");
-  const [generating, setGenerating] = useState(false);
-  const [generateError, setGenerateError] = useState<string | null>(null);
-  // 记录"已经自动生成过的阶段 id"，避免每次重渲染都重复触发；对话框关闭时清空，下次打开重新自动生成
-  const autoGeneratedForRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!open) {
-      autoGeneratedForRef.current = null;
-      return;
-    }
-    if (!selectedStageId && stagesWithConversation.length > 0) {
-      setSelectedStageId(stagesWithConversation[stagesWithConversation.length - 1]!.id);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, stages]);
-
-  // 选好阶段后不需要用户再点一下——直接自动生成草稿，按钮只用来"重新生成"
-  useEffect(() => {
-    if (open && selectedStageId && autoGeneratedForRef.current !== selectedStageId) {
-      autoGeneratedForRef.current = selectedStageId;
-      void handleGenerate();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, selectedStageId]);
-
-  function reset() {
-    setTitle("");
-    setGoal("");
-    setCompletedSummary("");
-    setCurrentContext("");
-    setDecisions("");
-    setFailedAttempts("");
-    setBlockers("");
-    setNextSteps("");
-    setDoNotRepeat("");
-    setAcceptanceCriteria("");
-    setError(null);
-    setSelectedStageId("");
-    setGenerateError(null);
-    autoGeneratedForRef.current = null;
-  }
-
-  async function handleGenerate() {
-    const stage = stages.find((s) => s.id === selectedStageId);
-    if (!stage) {
-      setGenerateError(t("projectDetail.createCheckpoint.selectStageFirst"));
-      return;
-    }
-    const model = models.find((m) => m.id === stage.modelId);
-    const credential = model && credentials.find((c) => c.providerId === model.providerId);
-    if (!model || !credential || !model.provider?.type) {
-      setGenerateError(t("projectDetail.createCheckpoint.noModelOrCred"));
-      return;
-    }
-
-    setGenerating(true);
-    setGenerateError(null);
-    try {
-      const convs = await dbConversations.list();
-      const convTitle = `${stage.projectId}:${stage.id}`;
-      const conv = convs.find((c) => c.projectId === stage.projectId && c.title === convTitle);
-      const history = conv ? await dbMessages.listByConversation(conv.id) : [];
-
-      const apiKey = await getApiKey(credential.id);
-      if (!apiKey) {
-        setGenerateError(t("projectDetail.createCheckpoint.apiKeyMissing"));
-        return;
-      }
-
-      const languageModel = getLanguageModel(
-        model.provider.type,
-        model.name,
-        apiKey,
-        credential.baseUrl,
-      );
-      const draft = await generateCheckpointDraft(
-        languageModel,
-        history.map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content })),
-      );
-
-      setTitle(draft.title);
-      setGoal(draft.goal);
-      setCompletedSummary(draft.completedSummary);
-      setCurrentContext(draft.currentContext);
-      setDecisions(draft.decisions);
-      setFailedAttempts(draft.failedAttempts);
-      setBlockers(draft.blockers);
-      setNextSteps(draft.nextSteps);
-      setDoNotRepeat(draft.doNotRepeat);
-      setAcceptanceCriteria(draft.acceptanceCriteria);
-    } catch (err) {
-      setGenerateError(err instanceof Error ? err.message : t("projectDetail.createCheckpoint.generateFailed"));
-    } finally {
-      setGenerating(false);
-    }
-  }
-
-  async function handleSave() {
-    if (!title.trim()) {
-      setError(t("projectDetail.createCheckpoint.titleRequired"));
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    try {
-      await dbCheckpoints.create({
-        projectId,
-        title: title.trim(),
-        goal: goal.trim() || null,
-        completedSummary: completedSummary.trim() || null,
-        currentContext: currentContext.trim() || null,
-        decisions: decisions.trim() || null,
-        failedAttempts: failedAttempts.trim() || null,
-        blockers: blockers.trim() || null,
-        nextSteps: nextSteps.trim() || null,
-        doNotRepeat: doNotRepeat.trim() || null,
-        acceptanceCriteria: acceptanceCriteria.trim() || null,
-      });
-      reset();
-      onOpenChange(false);
-      onCreated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("projectDetail.createCheckpoint.saveFailed"));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto glass border-white/10 rounded-[2rem]">
-        <DialogHeader>
-          <DialogTitle className="font-black tracking-tight">{t("projectDetail.createCheckpoint.title")}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 text-sm">
-          {error && (
-            <Alert variant="destructive" className="py-2">
-              <AlertDescription className="text-xs">{error}</AlertDescription>
-            </Alert>
-          )}
-          {stagesWithConversation.length > 0 && (
-            <div className="flex items-end gap-2 bg-muted/30 rounded-xl p-2.5">
-              <div className="flex-1 space-y-1.5">
-                <Label htmlFor="cp-stage">{t("projectDetail.createCheckpoint.selectStage")}</Label>
-                <Select value={selectedStageId} onValueChange={setSelectedStageId}>
-                  <SelectTrigger id="cp-stage">
-                    <SelectValue placeholder={t("projectDetail.createCheckpoint.selectStagePlaceholder")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {stagesWithConversation.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {ROLE_LABEL(s.workRole, t) ?? s.workRole}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                onClick={() => void handleGenerate()}
-                disabled={generating || !selectedStageId}
-              >
-                {generating ? (
-                  <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
-                ) : (
-                  <Sparkles className="w-3.5 h-3.5 mr-1" />
-                )}
-                {generating ? t("projectDetail.createCheckpoint.generating") : t("projectDetail.createCheckpoint.regenerate")}
-              </Button>
-            </div>
-          )}
-          {generating && !generateError && (
-            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-              <Loader2 className="w-3 h-3 animate-spin" /> {t("projectDetail.createCheckpoint.generatingHint")}
-            </p>
-          )}
-          {generateError && (
-            <Alert variant="destructive" className="py-2">
-              <AlertDescription className="text-xs">{generateError}</AlertDescription>
-            </Alert>
-          )}
-          <div className="space-y-1.5">
-            <Label htmlFor="cp-title">{t("projectDetail.createCheckpoint.titleLabel")}</Label>
-            <Input
-              id="cp-title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder={t("projectDetail.createCheckpoint.titlePlaceholder")}
-            />
-          </div>
-          {(
-            [
-              ["goal"],
-              ["completedSummary"],
-              ["currentContext"],
-              ["decisions"],
-              ["failedAttempts"],
-              ["blockers"],
-              ["nextSteps"],
-              ["doNotRepeat"],
-              ["acceptanceCriteria"],
-            ] as const
-          ).map(([key]) => (
-            <div key={key} className="space-y-1.5">
-              <Label htmlFor={`cp-${key}`}>{t(`projectDetail.fields.${key}`)}</Label>
-              <Textarea
-                id={`cp-${key}`}
-                value={
-                  key === "goal" ? goal :
-                  key === "completedSummary" ? completedSummary :
-                  key === "currentContext" ? currentContext :
-                  key === "decisions" ? decisions :
-                  key === "failedAttempts" ? failedAttempts :
-                  key === "blockers" ? blockers :
-                  key === "nextSteps" ? nextSteps :
-                  key === "doNotRepeat" ? doNotRepeat :
-                  acceptanceCriteria
-                }
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (key === "goal") setGoal(v);
-                  else if (key === "completedSummary") setCompletedSummary(v);
-                  else if (key === "currentContext") setCurrentContext(v);
-                  else if (key === "decisions") setDecisions(v);
-                  else if (key === "failedAttempts") setFailedAttempts(v);
-                  else if (key === "blockers") setBlockers(v);
-                  else if (key === "nextSteps") setNextSteps(v);
-                  else if (key === "doNotRepeat") setDoNotRepeat(v);
-                  else setAcceptanceCriteria(v);
-                }}
-                placeholder={t(`projectDetail.placeholders.${key}`)}
-                rows={2}
-              />
-            </div>
-          ))}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
-            {t("common.cancel")}
-          </Button>
-          <Button onClick={() => void handleSave()} disabled={saving || !title.trim()}>
-            {saving ? t("projectDetail.createCheckpoint.saving") : t("projectDetail.createCheckpoint.create")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ============ 检查点详情对话框 ============
-
-function CheckpointDetailDialog({
-  checkpoint,
-  open,
-  onOpenChange,
-}: {
-  checkpoint: Checkpoint | null;
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-}) {
-  const { t } = useTranslation();
-  if (!checkpoint) return null;
-  const fields: Array<[string, string]> = [
-    ["goal", checkpoint.goal ?? ""],
-    ["completedSummary", checkpoint.completedSummary ?? ""],
-    ["currentContext", checkpoint.currentContext ?? ""],
-    ["decisions", checkpoint.decisions ?? ""],
-    ["failedAttempts", checkpoint.failedAttempts ?? ""],
-    ["blockers", checkpoint.blockers ?? ""],
-    ["nextSteps", checkpoint.nextSteps ?? ""],
-    ["doNotRepeat", checkpoint.doNotRepeat ?? ""],
-    ["acceptanceCriteria", checkpoint.acceptanceCriteria ?? ""],
-  ];
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto glass border-white/10 rounded-[2rem]">
-        <DialogHeader>
-          <DialogTitle className="font-black tracking-tight">{checkpoint.title}</DialogTitle>
-        </DialogHeader>
-        <div className="text-xs text-muted-foreground">{t("projectDetail.checkpointDetail.createdAt", { time: formatTime(checkpoint.createdAt) })}</div>
-        <div className="space-y-3 text-sm">
-          {fields.map(([label, value]) => (
-            <div key={label} className="space-y-1">
-              <div className="font-medium">{t(`projectDetail.fields.${label}`)}</div>
-              <div className="text-muted-foreground whitespace-pre-wrap">
-                {value || <span className="italic">{t("projectDetail.checkpointDetail.empty")}</span>}
-              </div>
-            </div>
-          ))}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ============ 生成接力包对话框 ============
-
-function GenerateHandoffDialog({
-  open,
-  onOpenChange,
-  checkpoint,
-  onCreated,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  checkpoint: Checkpoint | null;
-  onCreated: () => void;
-}) {
-  const { t } = useTranslation();
-  const [targetRole, setTargetRole] = useState<string>("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleGenerate() {
-    if (!checkpoint || !targetRole) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await dbHandoffs.generate(checkpoint.id, targetRole, t);
-      setTargetRole("");
-      onOpenChange(false);
-      onCreated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("projectDetail.generateHandoff.failed"));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="glass border-white/10 rounded-[2rem]">
-        <DialogHeader>
-          <DialogTitle className="font-black tracking-tight">{t("projectDetail.generateHandoff.title")}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 text-sm">
-          {error && (
-            <Alert variant="destructive" className="py-2">
-              <AlertDescription className="text-xs">{error}</AlertDescription>
-            </Alert>
-          )}
-          {checkpoint && (
-            <div className="text-xs text-muted-foreground">
-              {t("projectDetail.generateHandoff.sourceCheckpoint")}<span className="font-medium text-foreground">{checkpoint.title}</span>
-            </div>
-          )}
-          <div className="space-y-1.5">
-            <Label>{t("projectDetail.generateHandoff.targetRole")}</Label>
-            <Select value={targetRole} onValueChange={setTargetRole}>
-              <SelectTrigger>
-                <SelectValue placeholder={t("projectDetail.generateHandoff.targetRolePlaceholder")} />
-              </SelectTrigger>
-              <SelectContent>
-                {WORK_ROLES.map((role) => (
-                  <SelectItem key={role} value={role}>
-                    {t(`workRoles.${role}`)}（{t(`workRoles.${role}_desc`)}）
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="text-xs text-muted-foreground">
-            {t("projectDetail.generateHandoff.hint")}
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
-            {t("common.cancel")}
-          </Button>
-          <Button onClick={() => void handleGenerate()} disabled={saving || !targetRole}>
-            {saving ? t("projectDetail.generateHandoff.generating") : t("projectDetail.generateHandoff.generate")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ============ 接力包详情对话框 ============
-
-function HandoffDetailDialog({
-  packet,
-  open,
-  onOpenChange,
-}: {
-  packet: HandoffPacket | null;
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-}) {
-  const { t } = useTranslation();
-  if (!packet) return null;
-  const roleLabel = ROLE_LABEL(packet.targetRole, t) ?? packet.targetRole;
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto glass border-white/10 rounded-[2rem]">
-        <DialogHeader>
-          <DialogTitle className="font-black tracking-tight">{t("projectDetail.handoffDetail.title", { role: roleLabel })}</DialogTitle>
-        </DialogHeader>
-        <div className="text-xs text-muted-foreground">{t("projectDetail.handoffDetail.generatedAt", { time: formatTime(packet.createdAt) })}</div>
-        <pre className="bg-muted rounded-xl p-3 text-xs whitespace-pre-wrap break-words font-mono">
-          {packet.content}
-        </pre>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ============ 项目记忆对话框（v0.6 / 5.6 RAG）============
-
-function AddMemoryDialog({
-  open,
-  onOpenChange,
-  projectId,
-  onCreated,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  projectId: string;
-  onCreated: () => void;
-}) {
-  const { t } = useTranslation();
-  const [kind, setKind] = useState<"decision" | "lesson" | "context" | "preference" | "other">(
-    "decision",
-  );
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
-  const [tags, setTags] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  function reset() {
-    setKind("decision");
-    setTitle("");
-    setContent("");
-    setTags("");
-    setError(null);
-  }
-
-  async function handleSave() {
-    if (!title.trim() || !content.trim()) {
-      setError(t("projectDetail.addMemory.titleRequired"));
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    try {
-      await dbMemories.create({
-        projectId,
-        kind,
-        title: title.trim(),
-        content: content.trim(),
-        tags: tags.trim() || null,
-      });
-      reset();
-      onOpenChange(false);
-      onCreated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("projectDetail.addMemory.saveFailed"));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="glass border-white/10 rounded-[2rem]">
-        <DialogHeader>
-          <DialogTitle className="font-black tracking-tight">{t("projectDetail.addMemory.title")}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 text-sm">
-          {error && (
-            <Alert variant="destructive" className="py-2">
-              <AlertDescription className="text-xs">{error}</AlertDescription>
-            </Alert>
-          )}
-          <div className="space-y-1.5">
-            <Label>{t("projectDetail.addMemory.type")}</Label>
-            <Select value={kind} onValueChange={(v) => setKind(v as typeof kind)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(["decision", "lesson", "context", "preference", "other"] as const).map(
-                  (k) => (
-                    <SelectItem key={k} value={k}>
-                      {memoryKindLabel(k, t)}
-                    </SelectItem>
-                  ),
-                )}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="mem-title">{t("projectDetail.addMemory.titleLabel")}</Label>
-            <Input
-              id="mem-title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder={t("projectDetail.addMemory.titlePlaceholder")}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="mem-content">{t("projectDetail.addMemory.contentLabel")}</Label>
-            <Textarea
-              id="mem-content"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              rows={4}
-              placeholder={t("projectDetail.addMemory.contentPlaceholder")}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="mem-tags">{t("projectDetail.addMemory.tagsLabel")}</Label>
-            <Input
-              id="mem-tags"
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              placeholder={t("projectDetail.addMemory.tagsPlaceholder")}
-            />
-            <p className="text-xs text-muted-foreground">{t("projectDetail.addMemory.tagsHint")}</p>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
-            {t("common.cancel")}
-          </Button>
-          <Button onClick={() => void handleSave()} disabled={saving}>
-            {t("projectDetail.addMemory.save")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
 }

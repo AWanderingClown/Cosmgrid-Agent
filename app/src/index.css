@@ -1,9 +1,19 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+@font-face {
+  font-family: "Alimama Agile";
+  src: url("./assets/fonts/AlimamaAgileVF.woff2") format("woff2");
+  font-weight: 100 700;
+  font-stretch: 75% 125%;
+  font-style: normal;
+  font-display: swap;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  --font-sans: "Alimama Agile", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -32,6 +42,7 @@
   --animate-float: float 3s ease-in-out infinite;
   --animate-shimmer: shimmer 2s linear infinite;
   --animate-pulse-slow: pulse-slow 4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-chain-node-active: chain-node-active 1.55s ease-in-out infinite;
 
   @keyframes float {
     0%, 100% { transform: translateY(0); }
@@ -44,6 +55,18 @@
   @keyframes pulse-slow {
     0%, 100% { opacity: 1; filter: brightness(1); }
     50% { opacity: 0.8; filter: brightness(1.2); }
+  }
+  @keyframes chain-node-active {
+    0%, 100% {
+      transform: translateY(0) scale(1);
+      box-shadow: 0 0 0 rgba(96, 165, 250, 0), 0 0 18px rgba(96, 165, 250, 0.16);
+      filter: brightness(1);
+    }
+    50% {
+      transform: translateY(-2px) scale(1.015);
+      box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.24), 0 0 28px rgba(96, 165, 250, 0.34);
+      filter: brightness(1.18);
+    }
   }
 }
 
@@ -100,15 +123,101 @@
   * {
     @apply border-border;
   }
+  /* 高度链：html → body → #root 全部 height:100%/width:100%。
+     不用 dvh/dvw——macOS WKWebView（Tauri 用的内核）下 100dvh/100dvw 在窗口 resize 后不会重算，
+     会卡在初始视口尺寸，导致窗口变大后右下角露白。百分比高度逐级解析到视口，resize 时可靠重算。 */
+  html,
+  #root {
+    @apply h-full w-full;
+  }
   body {
-    @apply bg-background text-foreground antialiased overflow-hidden h-screen w-screen;
+    @apply bg-background text-foreground antialiased overflow-hidden h-full w-full;
+    font-family: var(--font-sans);
+    font-style: normal;
+    font-synthesis-style: none;
+    font-stretch: 100%;
+    font-variation-settings: "slnt" 0, "wdth" 100, "SRIF" 0;
     background-image:
       radial-gradient(circle at top right, oklch(0.55 0.22 260 / 0.04) 0%, transparent 40%),
       radial-gradient(circle at bottom left, oklch(0.72 0.2 45 / 0.04) 0%, transparent 40%);
   }
+  em,
+  i {
+    font-style: normal;
+  }
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
 }
 
 @layer components {
+  .app-page {
+    @apply h-full w-full overflow-y-auto bg-background/30 backdrop-blur-sm px-7 py-6;
+  }
+
+  .app-section {
+    @apply space-y-7 pb-16;
+  }
+
+  .app-page-header {
+    @apply space-y-2 border-l-4 border-primary pl-5 py-1;
+  }
+
+  .app-page-header-row {
+    @apply flex flex-col md:flex-row md:items-end justify-between gap-4;
+  }
+
+  .app-eyebrow {
+    @apply flex items-center gap-2 text-primary font-bold text-[11px] tracking-[0.14em];
+  }
+
+  .app-page-title {
+    @apply text-[32px] leading-[1.08] font-black tracking-tight dark:text-white;
+  }
+
+  .app-page-desc {
+    @apply text-[13px] leading-6 text-muted-foreground dark:text-muted-foreground/80 max-w-2xl;
+  }
+
+  .panel-card {
+    @apply bg-background/80 backdrop-blur-xl border border-white/15 dark:border-white/5 rounded-3xl px-5 py-4 shadow-lg;
+  }
+
+  .panel-title-row {
+    @apply flex items-center gap-2.5 pb-4 border-b border-white/10;
+  }
+
+  .panel-title {
+    @apply text-[16px] leading-none font-black dark:text-white;
+  }
+
+  .compact-card {
+    @apply bg-background/80 backdrop-blur-xl border border-white/10 rounded-2xl px-5 py-4 shadow-sm transition-all;
+  }
+
+  .compact-card-title {
+    @apply text-[17px] leading-tight font-black tracking-tight;
+  }
+
+  .compact-card-meta {
+    @apply text-[10px] font-bold text-muted-foreground/55 tracking-wide;
+  }
+
+  .metric-card {
+    @apply bg-background/80 backdrop-blur-xl border border-white/15 dark:border-white/5 rounded-2xl px-4 py-3 shadow-md space-y-2;
+  }
+
+  .metric-label {
+    @apply flex items-center gap-2 text-muted-foreground text-[10px] font-bold tracking-wide;
+  }
+
+  .metric-value {
+    @apply text-[21px] leading-none font-black dark:text-white tabular-nums;
+  }
+
   .glass {
     @apply bg-background/80 backdrop-blur-xl border border-white/10 dark:border-white/5;
   }
@@ -119,6 +228,10 @@
 
   .nav-item-active {
     @apply bg-primary text-primary-foreground shadow-lg shadow-primary/20 scale-[1.02];
+  }
+
+  .chain-node-active {
+    animation: chain-node-active 1.55s ease-in-out infinite;
   }
 }
 
@@ -154,8 +267,35 @@
   100% { filter: hue-rotate(360deg) saturate(1.2); }
 }
 
+/* 思考态 logo bloom 动效（见 ThinkingLogo.tsx）：每个方块绕 logo 中心点(466,459)缩放+旋转，
+   从一个点旋转展开 → 渐变描边先出、色彩慢半拍填充 → 反向缩回成一个点，循环。
+   transform-box:view-box 让 transform-origin 用 viewBox 坐标，10 块共享同一中心 → 收敛到同一个点。 */
+.cg-tile {
+  transform-box: view-box;
+  transform-origin: 466px 459px;
+  animation: cg-bloom 3.4s ease-in-out infinite;
+}
+@keyframes cg-bloom {
+  0%   { transform: scale(0) rotate(-145deg); fill-opacity: 0; stroke-opacity: 0; }
+  8%   { fill-opacity: 0; stroke-opacity: 1; }
+  34%  { transform: scale(1) rotate(0deg); fill-opacity: 0; stroke-opacity: 1; }
+  50%  { fill-opacity: 1; stroke-opacity: 1; }
+  70%  { transform: scale(1) rotate(0deg); fill-opacity: 1; stroke-opacity: 1; }
+  92%  { transform: scale(0) rotate(-145deg); fill-opacity: 0; stroke-opacity: 0.5; }
+  100% { transform: scale(0) rotate(-145deg); fill-opacity: 0; stroke-opacity: 0; }
+}
+
 .shimmer-bg {
   background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
   background-size: 200% 100%;
   animation: shimmer 3s infinite linear;
+}
+
+/* 隐藏滚动条但保留滚动能力（鼠标滚轮/触摸板 native 支持照常工作） */
+.scrollbar-none {
+  scrollbar-width: none;          /* Firefox */
+  -ms-overflow-style: none;       /* IE/Edge legacy */
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;                  /* Chrome/Safari/Tauri WebView */
 }

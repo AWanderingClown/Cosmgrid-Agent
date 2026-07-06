@@ -7,7 +7,7 @@
 
 import { z } from "zod";
 import type { ToolDefinition, ToolResult } from "./types";
-import { checkPath } from "./path-safety";
+import { checkWritePath } from "./path-safety";
 import { getFsAdapter } from "./fs-adapter";
 import { computeDiff, diffSummaryLine } from "./diff-util";
 import { requireApproval } from "./confirm";
@@ -33,7 +33,7 @@ export const writeTool: ToolDefinition<WriteParams> = {
   parameters: paramsSchema,
   readOnly: false,
   async execute(input, ctx): Promise<ToolResult> {
-    const check = checkPath(ctx.workspacePath, input.file_path);
+    const check = await checkWritePath(ctx.workspacePath, input.file_path);
     if (!check.ok) return { status: "denied", output: check.reason ?? "路径不允许" };
 
     const fs = getFsAdapter();
@@ -41,9 +41,10 @@ export const writeTool: ToolDefinition<WriteParams> = {
     const oldContent = existed ? await fs.readTextFile(check.resolved).catch(() => "") : "";
     const diff = computeDiff(oldContent, input.content);
 
+    const externalNotice = check.external ? "⚠️ 这次要写到工作区之外：" : "";
     const denied = await requireApproval(ctx, {
       toolName: "write",
-      summary: `${existed ? "覆盖" : "新建"} ${diffSummaryLine(check.resolved, diff)}`,
+      summary: `${externalNotice}${existed ? "覆盖" : "新建"} ${diffSummaryLine(check.resolved, diff)}`,
       diff: diff.patch,
     });
     if (denied) return denied;

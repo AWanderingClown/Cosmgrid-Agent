@@ -1,182 +1,445 @@
 // ChatPage - 重构为 "Cosmic Cyber" 视觉风格
-import { memo, useEffect, useRef, useState } from "react";
-import { Bot, Send, Square, User, Zap, Sparkles, Cpu, ChevronDown, PanelRight, X, Activity, Swords } from "lucide-react";
+// 阶段 7：handleSend 整套 + 流式 state + 流式计时/自动滚底/队列排空 effect 全搬到 hook C
+// ChatPage 协调层只保留 hook 组合 + handleNewChat / switchConversation / handleNodeModelChange / handleFormSubmit
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { usePanelResize, ResizeHandle } from "@/components/ui/resize-handle";
-import { cn } from "@/lib/utils";
+import { usePanelResize } from "@/components/ui/resize-handle";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { deriveChainNodeGraph } from "@/components/work-panel/derive-chain-node-graph";
+import { ensureModelLimitsLoaded } from "@/lib/llm/model-limits";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
-import { models as dbModels, apiCredentials as dbCredentials, conversations as dbConversations, messages as dbMessages } from "@/lib/db";
-import { getApiKey } from "@/lib/keystore";
-import { streamWithFallback, toModelEndpoint, type StreamUsage } from "@/lib/llm/chat-fallback";
-import { pickBestModelForRole, rankFallbackModels, scoreModelForRole } from "@/lib/llm/model-capabilities";
-import { applyOutcomeForLatest } from "@/lib/llm/outcome-tracker";
-import { isCliProviderType } from "@/lib/llm/cli-protocol";
-import { classifyMessageComplexity } from "@/lib/llm/message-router";
-import { shouldSuggestDebate } from "@/lib/llm/debate-suggester";
-import { routeMessage } from "@/lib/llm/smart-router";
-import { isSmartRoutingEnabled } from "@/lib/app-settings";
-import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
-import { compressHistory, type ChatMsg } from "@/lib/llm/context-compressor";
-import { classifyLlmError } from "@/lib/llm/error-classifier";
-import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
+import { conversations as dbConversations, messages as dbMessages, toolExecutions, type Conversation } from "@/lib/db";
+import { usePermissionModeSetting } from "@/lib/app-settings";
+import { enableWorkspaceProtection } from "@/lib/llm/tools/git-snapshot";
+import { getActiveAssistantModelLabel } from "@/pages/chat/streaming-status";
+import { parseOrchestration, pinModelToNode, serializeOrchestration } from "@/lib/llm/orchestrator";
+import { ChatTranscript } from "@/pages/chat/ChatTranscript";
+import { ChatHeader } from "@/pages/chat/ChatHeader";
+import { ChatInputDock } from "@/pages/chat/ChatInputDock";
+import { ChatWorkPanel } from "@/pages/chat/ChatWorkPanel";
+import { dbMessagesToChat } from "@/pages/chat/history";
+import { deriveToolCallsByMessage } from "@/pages/chat/tool-calls-by-message";
+import { useChatAttachments } from "@/pages/chat/useChatAttachments";
+import { useChatInput } from "@/pages/chat/useChatInput";
+import { useChatStream } from "@/pages/chat/useChatStream";
+import { useConversations } from "@/pages/chat/useConversations";
+import { useModelSelection } from "@/pages/chat/useModelSelection";
+import { useOrchestration } from "@/pages/chat/useOrchestration";
+import { useWorkPanel } from "@/pages/chat/useWorkPanel";
 
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  /** 工作面板用：这一轮实际用了哪个模型（展示名） */
-  modelLabel?: string;
-  /** 是否因限额/失败自动切到了备用模型 */
-  switched?: boolean;
-  /** 切到了哪个模型 */
-  switchedTo?: string;
-  /** 这一轮的 token 用量 */
-  usage?: { inputTokens: number; outputTokens: number };
-}
-
-type ChatUsage = StreamUsage;
-
-const MessageItem = memo(function MessageItem({
-  role,
-  text,
-  isStreaming,
-}: {
-  role: "user" | "assistant";
-  text: string;
-  isStreaming: boolean;
-}) {
-  const { t } = useTranslation();
-  const isAssistant = role === "assistant";
-
-  return (
-    <div
-      className={cn(
-        "group flex gap-4 px-6 py-8 transition-colors duration-500",
-        isAssistant ? "bg-primary/5 border-y border-primary/5" : "bg-transparent",
-        "animate-in fade-in slide-in-from-bottom-2 duration-700"
-      )}
-    >
-      <div className="flex max-w-4xl mx-auto w-full gap-5">
-        <div
-          className={cn(
-            "w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 shadow-lg transition-transform group-hover:scale-110 duration-300",
-            !isAssistant
-              ? "bg-gradient-to-br from-primary to-blue-600 text-primary-foreground rotate-[-6deg]"
-              : "bg-white dark:bg-zinc-800 rotate-[6deg] border border-primary/10 overflow-hidden",
-          )}
-        >
-          {!isAssistant ? (
-            <User className="w-5 h-5" />
-          ) : (
-            <img src={cosmgridLogo} className={cn("w-7 h-7", isStreaming && "animate-pulse-slow")} alt="Bot" />
-          )}
-        </div>
-        <div className="flex-1 space-y-2 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">
-              {isAssistant ? t("chat.assistantLabel") : t("chat.userLabel")}
-            </span>
-          </div>
-          <div
-            className={cn(
-              "text-sm leading-relaxed whitespace-pre-wrap break-words",
-              !isAssistant ? "text-foreground font-medium" : "text-foreground/90",
-            )}
-          >
-            {text}
-            {isStreaming && isAssistant && (
-              <span className="inline-block w-2 h-5 ml-1 bg-primary/40 animate-pulse rounded-sm align-middle" />
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-});
-
+// 工具权限三档（read/confirm/auto）：持久化在 app-settings 的 localStorage，
+// 用户的习惯跨会话保留，重启也不被重置回只读。PermissionMode 类型从 app-settings 导出，
+// 见 @/lib/app-settings（hook 也从那里导入）
 interface ChatPageProps {
-  /** 用户在输入框写下"多方案权衡"类问题时，点"开对弈"会带着这条话题跳到对弈页 */
-  onOpenDebate?: (topic: string) => void;
+  /** 当前是否停留在聊天页（所有页面常驻挂载，靠这个判断"切回来了"以刷新模型列表） */
+  active?: boolean;
 }
 
-export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
+export function ChatPage({ active = true }: ChatPageProps = {}) {
   const { t } = useTranslation();
+  const { confirm, alert } = useConfirm();
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversationList, setConversationList] = useState<Conversation[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [permissionMode, setPermissionMode] = usePermissionModeSetting();
+  // isStreaming 提到 ChatPage 顶层共享（hook C 持有逻辑 + hook E 守卫需要读 + 协调器用）
+  const [isStreaming, setIsStreaming] = useState(false);
+  // 阶段 7：selectedModelId/availableModels/credentials 提到 ChatPage 顶层 useState
+  // hook B 改用 props setter 写、hook C 用 getter 读——避免 hook B/C 循环依赖
+  const [selectedModelId, setSelectedModelId] = useState<string>("");
   const [availableModels, setAvailableModels] = useState<ModelListItem[]>([]);
   const [credentials, setCredentials] = useState<CredentialListItem[]>([]);
-  const [selectedModelId, setSelectedModelId] = useState<string>("");
-  const [conversationId, setConversationId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [streamError, setStreamError] = useState<string | null>(null);
-  const [switchNotice, setSwitchNotice] = useState<string | null>(null);
-  const [cacheNotice, setCacheNotice] = useState<string | null>(null);
-  const [lastUsage, setLastUsage] = useState<ChatUsage | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [showDebateHint, setShowDebateHint] = useState(false);
+
+  // hook A：会话管理（持 conversationId/conversationList/conversationIdRef）
+  const {
+    conversationId: _conversationId,
+    conversationIdRef: _conversationIdRef,
+    setConversationId: _setConversationId,
+  } = useConversations();
+  // 显式抑制 lint：conversationIdRef 保留以备 hook D / 协调层未来用
+  void _conversationIdRef;
+  void _setConversationId;
   const workPanel = usePanelResize({ initial: 320, min: 240, max: 560, edge: "left" });
 
-  const abortRef = useRef<AbortController | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const pendingRoutingDecisionRef = useRef<{
+    prompt: string;
+    baselineModelId: string;
+    baselineModelName: string;
+    baselineProviderType?: string | null;
+    actualModelId: string;
+  } | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // 自动滚动到底部
+  // hook F：输入 + 滚动机制（scrollRef/inputAreaRef/inputAreaH/stickToBottomRef/
+  // showJumpToBottom + scrollToBottom + ResizeObserver + 滚动监听 effect）
+  // messages 变化触发的自动滚底 effect 留在协调层（归 hook C 流式，本阶段不搬）
+  const {
+    scrollRef,
+    inputAreaRef,
+    inputAreaH,
+    stickToBottomRef,
+    showJumpToBottom,
+    scrollToBottom,
+  } = useChatInput();
+
+  // hook D：编排 + 对弈链 + 工作流快照（useReducer 重构）
+  // 必须在 hook B 之前调用——hook B 依赖 orchestrationRef + applyOrchestration
+  const {
+    orchestration,
+    chainExecutedRoles,
+    chainSkippedRoles,
+    chainAbortedRole,
+    chainRunning,
+    workflowSnapshot,
+    setChainExecutedRoles,
+    setChainSkippedRoles,
+    setChainAbortedRole,
+    setChainRunning,
+    orchestrationRef,
+    workflowSnapshotRef,
+    chainAbortRef,
+    applyOrchestration,
+    applyWorkflowSnapshot,
+    loadWorkflowForConversation,
+  } = useOrchestration({ conversationId });
+
+  // hook B：模型选择——移到 hook C 之后（hook B 依赖 hook C 的 messages + setSwitchNotice）
+
+  // Harness 闭环 + 流式计时 + 自动滚底 effect —— 已搬到 hook C 流式
+
+  function pickConversationModelId(
+    conv: Conversation | null | undefined,
+    models: ModelListItem[],
+    fallbackId: string,
+  ): string {
+    const preferredId = conv?.defaultModelId ?? null;
+    if (preferredId && models.some((m) => m.id === preferredId)) return preferredId;
+    if (fallbackId && models.some((m) => m.id === fallbackId)) return fallbackId;
+    return models[0]?.id ?? "";
+  }
+
+  // 进页面就预热 models.dev 输出上限表，让首条消息也能按模型真实上限精确给预算
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages]);
+    void ensureModelLimitsLoaded();
+  }, []);
 
+  // 挂载 effect：拉首条历史会话 + 恢复 artifacts + 编排快照。移到 hook B 之后（需要 hook B 暴露的函数 + hook C 的 setter + hook D 的函数）
+
+  // hook E：右侧工作面板（workspace + 工具确认流 + artifacts/toolCallViews/panelOpen）
+  const {
+    panelOpen,
+    workspacePath,
+    protectedWorkspaces,
+    artifacts,
+    toolCallViews,
+    pendingConfirm,
+    pendingQuestion,
+    setPanelOpen,
+    setWorkspacePath,
+    setProtectedWorkspaces,
+    applyToolExecutionRows,
+    clearToolExecutionViews,
+    requestAskUser,
+    requestConfirm,
+    resolveAskUser,
+    resolveConfirm,
+    bindWorkspace,
+    chooseWorkspace,
+    clearWorkspace,
+  } = useWorkPanel({
+    conversationId,
+    // 改会话工作文件夹时同步 conversationList（不写库，hook E 内部写）
+    onConversationWorkspaceChanged: (path) => {
+      setConversationList((prev) =>
+        prev.map((c) => (c.id === conversationId ? { ...c, workspacePath: path } : c)),
+      );
+    },
+    isStreaming,
+    t,
+  });
+
+  // hook D：编排 + 对弈链 + 工作流快照（useReducer 重构）已上移到 hook F 之后
+
+  // 2026-07-04 加：检测到写意图但当前只读时，主动弹窗问要不要切到「确认后修改」，
+  // 而不是只插一条文字提示等用户自己去找权限切换按钮。同一会话只弹一次（useChatStream 内控制）。
+  const escalatePermission = useCallback(async () => {
+    const ok = await confirm({
+      title: t("chat.permissionEscalation.title"),
+      description: t("chat.permissionEscalation.description"),
+      confirmText: t("chat.permissionEscalation.confirmText"),
+      cancelText: t("chat.permissionEscalation.cancelText"),
+    });
+    if (ok) setPermissionMode("confirm");
+    return ok;
+  }, [confirm, setPermissionMode, t]);
+
+  // hook C：流式主循环 + 队列 + handleSend 整套（5 段 helper + runBackgroundOrchestration
+  // + runChainIfNeeded + handleStop + 流式计时 + 自动滚底 + 队列排空 effect）
+  const {
+    messages,
+    setMessages,
+    streamElapsedMs,
+    pendingQueue,
+    setPendingQueue,
+    streamError,
+    setStreamError,
+    switchNotice,
+    setSwitchNotice,
+    cacheNotice,
+    setCacheNotice,
+    harnessNotice,
+    debateParticipants,
+    lastUsage,
+    handleStop,
+  } = useChatStream({
+    conversationId,
+    conversationList,
+    getSelectedModelId: () => selectedModelId,
+    setSelectedModelId,
+    getAvailableModels: () => availableModels,
+    getCredentials: () => credentials,
+    workspacePath,
+    setWorkspacePath,
+    permissionMode,
+    escalatePermission,
+    setPanelOpen,
+    isStreaming,
+    setIsStreaming,
+    handleNodeModelChange,
+    orchestrationRef,
+    workflowSnapshotRef,
+    applyOrchestration,
+    applyWorkflowSnapshot,
+    setChainExecutedRoles,
+    setChainSkippedRoles,
+    setChainAbortedRole,
+    setChainRunning,
+    chainAbortRef,
+    applyToolExecutionRows,
+    requestConfirm,
+    requestAskUser,
+    scrollRef,
+    stickToBottomRef,
+    pendingRoutingDecisionRef,
+    t,
+  });
+
+  // hook B：模型选择（在 hook C 之后——hook B 依赖 hook C 的 messages + setSwitchNotice）
+  const {
+    handleModelChange,
+    handleSmartPick,
+    loadModelsAndCreds,
+  } = useModelSelection({
+    conversationId,
+    orchestrationRef,
+    inputRef,
+    pendingRoutingDecisionRef,
+    active,
+    messages,
+    selectedModelId,
+    setSelectedModelId,
+    availableModels,
+    setAvailableModels,
+    credentials,
+    setCredentials,
+    applyOrchestration,
+    setSwitchNotice,
+    // 用户手动切模型时同步会话默认模型到 conversationList + 写库
+    onConversationDefaultModelChanged: (newId) => {
+      setConversationList((prev) =>
+        prev.map((c) => (c.id === conversationId ? { ...c, defaultModelId: newId } : c)),
+      );
+      if (conversationId) void dbConversations.setDefaultModelId(conversationId, newId).catch(() => {});
+    },
+    alert,
+    t,
+  });
+
+  const {
+    draftAttachments,
+    handlePaste,
+    removeAttachment,
+    setDraftAttachments,
+  } = useChatAttachments({ t, bindWorkspace, setStreamError });
+
+  async function handleNewChat() {
+    // 修复（2026-07-03，用户反馈"点新建对话没反应"）：这里原来是 isStreaming 时直接
+    // return，如果 isStreaming 因为任何原因卡在 true（比如底层 provider 卡死不理
+    // AbortSignal，或者本轮还没走到统一安全网 finally），用户会永远点不动"新建对话"，
+    // 且没有任何提示——跟 handleStop（停止键）"权威停止：不管底层卡没卡死，直接把 UI
+    // 拉回空闲态"是同一个思路：新建对话本身就是"我要放弃当前这轮，另起一个"的明确意图，
+    // 应该强制中断当前流，而不是被它卡住拒绝响应。
+    if (isStreaming) handleStop();
+    try {
+      const conv = await dbConversations.create({ title: t("chat.untitledChat"), defaultModelId: selectedModelId || null, projectId: null });
+      setConversationList((prev) => [conv, ...prev]);
+      setConversationId(conv.id);
+      setWorkspacePath(null);
+      setSelectedModelId(pickConversationModelId(conv, availableModels, selectedModelId));
+      setMessages([]);
+      clearToolExecutionViews();
+      applyOrchestration(null);
+      applyWorkflowSnapshot(null);
+      setPendingQueue([]);
+      setStreamError(null);
+      setSwitchNotice(null);
+      setCacheNotice(null);
+    } catch (err) {
+      console.error("[handleNewChat] failed to create conversation", err);
+      setStreamError(t("chat.newChatFailed"));
+    }
+  }
+
+  async function switchConversation(id: string) {
+    if (id === conversationId) return;
+    // 修复（2026-07-03）：同 handleNewChat——切换对话也是"放弃当前这轮"的明确意图，
+    // isStreaming 卡住时应该强制停止而不是拒绝响应。
+    if (isStreaming) handleStop();
+    const nextConv = conversationList.find((c) => c.id === id) ?? null;
+    setConversationId(id);
+    setWorkspacePath(nextConv?.workspacePath ?? null);
+    setSelectedModelId((prev) => pickConversationModelId(nextConv, availableModels, prev));
+    setPendingQueue([]);
+    setStreamError(null);
+    setSwitchNotice(null);
+    setCacheNotice(null);
+    try {
+      const hist = await dbMessages.listByConversation(id);
+      setMessages(dbMessagesToChat(hist, availableModels));
+    } catch {
+      setMessages([]);
+    }
+    // 加载该会话的历史工具执行 → 派生工件（切回旧会话能看到之前的产出物）
+    try {
+      applyToolExecutionRows(await toolExecutions.listByConversation(id));
+    } catch {
+      clearToolExecutionViews();
+    }
+    try {
+      applyOrchestration(parseOrchestration(await dbConversations.getOrchestration(id)));
+    } catch {
+      applyOrchestration(null);
+    }
+    await loadWorkflowForConversation(id);
+  }
+
+  async function handleDeleteConversation(id: string) {
+    if (isStreaming) return;
+    if (!(await confirm({ description: t("chat.deleteConvConfirm"), destructive: true }))) return;
+    try {
+      await dbConversations.archive(id);
+    } catch (err) {
+      // 修复（2026-07-04，用户反馈"删了、重装后又出现"）：这里原来是 catch 后什么都不做、
+      // 照样把这条从 UI 列表移除——库里archive失败时 UI 却谎报"删掉了"，下次启动重新从库
+      // 读取列表，这条又出现，看起来像"诈尸"。现在库操作失败就如实告知，且不碰 UI 列表，
+      // 保证"看起来还在列表里" == "库里真的还在"，不会再有状态不一致。
+      console.error("[handleDeleteConversation] failed to archive conversation", err);
+      void alert({ description: t("chat.deleteConvFailed") });
+      return;
+    }
+    const remaining = conversationList.filter((c) => c.id !== id);
+    if (remaining.length === 0) {
+      const conv = await dbConversations.create({ title: t("chat.untitledChat"), defaultModelId: selectedModelId || null, projectId: null });
+      setConversationList([conv]);
+      setConversationId(conv.id);
+      setWorkspacePath(null);
+      setSelectedModelId(pickConversationModelId(conv, availableModels, selectedModelId));
+      setMessages([]);
+      clearToolExecutionViews();
+      applyOrchestration(null);
+      applyWorkflowSnapshot(null);
+      return;
+    }
+    setConversationList(remaining);
+    if (id === conversationId) {
+      const next = remaining[0]!;
+      setConversationId(next.id);
+      setWorkspacePath(next.workspacePath);
+      setSelectedModelId((prev) => pickConversationModelId(next, availableModels, prev));
+      try {
+        const hist = await dbMessages.listByConversation(next.id);
+        setMessages(dbMessagesToChat(hist, availableModels));
+      } catch {
+        setMessages([]);
+      }
+      try {
+        applyToolExecutionRows(await toolExecutions.listByConversation(next.id));
+      } catch {
+        clearToolExecutionViews();
+      }
+      try {
+        applyOrchestration(parseOrchestration(await dbConversations.getOrchestration(next.id)));
+      } catch {
+        applyOrchestration(null);
+      }
+      await loadWorkflowForConversation(next.id);
+    }
+  }
+
+  async function handleRenameConversation(id: string, title: string) {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    // 先乐观更新 UI，再落库（落库失败不回滚，下次加载以库为准）
+    setConversationList((prev) => prev.map((c) => (c.id === id ? { ...c, title: trimmed } : c)));
+    try {
+      await dbConversations.rename(id, trimmed);
+    } catch {
+      // 改名落库失败不阻断
+    }
+  }
+
+  // handleSend 拆 5 段（阶段 6 拆分）：主体只做协调 + 通用初始化；具体逻辑在 5 个 helper 内。
+  // 共享变量通过闭包共享——5 个 helper 都定义在 handleSend 内部，直接访问 model/controller/convId 等。
+  // 阶段 7：handleSend + 5 段 helper + runBackgroundOrchestration + runChainIfNeeded + handleStop
+  // + 流式计时/自动滚底 effect + 队列排空 effect + handleSendRef 全部搬到 hook C
+  // （useChatStream.ts），这里保留协调层（handleNewChat/switchConversation/handleNodeModelChange/handleFormSubmit）
+
+
+
+  // 从节点地图给「任意节点」（含还没轮到的）主动指定模型：钉住该节点，编排后续不自动覆盖。
+  // 不走 switched_up——这是用户对某节点的明确指派，不是"嫌弃当前回答"。
+  function handleNodeModelChange(nodeId: string, modelId: string) {
+    const state = orchestrationRef.current;
+    if (!state) return;
+    const updated = pinModelToNode(state, nodeId, modelId);
+    applyOrchestration(updated);
+    if (conversationId) void dbConversations.saveOrchestration(conversationId, serializeOrchestration(updated)).catch(() => {});
+    // 改的是当前节点 → 顶部选择器也跟上，下一轮就用它
+    if (nodeId === state.currentNodeId) setSelectedModelId(modelId);
+  }
+
+  // 挂载 effect：拉首条历史会话 + 恢复 artifacts + 编排快照（hook B + C + D 都已就绪）
   useEffect(() => {
     void (async () => {
       try {
-        const [modelsRes, credsRes] = await Promise.all([
-          dbModels.listEnabled(),
-          dbCredentials.list(),
-        ]);
-        const ml = modelsRes.map((m) => ({
-          id: m.id,
-          name: m.name,
-          displayName: m.displayName,
-          contextWindow: m.contextWindow,
-          enabled: m.enabled,
-          workRoles: m.workRoles,
-          capabilityScore: m.capabilityScore,
-          providerId: m.providerId,
-          provider: m.provider,
-        }));
-        const cl = credsRes.map((c) => ({
-          id: c.id,
-          name: c.name,
-          baseUrl: c.baseUrl,
-          enabled: c.enabled,
-          providerId: c.providerId,
-          provider: c.provider ?? { name: "", type: "" },
-          defaultModelId: c.defaultModelId,
-        }));
-        setAvailableModels(ml);
-        setCredentials(cl);
-        if (ml.length > 0) setSelectedModelId(ml[0]!.id);
+        const ml = await loadModelsAndCreds();
 
-        // 主对话持久化：恢复上次会话历史（关 app 不丢上下文）
-        const conv = await dbConversations.getOrCreateMainChat(ml[0]?.id ?? null);
-        setConversationId(conv.id);
-        const hist = await dbMessages.listByConversation(conv.id);
-        if (hist.length > 0) {
-          setMessages(
-            hist
-              .filter((m) => m.role === "user" || m.role === "assistant")
-              .map((m) => ({
-                id: m.id,
-                role: m.role as "user" | "assistant",
-                content: m.content,
-                modelLabel: (m.modelId ? ml.find((x) => x.id === m.modelId)?.displayName : undefined) ?? undefined,
-                usage: m.outputTokens > 0 ? { inputTokens: m.inputTokens, outputTokens: m.outputTokens } : undefined,
-              })),
-          );
+        // 主对话多会话：列出全部主对话，没有就建一条，恢复最近一条的历史（关 app 不丢上下文）
+        let list = await dbConversations.listMainChats();
+        if (list.length === 0) {
+          await dbConversations.getOrCreateMainChat(ml[0]?.id ?? null, t("chat.untitledChat"));
+          list = await dbConversations.listMainChats();
         }
+        setConversationList(list);
+        const activeConv = list[0]!;
+        setConversationId(activeConv.id);
+        setWorkspacePath(activeConv.workspacePath);
+        setSelectedModelId(pickConversationModelId(activeConv, ml, activeConv.defaultModelId ?? ""));
+        const hist = await dbMessages.listByConversation(activeConv.id);
+        setMessages(dbMessagesToChat(hist, ml));
+        try {
+          applyToolExecutionRows(await toolExecutions.listByConversation(activeConv.id));
+        } catch {
+          clearToolExecutionViews();
+        }
+        try {
+          applyOrchestration(parseOrchestration(await dbConversations.getOrchestration(activeConv.id)));
+        } catch {
+          applyOrchestration(null);
+        }
+        await loadWorkflowForConversation(activeConv.id);
         setLoadError(null);
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : t("chat.loadError"));
@@ -184,226 +447,75 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
     })();
   }, []);
 
-  async function handleSend(text: string) {
-    const model = availableModels.find((m) => m.id === selectedModelId);
-    if (!model || isStreaming) return;
-
-    // v0.9 阶段7：这一回合是否启用 v2（查缓存/压缩/写缓存）——入口读一次，全程一致
-    const smart = isSmartRoutingEnabled();
-
-    const cred = credentials.find((c) => c.providerId === model.providerId);
-    if (!cred) {
-      setStreamError(t("chat.noCredential"));
-      return;
-    }
-
-    // CLI 引擎走本机订阅登录态，没有 API Key；API 直连才需要取 Key
-    const primaryIsCli = isCliProviderType(model.provider?.type ?? "");
-    const apiKey = primaryIsCli ? "" : ((await getApiKey(cred.id)) ?? "");
-    if (!primaryIsCli && !apiKey) {
-      setStreamError(t("chat.noApiKey"));
-      return;
-    }
-
-    // 主对话落库：确保会话存在，用户消息先写库（关 app/崩溃也不丢）
-    let convId = conversationId;
-    if (!convId) {
-      try {
-        const c = await dbConversations.getOrCreateMainChat(model.id);
-        convId = c.id;
-        setConversationId(convId);
-      } catch {
-        // 落库不可用时降级为纯内存，不阻断对话
-      }
-    }
-    let userId: string = crypto.randomUUID();
-    if (convId) {
-      try {
-        userId = (await dbMessages.create({ conversationId: convId, role: "user", content: text })).id;
-      } catch {
-        // 写库失败降级用内存 id，不阻断
-      }
-    }
-
-    // 把助手最终/部分回答落库（成功、缓存命中、停止、中断都不丢）
-    const persistAssistant = (content: string, modelId: string | null, usage?: { inputTokens: number; outputTokens: number }) => {
-      if (!convId || !content) return;
-      void dbMessages
-        .create({ conversationId: convId, role: "assistant", content, modelId, inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0 })
-        .catch(() => {});
-    };
-
-    const userMsg: ChatMessage = { id: userId, role: "user", content: text };
-    const assistantId = crypto.randomUUID();
-    const assistantMsg: ChatMessage = { id: assistantId, role: "assistant", content: "", modelLabel: model.displayName ?? model.name };
-
-    const newMessages = [...messages, userMsg];
-    setMessages([...newMessages, assistantMsg]);
-    setIsStreaming(true);
-    setStreamError(null);
-    setSwitchNotice(null);
-    setCacheNotice(null);
-
-    const taskRole = classifyMessageComplexity(text);
-
-    // v0.9 阶段7：智能路由开启时先查语义缓存——命中则秒回、0 成本、跳过 LLM
-    if (smart) {
-      try {
-        const hit = await lookupCache(text);
-        if (hit) {
-          const days = Math.max(0, Math.floor(hit.ageMs / 86_400_000));
-          setMessages((prev) =>
-            prev.map((m) => (m.id === assistantId ? { ...m, content: hit.responseText } : m)),
-          );
-          persistAssistant(hit.responseText, model.id);
-          setCacheNotice(t("chat.cacheHit", { days }));
-          setIsStreaming(false);
-          return;
-        }
-      } catch {
-        // 缓存查询失败不影响主流程，继续正常调模型
-      }
-    }
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    let primary;
-    try {
-      primary = toModelEndpoint(model, cred, apiKey);
-    } catch (err) {
-      setStreamError(err instanceof Error ? err.message : t("chat.constructError"));
-      setIsStreaming(false);
-      return;
-    }
-
-    // 构造回退链：主模型在前，其余已启用模型按「主对话」能力分 + 优先换厂排序接在后面
-    // （排序规则见 rankFallbackModels，已带单测）。streamWithFallback 会把同一份对话历史
-    // 带给下一个模型，所以限额自动换不丢上下文。
-    const chain = [primary];
-    for (const cand of rankFallbackModels(model, availableModels, "main_chat")) {
-      const fbCred = credentials.find((c) => c.providerId === cand.providerId);
-      if (!fbCred) continue;
-      // CLI 备用模型无 Key；API 备用模型缺 Key 则跳过
-      const fbIsCli = isCliProviderType(cand.provider?.type ?? "");
-      let fbKey = "";
-      if (!fbIsCli) {
-        const k = await getApiKey(fbCred.id);
-        if (!k) continue;
-        fbKey = k;
-      }
-      try {
-        chain.push(toModelEndpoint(cand, fbCred, fbKey));
-      } catch {
-        // 备用模型缺 provider 类型等 → 跳过它，不影响主流程
-      }
-    }
-
-    // v0.9 阶段7：智能路由开启时，超长历史先抽取式裁剪省 token（system 与最近消息保留）
-    let outgoing: ChatMsg[] = newMessages.map((m) => ({ role: m.role, content: m.content }));
-    if (smart) {
-      outgoing = compressHistory(outgoing, {
-        noticeText: (n) => t("chat.contextTrimmed", { count: n }),
-      }).messages;
-    }
-
-    let fullContent = "";
-    try {
-      const result = await streamWithFallback(
-        chain,
-        outgoing,
-        {
-          onDelta: (delta) => {
-            fullContent += delta;
-            setMessages((prev) =>
-              prev.map((m) => (m.id === assistantId ? { ...m, content: fullContent } : m))
-            );
-          },
-          onSwitched: (_from, to) => {
-            const label = to.displayLabel ?? to.modelName;
-            setSwitchNotice(t("chat.switchedTo", { name: label }));
-            setMessages((prev) =>
-              prev.map((m) => (m.id === assistantId ? { ...m, switched: true, switchedTo: label, modelLabel: label } : m)),
-            );
-          },
-          onUsage: (usage, usedModel) => {
-            const u = { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens };
-            setLastUsage(u);
-            setMessages((prev) =>
-              prev.map((m) => (m.id === assistantId ? { ...m, usage: u, modelLabel: usedModel.displayLabel ?? usedModel.modelName } : m)),
-            );
-            persistAssistant(fullContent, usedModel.modelId ?? null, u);
-          },
-        },
-        // role = 这条消息的难度桶，落 UsageEvent 供 v0.9 SmartRouter 按 taskType 滚动统计
-        { signal: controller.signal, role: taskRole },
-      );
-      // v0.9 阶段7：成功回答写入语义缓存（isCacheable 内部会过滤时间敏感/代码答案）
-      if (smart && fullContent && !controller.signal.aborted) {
-        void writeCache(text, fullContent, result.usedModelId, taskRole).catch(() => {});
-      }
-    } catch (err) {
-      // 不丢已经流式出来的半个回答（停止/中断都保留并落库）
-      persistAssistant(fullContent, model.id);
-      if ((err as Error).name === "AbortError") return;
-      setStreamError(classifyLlmError(err, t).userMessage);
-      // 不再删用户消息（已落库）；只移除「空的」助手占位，保留有内容的半个回答
-      setMessages((prev) => prev.filter((m) => m.id !== assistantId || m.content !== ""));
-    } finally {
-      setIsStreaming(false);
-      abortRef.current = null;
-    }
-  }
-
-  function handleStop() { abortRef.current?.abort(); }
-
-  // 隐式信号采集（改进-1 Step B）：用户在已有对话里手动换到能力分更高的模型，
-  // 说明上一个模型这次没让他满意（路由派轻了）→ 给上个模型记一条 switched_up 负反馈，喂回评分。
-  function handleModelChange(newId: string) {
-    const oldId = selectedModelId;
-    setSelectedModelId(newId);
-    if (!oldId || oldId === newId || messages.length === 0) return;
-    const oldM = availableModels.find((m) => m.id === oldId);
-    const newM = availableModels.find((m) => m.id === newId);
-    if (oldM && newM && scoreModelForRole(newM, "main_chat") > scoreModelForRole(oldM, "main_chat")) {
-      void applyOutcomeForLatest(oldId, "switched_up");
-    }
-  }
-
-  async function handleSmartPick() {
-    if (availableModels.length === 0) return;
-    const text = inputRef.current?.value.trim() ?? "";
-
-    // 智能路由开启 + 有输入：用 SmartRouter 按真实表现评分选模型，并展示决策理由
-    if (isSmartRoutingEnabled() && text) {
-      try {
-        const routed = await routeMessage(text, availableModels);
-        if (routed) {
-          setSelectedModelId(routed.model.id);
-          setSwitchNotice(routed.decisionLog.reasons[0] ?? null);
-          return;
-        }
-      } catch {
-        // 路由失败回落 v1
-      }
-    }
-
-    // 兜底：v1 规则按角色挑能力分最高
-    const best = pickBestModelForRole("main_chat", availableModels);
-    if (best) setSelectedModelId(best.id);
-  }
-
   function handleFormSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const text = String(formData.get("input") ?? "").trim();
-    if (!text || isStreaming) return;
-    void handleSend(text);
+    const atts = draftAttachments;
+    // 纯空不允许；但只拖图无文字也允许发
+    if (!text && atts.length === 0) return;
+    // 一律入队，由 drain effect 串行处理：空闲时立刻发，回复中则排队，回完自动接着发。
+    setPendingQueue((q) => [...q, { text, ...(atts.length ? { attachments: atts } : {}) }]);
+    setDraftAttachments([]);
     (e.currentTarget as HTMLFormElement).reset();
-    setShowDebateHint(false);
+    // form.reset() 只清 value，不清 onChange 里手动写的内联 height——
+    // 不重置的话，发送后输入框还会保持发送前撑开的高度，视觉上很奇怪。
+    if (inputRef.current) inputRef.current.style.height = "auto";
   }
 
   const selectedModel = availableModels.find(m => m.id === selectedModelId);
+  const activeModelLabel = getActiveAssistantModelLabel(
+    messages,
+    selectedModel?.displayName ?? selectedModel?.name ?? "—",
+  );
+  const latestToolCalls = toolCallViews.slice(-8);
+  const activeToolCall = pendingConfirm
+    ? {
+        id: "pending-confirm",
+        toolName: pendingConfirm.toolName,
+        status: "awaiting_approval" as const,
+        shortSummary: pendingConfirm.summary,
+        summaryKey: "unknown",
+        summaryVars: { tool: pendingConfirm.toolName },
+        detailPreview: "",
+        detailFull: "",
+        createdAt: new Date().toISOString(),
+        durationMs: 0,
+        messageId: null,
+      }
+    : latestToolCalls[latestToolCalls.length - 1];
+
+  // 把工具动作归属到对应那一轮的 assistant 消息（详细原理见 tool-calls-by-message.ts 头部注释：
+  // 2026-07-04 修复，优先按真实 messageId 精确归属，只有历史遗留行才退回时间戳窗口兜底）。
+  const toolCallsByMessage = useMemo(
+    () => deriveToolCallsByMessage(messages, toolCallViews),
+    [messages, toolCallViews],
+  );
+
+  const chainNodeGraph = useMemo(() => deriveChainNodeGraph({
+    orchestration,
+    workflowSnapshot,
+    selectedModelId,
+    selectedModelName: selectedModel?.displayName ?? selectedModel?.name ?? selectedModelId,
+    availableModels,
+    chainRunning,
+    chainExecutedRoles,
+    chainSkippedRoles,
+    chainAbortedRole,
+    debateParticipants,
+  }), [
+    orchestration,
+    selectedModelId,
+    selectedModel?.displayName,
+    selectedModel?.name,
+    workflowSnapshot,
+    availableModels,
+    chainRunning,
+    chainExecutedRoles,
+    chainSkippedRoles,
+    debateParticipants,
+    chainAbortedRole,
+  ]);
 
   if (loadError) {
     return (
@@ -416,273 +528,107 @@ export function ChatPage({ onOpenDebate }: ChatPageProps = {}) {
   }
 
   return (
-    <div className="flex h-full">
-      <div className="relative flex flex-col h-full flex-1 min-w-0 bg-background/30 backdrop-blur-sm">
-      {/* 顶部控制栏 - Premium Glass Effect */}
-      <header className="px-6 py-4 flex items-center justify-between border-b border-white/10 glass z-10">
-        <div className="flex items-center gap-4">
-          <div className="relative group">
-            <div className="absolute -inset-1 bg-gradient-to-r from-primary to-accent rounded-xl blur opacity-25 group-hover:opacity-50 transition duration-1000 group-hover:duration-200"></div>
-            <div className="relative flex items-center gap-2 px-3 py-1.5 bg-background border border-white/10 rounded-xl cursor-pointer">
-              <Cpu className="w-4 h-4 text-primary" />
-              <select
-                value={selectedModelId}
-                onChange={(e) => handleModelChange(e.target.value)}
-                className="text-xs font-bold appearance-none bg-transparent focus:outline-none pr-6 cursor-pointer"
-              >
-                {availableModels.map((m) => (
-                  <option key={m.id} value={m.id} className="bg-background text-foreground">
-                    {m.displayName ?? m.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="absolute right-2 w-3 h-3 text-muted-foreground pointer-events-none" />
-            </div>
-          </div>
-
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() => void handleSmartPick()}
-            className="h-9 px-3 text-xs font-medium hover:bg-primary/10 hover:text-primary transition-all rounded-xl gap-2"
-          >
-            <div className="p-1 bg-primary/10 rounded-lg group-hover:scale-110 transition-transform">
-              <Sparkles className="w-3.5 h-3.5 text-primary" />
-            </div>
-            {t("chat.smartPick")}
-          </Button>
-        </div>
-
-        <div className="flex items-center gap-4">
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            onClick={() => setPanelOpen((v) => !v)}
-            title={t("chat.workPanel.title")}
-            className={cn("h-9 w-9 rounded-xl", panelOpen ? "bg-primary/10 text-primary" : "hover:bg-white/10")}
-          >
-            <PanelRight className="w-4 h-4" />
-          </Button>
-          {lastUsage && (
-            <div className="hidden md:flex items-center gap-3 px-3 py-1 bg-muted/30 rounded-full border border-white/5">
-              <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-tighter">{t("chat.usage")}</span>
-              <div className="flex gap-2">
-                <span className="text-[10px] font-mono text-blue-400">{t("chat.inputTokens", { count: lastUsage.inputTokens })}</span>
-                <span className="text-[10px] font-mono text-orange-400">{t("chat.outputTokens", { count: lastUsage.outputTokens })}</span>
-              </div>
-            </div>
-          )}
-          {switchNotice && (
-            <div className="flex items-center gap-2 px-3 py-1 bg-amber-500/10 text-amber-500 rounded-full border border-amber-500/20 animate-pulse">
-              <Zap className="w-3 h-3" />
-              <span className="text-[10px] font-bold uppercase">{switchNotice}</span>
-            </div>
-          )}
-          {cacheNotice && (
-            <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 text-emerald-500 rounded-full border border-emerald-500/20">
-              <Sparkles className="w-3 h-3" />
-              <span className="text-[10px] font-bold uppercase">{cacheNotice}</span>
-            </div>
-          )}
-        </div>
-      </header>
+    <div className="flex h-full w-full">
+      <div className="relative flex flex-col h-full flex-1 min-w-0 rounded-3xl overflow-hidden glass">
+      {/* 写操作确认：只做审批，不展示工作内容；详情放右侧工作面板。
+          UI 修复（2026-07-02）：从独立悬浮卡片改成贴着输入框的小提示条，渲染挪到 ChatInputDock 内部。 */}
+      <ChatHeader
+        conversations={conversationList}
+        conversationId={conversationId}
+        selectedModelId={selectedModelId}
+        availableModels={availableModels}
+        panelOpen={panelOpen}
+        lastUsage={lastUsage}
+        switchNotice={switchNotice}
+        cacheNotice={cacheNotice}
+        harnessNotice={harnessNotice}
+        onSwitchConversation={(id) => void switchConversation(id)}
+        onNewChat={() => void handleNewChat()}
+        onDeleteConversation={(id) => void handleDeleteConversation(id)}
+        onRenameConversation={(id, title) => void handleRenameConversation(id, title)}
+        onModelChange={handleModelChange}
+        onSmartPick={() => void handleSmartPick()}
+        onTogglePanel={() => setPanelOpen((v) => !v)}
+      />
 
       {/* 对话列表容器 */}
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto scroll-smooth custom-scrollbar"
       >
-        {availableModels.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center space-y-6 animate-in fade-in zoom-in duration-1000">
-            <div className="w-24 h-24 rounded-[2rem] bg-muted/30 flex items-center justify-center relative">
-              <div className="absolute inset-0 bg-primary/20 blur-2xl animate-pulse" />
-              <Bot className="w-12 h-12 text-muted-foreground relative z-10" />
-            </div>
-            <div className="space-y-2">
-              <h2 className="text-2xl font-bold tracking-tight">{t("chat.emptyState.title")}</h2>
-              <p className="text-sm text-muted-foreground max-w-xs mx-auto">
-                {t("chat.emptyState.desc")}
-              </p>
-            </div>
-            <Button variant="outline" className="rounded-2xl border-primary/20 hover:bg-primary/5">
-              {t("chat.emptyState.goToConfig")}
-            </Button>
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full animate-in fade-in duration-1000">
-             <div className="relative mb-8">
-               <div className="absolute -inset-4 bg-primary/20 blur-3xl opacity-50" />
-               <img src={cosmgridLogo} className="w-20 h-20 opacity-20 relative" alt="Empty" />
-             </div>
-             <p className="text-sm font-bold uppercase tracking-[0.4em] text-muted-foreground/30">{t("chat.ready")}</p>
-          </div>
-        ) : (
-          <div className="pb-32">
-            {messages.map((m) => {
-              const isLastAssistant = m.role === "assistant" && m === messages[messages.length - 1];
-              return (
-                <MessageItem
-                  key={m.id}
-                  role={m.role}
-                  text={m.content}
-                  isStreaming={isLastAssistant && isStreaming}
-                />
-              );
-            })}
-          </div>
-        )}
-
-        {streamError && (
-          <div className="px-6 py-4">
-            <Alert variant="destructive" className="bg-red-500/10 border-red-500/20">
-              <AlertDescription className="text-xs font-medium">{streamError}</AlertDescription>
-            </Alert>
-          </div>
-        )}
+        <ChatTranscript
+          availableModelCount={availableModels.length}
+          messages={messages}
+          isStreaming={isStreaming}
+          pendingQueue={pendingQueue}
+          inputAreaH={inputAreaH}
+          streamElapsedMs={streamElapsedMs}
+          toolCallsByMessage={toolCallsByMessage}
+          streamError={streamError}
+          onEnableWorkspaceProtection={
+            workspacePath && !protectedWorkspaces.has(workspacePath)
+              ? async () => {
+                  await enableWorkspaceProtection(workspacePath);
+                  setProtectedWorkspaces((prev) => new Set(prev).add(workspacePath));
+                }
+              : undefined
+          }
+        />
       </div>
 
-      {/* 输入框区域 - Floating Command Center */}
-      <div className="absolute bottom-8 left-8 right-8 z-20 pointer-events-none">
-        {onOpenDebate && showDebateHint && !isStreaming && (
-          <div className="max-w-4xl mx-auto mb-2.5 pointer-events-auto">
-            <div className="glass rounded-2xl border border-primary/30 shadow-lg px-4 py-2.5 flex items-center gap-3">
-              <Swords className="w-4 h-4 text-primary shrink-0" />
-              <span className="text-xs font-medium text-muted-foreground flex-1">{t("chat.suggestDebate")}</span>
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => onOpenDebate(inputRef.current?.value.trim() ?? "")}
-                className="rounded-xl h-8 px-4 text-xs font-bold shrink-0"
-              >
-                {t("chat.suggestDebateBtn")}
-              </Button>
-            </div>
-          </div>
-        )}
-        <form
-          onSubmit={handleFormSubmit}
-          className="max-w-4xl mx-auto glass rounded-[2.5rem] border border-white/20 shadow-2xl p-2.5 flex gap-3 pointer-events-auto group transition-all duration-500 hover:border-primary/30"
+      {/* 回到底部：用户往上翻看历史时出现，点一下回到最新（输出再多也不抢滚动） */}
+      {showJumpToBottom && (
+        <button
+          type="button"
+          onClick={scrollToBottom}
+          title={t("chat.jumpToBottom")}
+          className="absolute bottom-28 left-1/2 -translate-x-1/2 z-30 w-9 h-9 rounded-full glass border border-white/15 shadow-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-white/10 transition-colors animate-in fade-in slide-in-from-bottom-2 duration-300"
         >
-          <div className="flex-1 relative">
-            <input
-              ref={inputRef}
-              name="input"
-              placeholder={selectedModel ? t("chat.inputPlaceholder", { name: selectedModel.displayName || selectedModel.name }) : t("chat.inputPlaceholderFallback")}
-              disabled={isStreaming}
-              autoComplete="off"
-              onChange={(e) => setShowDebateHint(shouldSuggestDebate(e.target.value))}
-              className="w-full bg-transparent border-none outline-none focus:outline-none focus:ring-0 text-sm px-6 py-4 placeholder:text-muted-foreground/40 font-medium"
-            />
-          </div>
-          <div className="flex items-center pr-1.5">
-            {isStreaming ? (
-              <Button
-                type="button"
-                variant="destructive"
-                onClick={handleStop}
-                className="w-12 h-12 rounded-[1.5rem] animate-pulse shadow-lg shadow-red-500/20"
-              >
-                <Square className="w-5 h-5 fill-current" />
-              </Button>
-            ) : (
-              <Button
-                type="submit"
-                className="w-12 h-12 rounded-[1.5rem] bg-primary shadow-lg shadow-primary/30 hover:scale-110 active:scale-95 transition-all duration-300 group-hover:rotate-[-5deg]"
-              >
-                <Send className="w-5 h-5" />
-              </Button>
-            )}
-          </div>
-        </form>
-        <p className="text-[10px] text-center mt-4 text-muted-foreground/30 font-bold uppercase tracking-[0.3em] select-none">
-          {t("chat.footer", { version: "v0.7.3" })}
-        </p>
-      </div>
+          <ArrowDown className="w-4 h-4" />
+        </button>
+      )}
+
+      <ChatInputDock
+        inputAreaRef={inputAreaRef}
+        inputRef={inputRef}
+        onSubmit={handleFormSubmit}
+        onPaste={handlePaste}
+        activeToolCall={activeToolCall}
+        isStreaming={isStreaming}
+        workspacePath={workspacePath}
+        onClearWorkspace={() => void clearWorkspace()}
+        onChooseWorkspace={() => void chooseWorkspace()}
+        permissionMode={permissionMode}
+        onPermissionModeChange={setPermissionMode}
+        draftAttachments={draftAttachments}
+        onRemoveAttachment={removeAttachment}
+        selectedModelName={selectedModel ? selectedModel.displayName || selectedModel.name : null}
+        onStop={handleStop}
+        pendingConfirm={pendingConfirm}
+        onResolveConfirm={resolveConfirm}
+        pendingQuestion={pendingQuestion}
+        onResolveQuestion={resolveAskUser}
+      />
       </div>
 
-      {/* 右侧工作面板：多模型工作可视化（默认收起，不影响现有布局；左侧分隔条可拖拽放大） */}
       {panelOpen && (
-        <>
-        <ResizeHandle onMouseDown={workPanel.onMouseDown} />
-        <aside style={{ width: workPanel.width }} className="shrink-0 glass h-full flex flex-col">
-          <div className="px-5 py-4 flex items-center justify-between border-b border-white/10 shrink-0">
-            <div className="flex items-center gap-2">
-              <Activity className="w-4 h-4 text-primary" />
-              <span className="text-xs font-black uppercase tracking-[0.2em]">{t("chat.workPanel.title")}</span>
-            </div>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              onClick={() => setPanelOpen(false)}
-              title={t("chat.workPanel.close")}
-              className="h-7 w-7 rounded-lg hover:bg-white/10"
-            >
-              <X className="w-4 h-4" />
-            </Button>
-          </div>
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3">
-            {(() => {
-              const turns = messages.filter((m) => m.role === "assistant" && (m.modelLabel || m.usage));
-              if (turns.length === 0) {
-                return (
-                  <div className="text-[11px] text-muted-foreground/40 text-center py-12 uppercase tracking-widest">
-                    {t("chat.workPanel.empty")}
-                  </div>
-                );
-              }
-              const totalIn = turns.reduce((s, m) => s + (m.usage?.inputTokens ?? 0), 0);
-              const totalOut = turns.reduce((s, m) => s + (m.usage?.outputTokens ?? 0), 0);
-              return (
-                <>
-                  <div className="glass rounded-2xl p-4 border border-white/5">
-                    <div className="text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50 mb-2">
-                      {t("chat.workPanel.sessionTotal")}
-                    </div>
-                    <div className="flex gap-4 font-mono text-xs">
-                      <span className="text-blue-400">{t("chat.workPanel.inTokens")} {totalIn.toLocaleString()}</span>
-                      <span className="text-orange-400">{t("chat.workPanel.outTokens")} {totalOut.toLocaleString()}</span>
-                    </div>
-                  </div>
-                  {turns.map((m, i) => (
-                    <div key={m.id} className="glass rounded-2xl p-4 border border-white/5 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[9px] font-black uppercase tracking-widest text-muted-foreground/40">
-                          {t("chat.workPanel.turnLabel", { n: i + 1 })}
-                        </span>
-                        {m.switched ? (
-                          <span className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase bg-accent/15 text-accent border border-accent/20 flex items-center gap-1">
-                            <Zap className="w-2.5 h-2.5" /> {t("chat.workPanel.fallback")}
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase bg-primary/10 text-primary border border-primary/20">
-                            {t("chat.workPanel.primary")}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 text-xs font-bold">
-                        <Cpu className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                        <span className="truncate">{m.modelLabel ?? "—"}</span>
-                      </div>
-                      {m.switched && (
-                        <div className="text-[10px] text-accent/80">{t("chat.workPanel.switchedNote")}</div>
-                      )}
-                      {m.usage && (
-                        <div className="flex gap-3 font-mono text-[10px] text-muted-foreground/60">
-                          <span>{t("chat.workPanel.inTokens")} {m.usage.inputTokens}</span>
-                          <span>{t("chat.workPanel.outTokens")} {m.usage.outputTokens}</span>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </>
-              );
-            })()}
-          </div>
-        </aside>
-        </>
+        <ChatWorkPanel
+          width={workPanel.width}
+          onResizeMouseDown={workPanel.onMouseDown}
+          onClose={() => setPanelOpen(false)}
+          nodes={chainNodeGraph.nodes}
+          availableModels={availableModels}
+          disabled={isStreaming}
+          onMainModelChange={handleModelChange}
+          onNodeModelChange={handleNodeModelChange}
+          conversationId={conversationId}
+          workspacePath={workspacePath}
+          artifacts={artifacts}
+          running={isStreaming}
+          streamElapsedMs={streamElapsedMs}
+          activeModelLabel={activeModelLabel}
+          messages={messages}
+        />
       )}
     </div>
   );

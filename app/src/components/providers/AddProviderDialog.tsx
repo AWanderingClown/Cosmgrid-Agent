@@ -2,7 +2,8 @@
 // v0.3：apiFetch → db.ts 直连 SQLite，API Key → keystore
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
+import { Loader2, Download, ExternalLink, RefreshCw } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Dialog,
   DialogContent,
@@ -15,37 +16,32 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 import { type WorkRole } from "@/lib/api";
 import { providers as dbProviders, apiCredentials as dbCredentials, models as dbModels } from "@/lib/db";
 import { saveApiKey, deleteApiKey } from "@/lib/keystore";
 import { inferModelCapabilities } from "@/lib/llm/model-capabilities";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { PROVIDER_PRESETS, type ProviderPreset } from "@/lib/llm/provider-presets";
+import { fetchAvailableModels } from "@/lib/llm/fetch-models";
+import { lookupPriceFromCatalog, saveManualModelPrice } from "@/lib/llm/price-catalog";
 import { ApiKeyInput } from "./ApiKeyInput";
 import { ProviderTypeSelect, type ProviderTypeValue } from "./ProviderTypeSelect";
 import { BasicFormFields } from "./BasicFormFields";
-import { WorkRoleSelector } from "./WorkRoleSelector";
 import { ModelConfigFields } from "./ModelConfigFields";
 import { TestConnectionButton } from "./TestConnectionButton";
+import {
+  DEFAULT_BASE_URLS,
+  getPresetForProviderType,
+  inferRolesForModel,
+  isCliType,
+} from "./provider-form-defaults";
 
 interface AddProviderDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess?: () => void;
-}
-
-const DEFAULT_BASE_URLS: Record<ProviderTypeValue, string> = {
-  anthropic: "https://api.anthropic.com",
-  openai: "https://api.openai.com/v1",
-  google: "https://generativelanguage.googleapis.com/v1beta",
-  // openai-compatible 默认空，让用户在 BasicFormFields 自己填
-  "openai-compatible": "",
-  // CLI 引擎：baseUrl 复用为「可执行文件路径」，默认空＝用系统 PATH 里的 claude/codex
-  "claude-cli": "",
-  "codex-cli": "",
-};
-
-/** CLI 引擎类型：spawn 本机 CLI 吃订阅额度，不需要 API Key / URL 端点 */
-function isCliType(type: ProviderTypeValue): boolean {
-  return type === "claude-cli" || type === "codex-cli";
 }
 
 const INITIAL_STATE = {
@@ -58,6 +54,8 @@ const INITIAL_STATE = {
   modelName: "",
   displayName: "",
   contextWindow: 200_000,
+  inputPrice: 0,
+  outputPrice: 0,
   workRoles: ["main_chat"] as WorkRole[],
 };
 
@@ -72,24 +70,115 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
   const [modelName, setModelName] = useState(INITIAL_STATE.modelName);
   const [displayName, setDisplayName] = useState(INITIAL_STATE.displayName);
   const [contextWindow, setContextWindow] = useState(INITIAL_STATE.contextWindow);
+  const [inputPrice, setInputPrice] = useState(INITIAL_STATE.inputPrice);
+  const [outputPrice, setOutputPrice] = useState(INITIAL_STATE.outputPrice);
   const [workRoles, setWorkRoles] = useState<WorkRole[]>(INITIAL_STATE.workRoles);
   // 用户是否手动改过角色——改过就不再被自动识别覆盖（尊重人工选择）
   const [rolesEditedManually, setRolesEditedManually] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 厂商预设 + 拉取模型
+  const [presetId, setPresetId] = useState<string | null>(null);
+  const [apiKeyUrl, setApiKeyUrl] = useState<string | null>(null);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [fetchedModels, setFetchedModels] = useState<string[]>([]);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [resolvingCliPath, setResolvingCliPath] = useState(false);
+  const [cliPathDetected, setCliPathDetected] = useState(false);
 
-  // 填模型名时自动识别它适合的角色（用户没手动改过的前提下）
-  function handleModelNameChange(name: string) {
-    setModelName(name);
-    if (!rolesEditedManually) {
-      const inferred = name.trim() ? inferModelCapabilities(name).workRoles : INITIAL_STATE.workRoles;
-      setWorkRoles(inferred);
+  async function resolveCliPath(providerTypeValue: ProviderTypeValue): Promise<string | null> {
+    const program = providerTypeValue === "claude-cli" ? "claude" : providerTypeValue === "codex-cli" ? "codex" : null;
+    if (!program) return null;
+    try {
+      return await invoke<string | null>("resolve_cli_program", { program });
+    } catch {
+      return null;
     }
   }
 
-  function handleWorkRolesChange(roles: WorkRole[]) {
-    setRolesEditedManually(true);
-    setWorkRoles(roles);
+  async function detectCliPath(providerTypeValue = providerType) {
+    if (!isCliType(providerTypeValue)) return;
+    setResolvingCliPath(true);
+    setCliPathDetected(false);
+    const resolved = await resolveCliPath(providerTypeValue);
+    if (resolved) {
+      setBaseUrl(resolved);
+      setCliPathDetected(true);
+    }
+    setResolvingCliPath(false);
+  }
+
+  async function applyKnownModelMetadata(name: string, type = providerType) {
+    if (isCliType(type)) {
+      setInputPrice(0);
+      setOutputPrice(0);
+      return;
+    }
+    const price = await lookupPriceFromCatalog(name, type);
+    if (!price) return;
+    if (price.contextWindow > 0) setContextWindow(price.contextWindow);
+    setInputPrice(price.input);
+    setOutputPrice(price.output);
+  }
+
+  function applyModelName(name: string, opts: { forceRoles?: boolean } = {}) {
+    setModelName(name);
+    if (opts.forceRoles || !rolesEditedManually) {
+      setWorkRoles(inferRolesForModel(name));
+    }
+  }
+
+  // 选一个厂商预设：自动带出 type / 名称 / baseUrl / 官网 / 默认模型，用户只需粘 key
+  async function applyPreset(preset: ProviderPreset) {
+    setPresetId(preset.id);
+    setProviderType(preset.providerType);
+    setProviderName(preset.name);
+    setBaseUrl(preset.baseUrl);
+    setWebsite(preset.website ?? "");
+    setNotes("");
+    setContextWindow(preset.defaultContextWindow);
+    setInputPrice(0);
+    setOutputPrice(0);
+    setDisplayName(preset.defaultDisplayName ?? "");
+    setApiKeyUrl(preset.apiKeyUrl ?? null);
+    setFetchedModels([]);
+    setFetchError(null);
+    setCliPathDetected(false);
+    setResolvingCliPath(false);
+    setRolesEditedManually(false);
+    applyModelName(preset.defaultModel, { forceRoles: true });
+    void applyKnownModelMetadata(preset.defaultModel, preset.providerType);
+
+    if (isCliType(preset.providerType)) {
+      await detectCliPath(preset.providerType);
+    }
+  }
+
+  // 粘 key 后拉取该厂商账号下真实可用的模型，避免手敲填错名字
+  async function handleFetchModels() {
+    setFetchingModels(true);
+    setFetchError(null);
+    setFetchedModels([]);
+    try {
+      const r = await fetchAvailableModels({ providerType, baseUrl, apiKey });
+      if (r.ok) {
+        setFetchedModels(r.models);
+        // 若当前模型名不在真实列表里，自动选第一个真实模型，省得用户还得手动对
+        if (!r.models.includes(modelName)) handleModelNameChange(r.models[0]!);
+      } else {
+        setFetchError(t(`addProvider.fetchModels.errors.${r.errorKey}`));
+      }
+    } catch {
+      setFetchError(t("addProvider.fetchModels.errors.unknown"));
+    } finally {
+      setFetchingModels(false);
+    }
+  }
+
+  // 填模型名时自动识别它适合的角色（用户没手动改过的前提下）
+  function handleModelNameChange(name: string) {
+    applyModelName(name);
+    void applyKnownModelMetadata(name);
   }
 
   const isCli = isCliType(providerType);
@@ -140,11 +229,23 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
         name: modelName,
         displayName: displayName || null,
         contextWindow,
+        inputPrice: inputPrice > 0 ? inputPrice : null,
+        outputPrice: outputPrice > 0 ? outputPrice : null,
         capabilityTags: JSON.stringify([]),
         capabilityScore: JSON.stringify(inferred.capabilityScore),
         workRoles: JSON.stringify(workRoles),
       });
       createdModelId = model.id;
+
+      if (inputPrice > 0 && outputPrice > 0) {
+        await saveManualModelPrice({
+          modelName,
+          providerType,
+          inputPer1m: inputPrice,
+          outputPer1m: outputPrice,
+          contextWindow: contextWindow || null,
+        });
+      }
 
       // 5. 回填 defaultModelId
       await dbCredentials.update(credential.id, { defaultModelId: model.id });
@@ -180,9 +281,60 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6">
+          {/* 厂商预设：点一下自动带出 类型/名称/Base URL/官网/默认模型，只需再粘 API Key。
+              「自定义」清空回到手动；选了任何厂商都仍可手改下面每一项。 */}
+          <div className="space-y-2">
+            <Label>{t("addProvider.presetLabel")}</Label>
+            <div className="flex flex-wrap gap-2">
+              {PROVIDER_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => void applyPreset(p)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors",
+                    presetId === p.id
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "border-border hover:bg-muted",
+                  )}
+                >
+                  {p.name}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  setPresetId(null);
+                  setApiKeyUrl(null);
+                  setFetchedModels([]);
+                  setFetchError(null);
+                  setCliPathDetected(false);
+                  setResolvingCliPath(false);
+                }}
+                className={cn(
+                  "px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors",
+                  presetId === null ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted",
+                )}
+              >
+                {t("addProvider.presetCustom")}
+              </button>
+            </div>
+          </div>
+
           <ProviderTypeSelect
             value={providerType}
             onChange={(v) => {
+              const mappedPreset = getPresetForProviderType(v);
+              if (mappedPreset) {
+                void applyPreset(mappedPreset);
+                return;
+              }
+
+              // 手动改普通协议类型 = 走自定义，清掉预设关联
+              setPresetId(null);
+              setApiKeyUrl(null);
+              setCliPathDetected(false);
+              setResolvingCliPath(false);
               setProviderType(v);
               setBaseUrl(DEFAULT_BASE_URLS[v]);
             }}
@@ -206,7 +358,26 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder={providerType === "claude-cli" ? "/usr/local/bin/claude" : "/usr/local/bin/codex"}
               />
-              <p className="text-xs text-muted-foreground">{t("addProvider.cliHint")}</p>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-muted-foreground">
+                  {cliPathDetected
+                    ? t("addProvider.cliDetected")
+                    : resolvingCliPath
+                      ? t("addProvider.cliDetecting")
+                      : t("addProvider.cliHint")}
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void detectCliPath()}
+                  disabled={resolvingCliPath}
+                  className="shrink-0"
+                >
+                  {resolvingCliPath ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                  {t("addProvider.cliDetectButton")}
+                </Button>
+              </div>
             </div>
           ) : (
             <>
@@ -225,19 +396,71 @@ export function AddProviderDialog({ open, onOpenChange, onSuccess }: AddProvider
                 required
                 placeholder="sk-ant-..."
               />
+              {apiKeyUrl && (
+                <button
+                  type="button"
+                  onClick={() => void openUrl(apiKeyUrl).catch(() => {})}
+                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  {t("addProvider.getApiKey")}
+                </button>
+              )}
             </>
+          )}
+
+          {/* 拉取真实模型列表：粘 key 后点一下，从该厂商账号下真实可用模型里选，杜绝填错名字。
+              对「所有」非 CLI 厂商都显示（含自定义）——这样不在预设里的任意 OpenAI 兼容厂商也能一键拉取。 */}
+          {!isCli && (
+            <div className="space-y-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void handleFetchModels()}
+                disabled={fetchingModels || !apiKey || !baseUrl}
+              >
+                {fetchingModels ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                {fetchingModels ? t("addProvider.fetchModels.loading") : t("addProvider.fetchModels.button")}
+              </Button>
+              {fetchedModels.length > 0 && (
+                <div className="space-y-1">
+                  <Label>{t("addProvider.fetchModels.pickLabel")}</Label>
+                  <Select value={fetchedModels.includes(modelName) ? modelName : ""} onValueChange={handleModelNameChange}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={t("addProvider.fetchModels.pickPlaceholder")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {fetchedModels.map((m) => (
+                        <SelectItem key={m} value={m}>{m}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">{t("addProvider.fetchModels.pickHint", { count: fetchedModels.length })}</p>
+                </div>
+              )}
+              {fetchError && <p className="text-xs text-destructive">{fetchError}</p>}
+            </div>
           )}
 
           <ModelConfigFields
             modelName={modelName}
             displayName={displayName}
             contextWindow={contextWindow}
+            inputPrice={inputPrice}
+            outputPrice={outputPrice}
             onModelNameChange={handleModelNameChange}
             onDisplayNameChange={setDisplayName}
             onContextWindowChange={setContextWindow}
+            onInputPriceChange={setInputPrice}
+            onOutputPriceChange={setOutputPrice}
+            showPricing={!isCli}
+            helperText={isCli ? t("addProvider.cliPricingHint") : t("addProvider.modelMetadataHint")}
           />
 
-          <WorkRoleSelector value={workRoles} onChange={handleWorkRolesChange} />
+          <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            {t("addProvider.autoRolesHint")}
+          </div>
 
           {!isCli && (
             <TestConnectionButton

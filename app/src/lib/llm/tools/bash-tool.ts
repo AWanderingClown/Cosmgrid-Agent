@@ -7,7 +7,7 @@
 
 import { z } from "zod";
 import type { ToolDefinition, ToolResult } from "./types";
-import { checkCommand } from "./command-safety";
+import { checkCommand, isReadOnlyCommand } from "./command-safety";
 import { getShellAdapter } from "./shell-adapter";
 import { requireApproval } from "./confirm";
 
@@ -18,7 +18,7 @@ const paramsSchema = z.object({
 type BashParams = z.infer<typeof paramsSchema>;
 
 /** stdout/stderr 各自截断上限 */
-export const BASH_OUTPUT_LIMIT = 5000;
+const BASH_OUTPUT_LIMIT = 5000;
 
 function clip(s: string): string {
   return s.length > BASH_OUTPUT_LIMIT ? s.slice(0, BASH_OUTPUT_LIMIT) + "\n…(截断)" : s;
@@ -26,7 +26,7 @@ function clip(s: string): string {
 
 export const bashTool: ToolDefinition<BashParams> = {
   name: "bash",
-  description: "执行一条白名单内的 shell 命令（如 pnpm test / git status）。危险命令会被拦截，执行前需用户确认。",
+  description: "在工作文件夹根目录执行一条 shell 命令（如 pnpm test / git status）。命令已经在工作目录里运行，直接用相对路径，不要用 cd 切目录。搜文件内容优先用 grep 工具、找文件用 glob 工具、读文件用 read 工具（更可靠）；bash 主要用于跑测试 / 构建 / git 等。危险命令会被拦截，写操作需用户确认。",
   parameters: paramsSchema,
   readOnly: false,
   async execute(input, ctx): Promise<ToolResult> {
@@ -36,12 +36,15 @@ export const bashTool: ToolDefinition<BashParams> = {
       return { status: "denied", output: `已拦截：${check.reason}` };
     }
 
-    // 闸 2：用户确认（无确认通道=拒绝）
-    const denied = await requireApproval(ctx, {
-      toolName: "bash",
-      summary: `在 ${ctx.workspacePath} 执行：${input.command}`,
-    });
-    if (denied) return denied;
+    // 闸 2：只读命令（git log/status/diff、ls/cat/grep 等只看不改）免确认，看项目不被打扰；
+    //        写/有副作用命令（装依赖、git 提交、跑脚本等）才需用户确认。
+    if (!isReadOnlyCommand(input.command)) {
+      const denied = await requireApproval(ctx, {
+        toolName: "bash",
+        summary: `在 ${ctx.workspacePath} 执行：${input.command}`,
+      });
+      if (denied) return denied;
+    }
 
     // 闸 3：执行
     try {

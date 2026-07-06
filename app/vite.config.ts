@@ -9,6 +9,37 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig({
   plugins: [react(), tailwindcss()],
 
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("/node_modules/")) {
+            if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return "vendor-react";
+            if (id.includes("/node_modules/lucide-react/")) return "vendor-icons";
+            if (id.includes("/node_modules/@tauri-apps/")) return "vendor-tauri";
+            if (id.includes("/node_modules/@radix-ui/")) return "vendor-radix";
+            if (id.includes("/node_modules/i18next/") || id.includes("/node_modules/react-i18next/")) return "vendor-i18n";
+            if (id.includes("/node_modules/underscore/")) return "vendor-underscore";
+            if (id.includes("/node_modules/zod/")) return "vendor-zod";
+            if (id.includes("/node_modules/pdfjs-dist/")) return "vendor-pdf";
+            if (id.includes("/node_modules/mammoth/")) return "vendor-docx";
+            if (
+              /[\\/]node_modules[\\/](react-markdown|remark-|rehype-|unified|mdast-|micromark|hast-|unist-|vfile|markdown-table|property-information|space-separated-tokens|comma-separated-tokens|character-entities|decode-named-character-reference|devlop|bail|ccount|longest-streak|trim-lines|zwitch|html-url-attributes|estree-)/.test(id)
+            ) {
+              return "vendor-markdown";
+            }
+            if (id.includes("/node_modules/@ai-sdk/openai/")) return "vendor-ai-openai";
+            if (id.includes("/node_modules/@ai-sdk/anthropic/")) return "vendor-ai-anthropic";
+            if (id.includes("/node_modules/@ai-sdk/google/")) return "vendor-ai-google";
+            if (id.includes("/node_modules/@ai-sdk/") || id.includes("/node_modules/ai/")) return "vendor-ai-core";
+          }
+          if (id.endsWith("/src/lib/db.ts")) return "app-db";
+          if (id.includes("/src/i18n/")) return "app-i18n";
+        },
+      },
+    },
+  },
+
   resolve: {
     alias: {
       "@": resolve(__dirname, "./src"),

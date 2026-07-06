@@ -3,7 +3,7 @@
 // 1. 拖动时只在 window 上临时挂 mousemove/mouseup，松手立即移除——绝不留全屏遮罩，
 //    所以永远不会拦截其他元素的点击（这是上一版库实现的坑）。
 // 2. 像素宽度 + min/max 夹紧，调用方用 style={{ width }} 控制相邻面板宽度。
-// 3. 视觉 = 一条灰线（hover 高亮主色），命中区比视觉宽一点，好抓。
+// 3. 命中区比视觉宽一点，好抓；默认不画分割线，避免破坏主界面留白。
 import { useCallback, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
@@ -59,7 +59,7 @@ interface ResizeHandleProps {
   className?: string;
 }
 
-/** 可拖拽的竖向分隔条：一条灰线 + 加宽命中区 */
+/** 可拖拽的竖向分隔条：默认透明，只在 hover 时显示中央把手，拖动能力保留。 */
 export function ResizeHandle({ onMouseDown, className }: ResizeHandleProps) {
   return (
     <div
@@ -67,12 +67,12 @@ export function ResizeHandle({ onMouseDown, className }: ResizeHandleProps) {
       aria-orientation="vertical"
       onMouseDown={onMouseDown}
       className={cn(
-        "group relative w-2.5 shrink-0 cursor-col-resize flex items-center justify-center",
+        "group relative w-3 shrink-0 cursor-col-resize flex items-center justify-center",
         className,
       )}
     >
-      {/* 默认完全透明（板块之间是留白，不是分割线）；鼠标移上去浮现一个淡淡的小竖条，提示这里可拖 */}
-      <div className="w-1 h-12 rounded-full bg-muted-foreground/0 group-hover:bg-muted-foreground/25 transition-colors" />
+      {/* hover 时中央显示的把手圆点（明确告诉用户"这里能拖"） */}
+      <div className="relative w-1 h-12 rounded-full bg-zinc-400/70 dark:bg-white/40 opacity-0 group-hover:opacity-100 transition-opacity" />
     </div>
   );
 }

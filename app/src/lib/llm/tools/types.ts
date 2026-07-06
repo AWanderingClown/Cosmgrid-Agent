@@ -14,10 +14,28 @@ export interface ToolContext {
   workspacePath: string;
   projectId?: string;
   conversationId?: string;
+  /** 2026-07-04 修复：这次工具调用归属的 assistant 消息 id（调用方在生成该消息时创建，
+   *  贯穿整个模型调用透传下来）。有它就不用再靠时间戳窗口猜"这次工具调用是哪条消息做的"——
+   *  编排/多角色接力场景下，不同节点的工具调用时间可能穿插，纯时间戳窗口会张冠李戴。 */
+  messageId?: string;
   /** 写操作的用户确认回调；返回 false 表示用户拒绝 */
   confirm?: (preview: ToolConfirmRequest) => Promise<boolean>;
   /** 项目自定义的命令黑名单前缀（bash 工具用，叠加在内置危险拦截之上） */
   blockedCommands?: string[];
+  /** ask_user_question 工具用：向用户提一个结构化问题，返回用户选中的 label 文本 */
+  askUser?: (request: AskUserRequest) => Promise<string>;
+}
+
+/** 结构化追问用户时的一个候选选项 */
+export interface AskUserOption {
+  label: string;
+  description?: string;
+}
+
+/** ask_user_question 工具的提问请求 */
+export interface AskUserRequest {
+  question: string;
+  options: AskUserOption[];
 }
 
 /** 写操作请求用户确认时的展示信息 */

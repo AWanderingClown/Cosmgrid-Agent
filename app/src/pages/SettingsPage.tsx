@@ -1,31 +1,92 @@
 // SettingsPage - 设置页 (v0.7.5: 移除缺失的 RadioGroup 依赖，采用自定义稳定实现)
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap } from "lucide-react";
+import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap, FolderKanban, Brain, Bug, Search } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useTheme } from "@/lib/theme";
-import { useSmartRoutingSetting } from "@/lib/app-settings";
+import { useTheme, type Theme } from "@/lib/theme";
+import { useMemoryEmbeddingSetting, usePureSingleModelModeSetting, useSmartRoutingSetting } from "@/lib/app-settings";
+import { apiCredentials, type ApiCredential } from "@/lib/db";
+import { backfillProjectMemoryVectors } from "@/lib/memory/retrieval";
 import { SUPPORTED_LANGUAGES, LANGUAGE_LABELS, type SupportedLanguage } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { getApiKey, saveApiKey, deleteApiKey } from "@/lib/keystore";
+import { TAVILY_SEARCH_CREDENTIAL_ID } from "@/lib/llm/tools/web-search-tool";
 
-export function SettingsPage() {
+export interface SettingsPageProps {
+  onOpenProjectAssets?: () => void;
+}
+
+export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
   const [smartRouting, setSmartRouting] = useSmartRoutingSetting();
+  const [pureSingleModelMode, setPureSingleModelMode] = usePureSingleModelModeSetting();
+  const [memoryEmbedding, setMemoryEmbedding] = useMemoryEmbeddingSetting();
+  const [embeddingCredentials, setEmbeddingCredentials] = useState<ApiCredential[]>([]);
+  const [syncingMemoryIndex, setSyncingMemoryIndex] = useState(false);
+  const [memoryIndexMessage, setMemoryIndexMessage] = useState<string | null>(null);
+  const [tavilyKeyConfigured, setTavilyKeyConfigured] = useState(false);
+  const [tavilyKeyInput, setTavilyKeyInput] = useState("");
+  const [tavilyMessage, setTavilyMessage] = useState<string | null>(null);
   const [language, setLanguageState] = useState<SupportedLanguage>(
     (SUPPORTED_LANGUAGES as readonly string[]).includes(i18n.language)
       ? (i18n.language as SupportedLanguage)
       : "zh-CN",
   );
 
-  const themes = [
+  const themes: Array<{ id: Theme; label: string; icon: typeof Sun }> = [
     { id: "light", label: t("settings.appearance.themes.light"), icon: Sun },
     { id: "dark", label: t("settings.appearance.themes.dark"), icon: Moon },
     { id: "system", label: t("settings.appearance.themes.system"), icon: Monitor },
   ];
+  const remoteEmbeddingCredentials = embeddingCredentials.filter((cred) => (
+    cred.enabled && ["openai", "openai-compatible"].includes(cred.provider?.type ?? "")
+  ));
+
+  useEffect(() => {
+    void apiCredentials.list()
+      .then(setEmbeddingCredentials)
+      .catch(() => setEmbeddingCredentials([]));
+  }, []);
+
+  useEffect(() => {
+    void getApiKey(TAVILY_SEARCH_CREDENTIAL_ID)
+      .then((key) => setTavilyKeyConfigured(!!key))
+      .catch(() => setTavilyKeyConfigured(false));
+  }, []);
+
+  async function handleSaveTavilyKey() {
+    const trimmed = tavilyKeyInput.trim();
+    if (!trimmed) return;
+    await saveApiKey(TAVILY_SEARCH_CREDENTIAL_ID, trimmed);
+    setTavilyKeyConfigured(true);
+    setTavilyKeyInput("");
+    setTavilyMessage(t("settings.webSearch.saved"));
+  }
+
+  async function handleClearTavilyKey() {
+    await deleteApiKey(TAVILY_SEARCH_CREDENTIAL_ID);
+    setTavilyKeyConfigured(false);
+    setTavilyMessage(t("settings.webSearch.cleared"));
+  }
+
+  async function handleSyncMemoryIndex() {
+    setSyncingMemoryIndex(true);
+    setMemoryIndexMessage(null);
+    try {
+      const count = await backfillProjectMemoryVectors({ limit: 200, allowRemote: true });
+      setMemoryIndexMessage(t("settings.memoryEmbedding.syncDone", { count }));
+    } catch {
+      setMemoryIndexMessage(t("settings.memoryEmbedding.syncFailed"));
+    } finally {
+      setSyncingMemoryIndex(false);
+    }
+  }
 
   function handleLanguageChange(value: string) {
     if (!(SUPPORTED_LANGUAGES as readonly string[]).includes(value)) return;
@@ -35,8 +96,8 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
-      <div className="max-w-4xl mx-auto space-y-10 pb-20">
+    <div className="h-full w-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
+      <div className="space-y-10 pb-20">
         <header className="space-y-3 border-l-4 border-primary pl-6 py-2">
           <div className="flex items-center gap-2 text-primary font-bold">
             <Settings className="w-5 h-5" />
@@ -66,7 +127,7 @@ export function SettingsPage() {
                     return (
                       <button
                         key={th.id}
-                        onClick={() => setTheme(th.id as any)}
+                        onClick={() => setTheme(th.id)}
                         className={cn(
                           "group flex flex-col items-center justify-center rounded-2xl border-2 p-6 transition-all duration-300 relative overflow-hidden",
                           isActive
@@ -108,10 +169,92 @@ export function SettingsPage() {
             </div>
           </Card>
 
+          {/* 项目记忆检索 */}
+          <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-8 shadow-xl">
+            <div className="flex items-center gap-3 pb-4 border-b border-white/10">
+              <Brain className="w-5 h-5 text-primary" />
+              <h2 className="text-xl font-bold dark:text-white">{t("settings.memoryEmbedding.title")}</h2>
+            </div>
+            <div className="space-y-5">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-5 bg-white/5 rounded-2xl border border-white/5">
+                <div className="space-y-1">
+                  <div className="text-sm font-bold">{t("settings.memoryEmbedding.modeTitle")}</div>
+                  <p className="text-xs text-muted-foreground max-w-xl leading-relaxed">{t("settings.memoryEmbedding.modeDesc")}</p>
+                </div>
+                <Select
+                  value={memoryEmbedding.mode}
+                  onValueChange={(mode) => {
+                    if (mode !== "local" && mode !== "remote") return;
+                    setMemoryEmbedding({ ...memoryEmbedding, mode });
+                  }}
+                >
+                  <SelectTrigger className="w-full lg:w-64 rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm font-bold dark:text-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="glass border-white/10 rounded-xl">
+                    <SelectItem value="local">{t("settings.memoryEmbedding.local")}</SelectItem>
+                    <SelectItem value="remote">{t("settings.memoryEmbedding.remote")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {memoryEmbedding.mode === "remote" && (
+                <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto] p-5 bg-white/5 rounded-2xl border border-white/5">
+                  <div className="space-y-2">
+                    <Label className="text-xs font-bold opacity-60">{t("settings.memoryEmbedding.credential")}</Label>
+                    <Select
+                      value={memoryEmbedding.credentialId ?? ""}
+                      onValueChange={(credentialId) => setMemoryEmbedding({ ...memoryEmbedding, credentialId })}
+                      disabled={remoteEmbeddingCredentials.length === 0}
+                    >
+                      <SelectTrigger className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm dark:text-white">
+                        <SelectValue placeholder={t("settings.memoryEmbedding.credentialPlaceholder")} />
+                      </SelectTrigger>
+                      <SelectContent className="glass border-white/10 rounded-xl">
+                        {remoteEmbeddingCredentials.map((cred) => (
+                          <SelectItem key={cred.id} value={cred.id}>
+                            {cred.name} · {cred.provider?.name ?? cred.providerId}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs font-bold opacity-60">{t("settings.memoryEmbedding.model")}</Label>
+                    <Input
+                      value={memoryEmbedding.modelName}
+                      onChange={(event) => setMemoryEmbedding({ ...memoryEmbedding, modelName: event.target.value })}
+                      placeholder="text-embedding-3-small"
+                      className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm dark:text-white"
+                    />
+                  </div>
+                  <div className="flex flex-col justify-end gap-2">
+                    <Button
+                      type="button"
+                      onClick={handleSyncMemoryIndex}
+                      disabled={syncingMemoryIndex || !memoryEmbedding.credentialId}
+                      className="rounded-xl whitespace-nowrap"
+                    >
+                      {syncingMemoryIndex ? t("settings.memoryEmbedding.syncing") : t("settings.memoryEmbedding.sync")}
+                    </Button>
+                  </div>
+                  <p className="lg:col-span-3 text-xs text-muted-foreground leading-relaxed">
+                    {remoteEmbeddingCredentials.length === 0
+                      ? t("settings.memoryEmbedding.noCredential")
+                      : t("settings.memoryEmbedding.remoteHint")}
+                  </p>
+                  {memoryIndexMessage && (
+                    <p className="lg:col-span-3 text-xs text-primary font-bold">{memoryIndexMessage}</p>
+                  )}
+                </div>
+              )}
+            </div>
+          </Card>
+
           {/* 智能路由 v2 */}
           <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-8 shadow-xl">
             <div className="flex items-center gap-3 pb-4 border-b border-white/10">
-              <Zap className="w-5 h-5 text-amber-500" />
+              <Zap className="w-5 h-5 text-primary" />
               <h2 className="text-xl font-bold dark:text-white">{t("settings.smartRouting.title")}</h2>
             </div>
             <div className="flex items-center justify-between gap-4 p-5 bg-white/5 rounded-2xl border border-white/5">
@@ -125,7 +268,7 @@ export function SettingsPage() {
                 onClick={() => setSmartRouting(!smartRouting)}
                 className={cn(
                   "relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors duration-300",
-                  smartRouting ? "bg-amber-500" : "bg-white/15"
+                  smartRouting ? "bg-primary" : "bg-white/15"
                 )}
               >
                 <span
@@ -135,6 +278,86 @@ export function SettingsPage() {
                   )}
                 />
               </button>
+            </div>
+          </Card>
+
+          {/* 纯净单模型模式（调试用） */}
+          <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-8 shadow-xl">
+            <div className="flex items-center gap-3 pb-4 border-b border-white/10">
+              <Bug className="w-5 h-5 text-primary" />
+              <h2 className="text-xl font-bold dark:text-white">{t("settings.pureMode.title")}</h2>
+            </div>
+            <div className="flex items-center justify-between gap-4 p-5 bg-white/5 rounded-2xl border border-white/5">
+              <div className="space-y-1">
+                <div className="text-sm font-bold">{t("settings.pureMode.toggleTitle")}</div>
+                <p className="text-xs text-muted-foreground max-w-lg leading-relaxed">{t("settings.pureMode.toggleDesc")}</p>
+              </div>
+              <button
+                role="switch"
+                aria-checked={pureSingleModelMode}
+                onClick={() => setPureSingleModelMode(!pureSingleModelMode)}
+                className={cn(
+                  "relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors duration-300",
+                  pureSingleModelMode ? "bg-primary" : "bg-white/15"
+                )}
+              >
+                <span
+                  className={cn(
+                    "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform duration-300",
+                    pureSingleModelMode ? "translate-x-6" : "translate-x-1"
+                  )}
+                />
+              </button>
+            </div>
+          </Card>
+
+          {/* 网页搜索（Tavily API Key） */}
+          <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-8 shadow-xl">
+            <div className="flex items-center gap-3 pb-4 border-b border-white/10">
+              <Search className="w-5 h-5 text-primary" />
+              <h2 className="text-xl font-bold dark:text-white">{t("settings.webSearch.title")}</h2>
+            </div>
+            <div className="space-y-4">
+              <div className="flex items-start justify-between gap-4 p-5 bg-white/5 rounded-2xl border border-white/5">
+                <p className="text-xs text-muted-foreground max-w-xl leading-relaxed">{t("settings.webSearch.desc")}</p>
+                <Badge
+                  className={cn(
+                    "shrink-0 border-none px-3 py-1 font-bold whitespace-nowrap",
+                    tavilyKeyConfigured ? "bg-emerald-500/20 text-emerald-500" : "bg-white/10 text-muted-foreground",
+                  )}
+                >
+                  {tavilyKeyConfigured ? t("settings.webSearch.configured") : t("settings.webSearch.notConfigured")}
+                </Badge>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto] p-5 bg-white/5 rounded-2xl border border-white/5">
+                <div className="space-y-2">
+                  <Label className="text-xs font-bold opacity-60">{t("settings.webSearch.apiKeyLabel")}</Label>
+                  <Input
+                    type="password"
+                    value={tavilyKeyInput}
+                    onChange={(event) => setTavilyKeyInput(event.target.value)}
+                    placeholder={t("settings.webSearch.apiKeyPlaceholder")}
+                    className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm dark:text-white"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <Button type="button" onClick={() => void handleSaveTavilyKey()} disabled={!tavilyKeyInput.trim()} className="rounded-xl whitespace-nowrap">
+                    {t("settings.webSearch.save")}
+                  </Button>
+                </div>
+                <div className="flex items-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void handleClearTavilyKey()}
+                    disabled={!tavilyKeyConfigured}
+                    className="rounded-xl whitespace-nowrap"
+                  >
+                    {t("settings.webSearch.clear")}
+                  </Button>
+                </div>
+              </div>
+              {tavilyMessage && <p className="text-xs text-primary font-bold">{tavilyMessage}</p>}
             </div>
           </Card>
 
@@ -161,8 +384,30 @@ export function SettingsPage() {
                   <div className="text-sm font-bold">{t("settings.security.apiKey.title")}</div>
                   <p className="text-xs text-muted-foreground">{t("settings.security.apiKey.desc")}</p>
                 </div>
-                <Badge className="bg-amber-500/20 text-amber-600 dark:text-amber-500 border-none px-3 py-1 font-bold whitespace-nowrap">{t("settings.security.encrypted")}</Badge>
+                <Badge className="bg-primary/20 text-primary dark:text-primary border-none px-3 py-1 font-bold whitespace-nowrap">{t("settings.security.encrypted")}</Badge>
               </div>
+            </div>
+          </Card>
+
+          {/* 项目资产（高级入口） */}
+          <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-6 shadow-xl">
+            <div className="flex items-center gap-3 pb-4 border-b border-white/10">
+              <FolderKanban className="w-5 h-5 text-primary" />
+              <h2 className="text-xl font-bold dark:text-white">{t("settings.projectAssets.title")}</h2>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 bg-white/5 rounded-2xl border border-white/5">
+              <div className="space-y-1">
+                <div className="text-sm font-bold">{t("settings.projectAssets.entryTitle")}</div>
+                <p className="text-xs text-muted-foreground max-w-xl leading-relaxed">{t("settings.projectAssets.entryDesc")}</p>
+              </div>
+              <Button
+                type="button"
+                onClick={onOpenProjectAssets}
+                disabled={!onOpenProjectAssets}
+                className="rounded-xl shrink-0"
+              >
+                {t("settings.projectAssets.open")}
+              </Button>
             </div>
           </Card>
 

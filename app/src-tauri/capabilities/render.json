@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "render-windows",
+  "description": "web_fetch Tier 3 用的隐藏渲染窗口（fetch_url_rendered 创建，label 形如 render-*）——只给它能调用自定义命令的最小权限，不给 sql/store/fs 这些能力。这个窗口加载的是外部网站（remote origin），必须显式声明 remote.urls，否则注入脚本回传内容的 report_rendered_page 调用会被 ACL 拒绝。",
+  "windows": ["render-*"],
+  "remote": {
+    "urls": ["http://*", "https://*"]
+  },
+  "permissions": ["core:default", "allow-report-rendered-page"]
+}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-spawn-cli-stream"
+description = "Enables the spawn_cli_stream command without any pre-configured scope."
+commands.allow = ["spawn_cli_stream"]
+
+[[permission]]
+identifier = "deny-spawn-cli-stream"
+description = "Denies the spawn_cli_stream command without any pre-configured scope."
+commands.deny = ["spawn_cli_stream"]

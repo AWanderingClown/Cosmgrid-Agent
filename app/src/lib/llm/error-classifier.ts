@@ -7,6 +7,13 @@
 // 1. sanitizeError 永远剥掉 API Key 模式（防御性）
 // 2. classifyLlmError 把错误分桶（401/403/429/超时/网络/未知）
 // 3. 返回结构化结果 {httpStatus, userMessage, technicalMessage}，让路由层决策怎么响应
+//
+// 1.2 修复（2026-07-02）：classifyLlmError 接受 providerType 第三参数，按 provider
+//   专属规则表匹配（覆盖国产 provider 中文错误体）；通用英文兜底保留作为最后防线。
+// 1.4 修复（2026-07-02）：新增 cli_not_installed / cli_not_logged_in 分类，
+//   专门给"本机 CLI 没装 / 没登录"用，UI 引导用户去安装而不是重试。
+
+import { getProviderPatterns, type ProviderErrorPatterns } from "./provider-error-rules";
 
 /**
  * LLM 错误分类
@@ -17,9 +24,29 @@ export type LlmErrorCategory =
   | "rate_limit" // 429 - 套餐耗尽
   | "timeout" // 请求超时
   | "network" // 网络故障
+  | "web_content_unavailable" // 外部网页/链接内容无法读取
   | "context_overflow" // 上下文超出窗口
   | "model_not_found" // 404 - 模型下线
   | "server_error" // 5xx - provider 服务故障
+  | "cli_not_installed" // 1.4 新增：spawn 失败，本机 CLI 程序不存在
+  // 1.4 新增，⚠️ 2026-07-02 代码审查发现：这个分类目前没有任何代码路径会真正产出它——
+  // extractCliKind 只识别 spawnFailed/executionFailed/stalled 三种，没有专门的"未登录"信号。
+  // "spawn 成功但未登录"这种场景目前会落进 executionFailed → 通用 server_error 兜底，
+  // 不会命中这个分类。真要实现，需要先跑一遍 claude/codex CLI 在未登录状态下的真实输出
+  // （类似 provider-error-rules.ts 的 probe 方式），拿到真实 stderr 文案再回填检测规则，
+  // 不能凭猜测写关键词匹配（这正是 1.2 那批 provider 规则最初的教训）。保留这个分类是
+  // 因为它是一个有意义的未来分支，但目前是声明了但未接线的状态，不要以为它已经生效。
+  | "cli_not_logged_in"
+  // 修复（2026-07-02，用户实测发现）：chat-fallback.ts 撞到步数/续跑预算上限时抛的
+  // 裸英文 Error（"truncated after N automatic continuations" / "ended abnormally"），
+  // 之前没有任何分类规则命中，落进 unknown 变成"对话失败，请稍后重试"——这句话具有
+  // 误导性，暗示重试能解决，但如果是任务太复杂/多步预算不够，原样重试大概率还会再撞上。
+  | "tool_budget_exhausted"
+  // 修复（2026-07-05，用户实测发现）：链上所有模型都在失败冷却中时 chat-fallback.ts
+  // 抛的裸英文 Error（"All models are cooling down: ..."），之前落进 unknown，用户只看到
+  // 一句生硬英文，不知道具体哪几个模型、还要等多久，也不知道重启 app 能立即清空冷却
+  // （冷却状态只在内存里，见 model-cooldown.ts）。
+  | "all_models_cooling"
   | "unknown"; // 其他
 
 /**
@@ -103,22 +130,190 @@ function extractMessage(error: unknown): string {
 }
 
 /**
+ * 提取 CLI 错误 kind（1.4 修复）。
+ * cli-engine.ts 抛 Error 时挂的 __cliKind 字段（"spawnFailed" / "executionFailed" / "stalled"）。
+ * 有这个字段说明错误来自 CLI 路径，应优先按 CLI 场景分类（不要走通用网络/超时）。
+ */
+function extractCliKind(error: unknown): "spawnFailed" | "executionFailed" | "stalled" | null {
+  if (typeof error !== "object" || error === null) return null;
+  const e = error as Record<string, unknown>;
+  const kind = e.__cliKind;
+  if (kind === "spawnFailed" || kind === "executionFailed" || kind === "stalled") return kind;
+  return null;
+}
+
+/**
+ * 按 provider 专属**状态码**匹配错误分类（1.2 修复）。
+ * 只看 statusCode，不看关键词。
+ * 必须在通用 HTTP 状态码检查之前调用——否则像智谱 1214（限流，数值上落在 5xx 区间）
+ * 会被通用 statusCode >= 500 分支先收走为 server_error。
+ *
+ * **只匹配 provider 自定义 code**（不在标准 HTTP 401/403/404/413/429/5xx 范围内的）。
+ * 标准 HTTP 状态码让通用分支处理（401 → auth_invalid，403 → auth_forbidden，等等），
+ * 这样 provider rules 不会跟通用语义冲突。
+ */
+const HTTP_STANDARD_STATUS_CODES = new Set<number>([
+  401, 403, 404, 413, 429, 500, 501, 502, 503, 504, 505,
+  // 5xx 通用范围（只列 500-505，其他 5xx 一律走 provider rules / 通用 server_error）
+]);
+
+function isStandardHttpStatusCode(statusCode: number): boolean {
+  if (HTTP_STANDARD_STATUS_CODES.has(statusCode)) return true;
+  if (statusCode >= 500 && statusCode <= 505) return true;
+  return false;
+}
+
+function matchProviderByStatusCode(
+  patterns: ProviderErrorPatterns,
+  statusCode: number | undefined,
+): LlmErrorCategory | null {
+  if (statusCode === undefined) return null;
+  // 标准 HTTP 状态码让通用分支处理，不在这里匹配
+  if (isStandardHttpStatusCode(statusCode)) return null;
+  if (patterns.rateLimitStatusCodes.includes(statusCode)) return "rate_limit";
+  if (patterns.authStatusCodes.includes(statusCode)) return "auth_invalid";
+  if (patterns.contextOverflowStatusCodes.includes(statusCode)) return "context_overflow";
+  if (patterns.modelNotFoundStatusCodes.includes(statusCode)) return "model_not_found";
+  return null;
+}
+
+/**
+ * 按 provider 专属**关键词**匹配错误分类（1.2 修复）。
+ * 只看关键词（错误文本已 lowercase），不看 statusCode。
+ * 在通用英文兜底之前调用——覆盖国产 provider 中文错误体。
+ *
+ * 优先级：rate_limit > auth_invalid > context_overflow > model_not_found
+ * （多个分类都命中时按优先级取第一个）
+ */
+function matchProviderByKeywords(
+  patterns: ProviderErrorPatterns,
+  lower: string,
+): LlmErrorCategory | null {
+  if (patterns.rateLimitKeywords.some((k) => lower.includes(k.toLowerCase()))) return "rate_limit";
+  if (patterns.authKeywords.some((k) => lower.includes(k.toLowerCase()))) return "auth_invalid";
+  if (patterns.contextOverflowKeywords.some((k) => lower.includes(k.toLowerCase()))) return "context_overflow";
+  if (patterns.modelNotFoundKeywords.some((k) => lower.includes(k.toLowerCase()))) return "model_not_found";
+  return null;
+}
+
+/**
+ * 把 provider 匹配出的 category 构造成完整 ClassifiedLlmError（1.2 修复）。
+ */
+function buildProviderCategorized(
+  category: LlmErrorCategory,
+  sanitized: string,
+  msg: (zh: string, key: string) => string,
+): ClassifiedLlmError {
+  switch (category) {
+    case "rate_limit":
+      return {
+        category: "rate_limit",
+        httpStatus: 429,
+        userMessage: msg(
+          "套餐额度已耗尽或被限流，请稍后重试或检查套餐状态",
+          "errorClassifier.rate_limit",
+        ),
+        technicalMessage: sanitized,
+        shouldFallback: true,
+      };
+    case "auth_invalid":
+      return {
+        category: "auth_invalid",
+        httpStatus: 401,
+        userMessage: msg(
+          "API Key 无效或已过期，请在 API 接入页检查",
+          "errorClassifier.auth_invalid",
+        ),
+        technicalMessage: sanitized,
+        shouldFallback: true,
+      };
+    case "context_overflow":
+      return {
+        category: "context_overflow",
+        httpStatus: 413,
+        userMessage: msg(
+          "对话内容超出模型上下文窗口，请新建对话或缩短历史",
+          "errorClassifier.context_overflow",
+        ),
+        technicalMessage: sanitized,
+        shouldFallback: false,
+      };
+    case "model_not_found":
+      return {
+        category: "model_not_found",
+        httpStatus: 404,
+        userMessage: msg(
+          "模型不存在或已下线，请检查模型名称",
+          "errorClassifier.model_not_found",
+        ),
+        technicalMessage: sanitized,
+        shouldFallback: true,
+      };
+    default:
+      return {
+        category: "unknown",
+        httpStatus: 500,
+        userMessage: msg("对话失败，请稍后重试", "errorClassifier.unknown"),
+        technicalMessage: sanitized,
+        shouldFallback: false,
+      };
+  }
+}
+
+/**
  * 把 LLM 错误分桶成结构化结果
  * @param error - 原始错误（可能是 Vercel AI SDK 的 AIError / fetch 错误 / 任意 Error）
  * @param t - (可选) i18next t 函数，传了之后 userMessage 会用 t() 翻译
+ * @param providerType - (可选) provider 类型（如 "anthropic" / "openai" / "MiniMax" / "deepseek" / "glm" / "kimi"），
+ *   传了之后会按 provider 专属规则表优先匹配（覆盖国产 provider 中文错误体）。
+ *   不传或未注册的 provider 走通用英文兜底。
  * @returns 分类结果 + 友好文案
  */
 export function classifyLlmError(
   error: unknown,
   t?: (k: string) => string,
+  providerType?: string,
 ): ClassifiedLlmError {
   const rawMessage = extractMessage(error);
   const statusCode = extractStatusCode(error);
   const sanitized = sanitizeError(rawMessage);
+
+  // 1.4 修复：CLI 路径错误优先识别（不走通用 HTTP 检查，spawn 失败没 statusCode）
+  const cliKind = extractCliKind(error);
+  if (cliKind === "spawnFailed") {
+    return {
+      category: "cli_not_installed",
+      httpStatus: 500,
+      userMessage: "没有检测到本机安装的 Claude/Codex CLI，请先在终端运行 `claude login` 或安装 CLI 后再试",
+      technicalMessage: sanitized,
+      // 关键：not_found 错误不能切 fallback（换别的模型救不了），必须让用户先装 CLI
+      shouldFallback: false,
+    };
+  }
+  if (cliKind === "stalled") {
+    return {
+      category: "timeout",
+      httpStatus: 504,
+      userMessage: "CLI 进程卡死未产生任何事件，已自动终止，请重试",
+      technicalMessage: sanitized,
+      shouldFallback: true,
+    };
+  }
+  // executionFailed 走通用 server_error 兜底（保持现有 fallback 行为）
+
   // 没传 t 时用中文（向后兼容）；传了 t 时用 t() 翻译，缺失 fallback 到 key
   const msg = (zh: string, key: string) => (t ? (t(key) || zh) : zh);
 
   // 按 HTTP 状态码优先分类
+
+  // 1.2 修复：先按 provider 自定义状态码检查（必须在通用 HTTP 检查之前，
+  // 否则智谱 1214 这类数值上落在 5xx 区间的 code 会被收走为 server_error）
+  const patterns = getProviderPatterns(providerType);
+  const byStatus = matchProviderByStatusCode(patterns, statusCode);
+  if (byStatus) {
+    return buildProviderCategorized(byStatus, sanitized, msg);
+  }
+
   if (statusCode === 401) {
     return {
       category: "auth_invalid",
@@ -126,6 +321,16 @@ export function classifyLlmError(
       userMessage: msg("API Key 无效或已过期，请在 API 接入页检查", "errorClassifier.auth_invalid"),
       technicalMessage: sanitized,
       shouldFallback: true,
+    };
+  }
+
+  if (/401|invalid authentication credentials|failed to authenticate|authentication_failed/i.test(rawMessage)) {
+    return {
+      category: "auth_invalid",
+      httpStatus: 401,
+      userMessage: msg("登录凭据无效或已过期，请重新登录对应 CLI / API 账号", "errorClassifier.auth_invalid"),
+      technicalMessage: sanitized,
+      shouldFallback: false,
     };
   }
   if (statusCode === 403) {
@@ -175,8 +380,85 @@ export function classifyLlmError(
     };
   }
 
-  // 没状态码时按错误文本分类
   const lower = rawMessage.toLowerCase();
+
+  // 1.2 修复：provider 专属关键词匹配（在通用英文兜底前按 provider 规则查）
+  // 覆盖国产 provider 的中文错误体（如 MiniMax "余额不足" / 智谱 "鉴权失败"）
+  const matchedByProvider = matchProviderByKeywords(patterns, lower);
+  if (matchedByProvider) {
+    return buildProviderCategorized(matchedByProvider, sanitized, msg);
+  }
+
+  // 没状态码时按错误文本分类（通用英文兜底，保留作为最后防线）
+  if (
+    lower.includes("rate limit") ||
+    lower.includes("rate_limit") ||
+    lower.includes("quota exceeded") ||
+    lower.includes("usage limit") ||
+    lower.includes("too many requests")
+  ) {
+    return {
+      category: "rate_limit",
+      httpStatus: 429,
+      userMessage: msg("套餐额度已耗尽或被限流，请稍后重试或检查套餐状态", "errorClassifier.rate_limit"),
+      technicalMessage: sanitized,
+      shouldFallback: true,
+    };
+  }
+  if (
+    lower.includes("unauthorized") ||
+    lower.includes("invalid api key") ||
+    lower.includes("invalid token") ||
+    lower.includes("authentication failed") ||
+    lower.includes("auth failed")
+  ) {
+    return {
+      category: "auth_invalid",
+      httpStatus: 401,
+      userMessage: msg("API Key 无效或已过期，请在 API 接入页检查", "errorClassifier.auth_invalid"),
+      technicalMessage: sanitized,
+      shouldFallback: true,
+    };
+  }
+  if (
+    lower.includes("cli exited with code") ||
+    lower.includes("process exited with code") ||
+    lower.includes("child process exited") ||
+    lower.includes("subprocess exited")
+  ) {
+    return {
+      category: "server_error",
+      httpStatus: 502,
+      userMessage: msg("AI 执行进程异常退出，正在尝试自动恢复", "errorClassifier.server_error"),
+      technicalMessage: sanitized,
+      shouldFallback: true,
+    };
+  }
+  if (
+    lower === "load failed" ||
+    lower.includes("failed to load") ||
+    lower.includes("url content") ||
+    lower.includes("unsupported url") ||
+    lower.includes("unable to access url")
+  ) {
+    return {
+      category: "web_content_unavailable",
+      httpStatus: 422,
+      userMessage: msg("外部链接内容读取失败。微信文章这类页面经常需要登录或被防抓取，请把正文粘贴进来，或截图/导出后发给我，我再按参考文章重写。", "errorClassifier.web_content_unavailable"),
+      technicalMessage: sanitized,
+      shouldFallback: false,
+    };
+  }
+  if (rawMessage.includes("SSE_CHUNK_TIMEOUT")) {
+    // provider 流式响应中途死寂（干完活没发结束信号 / 连接僵死）。按可恢复处理：切下一个模型续。
+    return {
+      category: "timeout",
+      httpStatus: 504,
+      userMessage: msg("当前模型响应中断（可能已完成但未正常结束），正在自动切换模型继续", "errorClassifier.stream_stalled"),
+      technicalMessage: sanitized,
+      shouldFallback: true,
+    };
+  }
   if (lower.includes("timeout") || lower.includes("aborted") || lower.includes("timed out")) {
     return {
       category: "timeout",
@@ -198,6 +480,50 @@ export function classifyLlmError(
       userMessage: msg("网络连接失败，请检查网络或 Base URL 配置", "errorClassifier.network"),
       technicalMessage: sanitized,
       shouldFallback: true,
+    };
+  }
+
+  // 修复（2026-07-05）：链上所有模型都在冷却中时的裸错误，见 chat-fallback.ts。
+  // detail 部分（冒号后面）在抛错时已经拼好了中文"模型名（还需 N 分钟）"，这里原样透出，
+  // 不重新解析——两边约定好格式即可，不用把冷却状态结构穿两遍。
+  if (lower.startsWith("all models are cooling down")) {
+    // 注意：detail 里含运行时才知道的模型名/剩余分钟，天生没法走 msg() 那套"静态 zh
+    // 兜底 + i18n key"模式（key 查回来的是写死的静态文案，会把这些动态信息盖掉）——
+    // 这里直接拼接返回，不接 t()。
+    const detail = rawMessage.slice(rawMessage.indexOf(":") + 1).trim();
+    return {
+      category: "all_models_cooling",
+      httpStatus: 503,
+      userMessage: `所有可用模型目前都在冷却中：${detail}。重启应用可立即清空冷却状态后重试，或稍等冷却结束`,
+      technicalMessage: sanitized,
+      shouldFallback: false,
+    };
+  }
+
+  // 修复（2026-07-02）：chat-fallback.ts 撞到自动续跑上限/finishReason异常时抛的裸错误，
+  // 只有在链上最后一个模型也失败时才会抛出（前面的模型已经全部试过），所以不用 shouldFallback。
+  if (lower.includes("truncated after") && lower.includes("automatic continuations")) {
+    return {
+      category: "tool_budget_exhausted",
+      httpStatus: 500,
+      userMessage: msg(
+        "这轮任务需要的步骤比较多，没能在预算内跑完。建议把任务拆成更小的步骤分开说，或者换个模型试试",
+        "errorClassifier.tool_budget_exhausted",
+      ),
+      technicalMessage: sanitized,
+      shouldFallback: false,
+    };
+  }
+  if (lower.includes("ended abnormally")) {
+    return {
+      category: "tool_budget_exhausted",
+      httpStatus: 500,
+      userMessage: msg(
+        "模型这轮没能正常结束回复，可能是任务太复杂或触发了重复调用保护。建议把任务拆成更小的步骤分开说",
+        "errorClassifier.tool_budget_exhausted",
+      ),
+      technicalMessage: sanitized,
+      shouldFallback: false,
     };
   }
 

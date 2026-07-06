@@ -1,7 +1,7 @@
 // TokenPlansPage - 重构为 "Cosmic Cyber" 视觉风格
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Coins, Trash2, Gauge, Activity, Calendar, ShieldCheck } from "lucide-react";
+import { Plus, Coins, Trash2, Pencil, Gauge, Activity, Calendar, ShieldCheck, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -24,42 +24,53 @@ import {
 import {
   tokenPlans as dbTokenPlans,
   providers as dbProviders,
+  usageEvents,
   type TokenPlan,
   type Provider,
 } from "@/lib/db";
+import { computeTokenPlanUsageMap, type TokenPlanUsageSnapshot } from "@/lib/llm/token-plan-usage";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 
 const PLAN_TYPE_KEYS = ["monthly", "usage", "message_count", "token_pack", "time_window", "unknown"] as const;
 const QUOTA_UNIT_KEYS = ["token", "request", "message", "usd", "time"] as const;
 
-function statusOf(p: TokenPlan, t: (k: string) => string): { label: string; color: string } {
+function statusOf(p: TokenPlan, usedQuota: number, t: (k: string) => string): { label: string; color: string } {
   if (!p.totalQuota) return { label: t("tokenPlans.monitoring"), color: "text-blue-400" };
-  const ratio = p.usedQuota / p.totalQuota;
+  const ratio = usedQuota / p.totalQuota;
   if (ratio >= 1) return { label: t("tokenPlans.status.exhausted"), color: "text-red-500" };
   if (ratio >= 0.8) return { label: t("tokenPlans.status.warn"), color: "text-orange-500" };
   return { label: t("tokenPlans.status.ok"), color: "text-emerald-400" };
 }
 
+function formatQuota(value: number, unit: string): string {
+  return value.toLocaleString(undefined, {
+    maximumFractionDigits: unit === "usd" ? 4 : 0,
+  });
+}
+
 export function TokenPlansPage() {
   const { t } = useTranslation();
+  const { confirm } = useConfirm();
   const [plans, setPlans] = useState<TokenPlan[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [usageByPlan, setUsageByPlan] = useState<Map<string, TokenPlanUsageSnapshot>>(new Map());
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [form, setForm] = useState({
-    providerId: "",
-    name: "",
-    planType: "monthly",
-    quotaUnit: "usd",
-    totalQuota: "",
-    resetRule: "",
-  });
+  const emptyForm = { providerId: "", name: "", planType: "monthly", quotaUnit: "usd", totalQuota: "", resetRule: "" };
+  const [form, setForm] = useState(emptyForm);
 
   async function load() {
     try {
-      const [p, pr] = await Promise.all([dbTokenPlans.list(), dbProviders.list()]);
+      const [p, pr, usageRows] = await Promise.all([
+        dbTokenPlans.list(),
+        dbProviders.list(),
+        usageEvents.list(),
+      ]);
       setPlans(p);
       setProviders(pr);
+      setUsageByPlan(computeTokenPlanUsageMap(p, usageRows));
       setLoadError(null);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : t("common.error"));
@@ -70,23 +81,52 @@ export function TokenPlansPage() {
     void load();
   }, []);
 
-  async function handleCreate() {
+  function openCreate() {
+    setEditingId(null);
+    setForm(emptyForm);
+    setDialogOpen(true);
+  }
+
+  function openEdit(p: TokenPlan) {
+    setEditingId(p.id);
+    setForm({
+      providerId: p.providerId,
+      name: p.name,
+      planType: p.planType,
+      quotaUnit: p.quotaUnit,
+      totalQuota: p.totalQuota != null ? String(p.totalQuota) : "",
+      resetRule: p.resetRule ?? "",
+    });
+    setDialogOpen(true);
+  }
+
+  function closeDialog() {
+    setDialogOpen(false);
+    setEditingId(null);
+    setForm(emptyForm);
+  }
+
+  async function handleSubmit() {
     if (!form.providerId || !form.name) return;
-    await dbTokenPlans.create({
+    const payload = {
       providerId: form.providerId,
       name: form.name,
       planType: form.planType,
       quotaUnit: form.quotaUnit,
       totalQuota: form.totalQuota ? Number(form.totalQuota) : null,
       resetRule: form.resetRule || null,
-    });
-    setDialogOpen(false);
-    setForm({ providerId: "", name: "", planType: "monthly", quotaUnit: "usd", totalQuota: "", resetRule: "" });
+    };
+    if (editingId) {
+      await dbTokenPlans.update(editingId, payload);
+    } else {
+      await dbTokenPlans.create(payload);
+    }
+    closeDialog();
     await load();
   }
 
   async function handleDelete(id: string) {
-    if (!confirm(t("tokenPlans.deleteConfirm"))) return;
+    if (!(await confirm({ description: t("tokenPlans.deleteConfirm"), destructive: true }))) return;
     await dbTokenPlans.delete(id);
     await load();
   }
@@ -109,8 +149,8 @@ export function TokenPlansPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
-      <div className="max-w-6xl mx-auto space-y-8">
+    <div className="h-full w-full overflow-y-auto p-8 bg-background/30 backdrop-blur-sm custom-scrollbar">
+      <div className="space-y-8">
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-primary">
@@ -123,7 +163,7 @@ export function TokenPlansPage() {
             </p>
           </div>
           <Button
-            onClick={() => setDialogOpen(true)}
+            onClick={openCreate}
             disabled={providers.length === 0}
             className="rounded-xl px-6 h-11 bg-primary shadow-lg shadow-primary/20 hover:scale-105 transition-all"
           >
@@ -150,8 +190,10 @@ export function TokenPlansPage() {
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {plans.map((p) => {
-              const st = statusOf(p, t);
-              const ratio = p.totalQuota ? (p.usedQuota / p.totalQuota) * 100 : 0;
+              const usage = usageByPlan.get(p.id);
+              const displayUsedQuota = usage?.usedQuota ?? p.usedQuota;
+              const st = statusOf(p, displayUsedQuota, t);
+              const ratio = p.totalQuota ? (displayUsedQuota / p.totalQuota) * 100 : 0;
               const isHigh = ratio >= 80;
 
               return (
@@ -171,21 +213,33 @@ export function TokenPlansPage() {
                           </div>
                         </div>
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleDelete(p.id)}
-                        className="rounded-xl hover:bg-red-500/10 hover:text-red-500 transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => openEdit(p)}
+                          title={t("common.edit")}
+                          className="rounded-xl hover:bg-primary/10 hover:text-primary transition-colors"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleDelete(p.id)}
+                          title={t("common.delete")}
+                          className="rounded-xl hover:bg-red-500/10 hover:text-red-500 transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
                     </div>
 
                     <div className="space-y-3">
                       <div className="flex justify-between items-end px-1">
                         <div className="flex items-baseline gap-1">
                           <span className="text-2xl font-mono font-bold tracking-tighter">
-                            {p.usedQuota.toLocaleString()}
+                            {formatQuota(displayUsedQuota, p.quotaUnit)}
                           </span>
                           <span className="text-[10px] font-bold text-muted-foreground uppercase">{p.quotaUnit}</span>
                         </div>
@@ -221,15 +275,33 @@ export function TokenPlansPage() {
                       )}
 
                       <div className="ml-auto flex items-center gap-2">
-                        <span className="text-[10px] font-bold text-muted-foreground/40 uppercase">{t("tokenPlans.used")}</span>
-                        <Input
-                          type="number"
-                          defaultValue={p.usedQuota}
-                          onBlur={(e) => void handleUsedQuotaChange(p, e.target.value)}
-                          className="h-7 w-20 text-[10px] font-mono bg-white/5 border-white/10 rounded-lg focus:ring-primary/20"
-                        />
+                        {usage?.source === "recorded" ? (
+                          <div className="flex flex-col items-end gap-1">
+                            <span className="text-[10px] font-bold text-emerald-500 uppercase">{t("tokenPlans.autoRecorded")}</span>
+                            <span className="text-[9px] text-muted-foreground/50">
+                              {t("tokenPlans.recordedEvents", { n: usage.recordedEvents })}
+                            </span>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="text-[10px] font-bold text-muted-foreground/40 uppercase">{t("tokenPlans.used")}</span>
+                            <Input
+                              type="number"
+                              defaultValue={p.usedQuota}
+                              onBlur={(e) => void handleUsedQuotaChange(p, e.target.value)}
+                              className="h-7 w-20 text-[10px] font-mono bg-white/5 border-white/10 rounded-lg focus:ring-primary/20"
+                            />
+                          </>
+                        )}
                       </div>
                     </div>
+
+                    {usage?.unknownPricingCalls ? (
+                      <div className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[10px] font-medium text-amber-500">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                        {t("tokenPlans.priceIncomplete", { n: usage.unknownPricingCalls })}
+                      </div>
+                    ) : null}
                   </div>
                 </Card>
               );
@@ -238,12 +310,12 @@ export function TokenPlansPage() {
         )}
       </div>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={dialogOpen} onOpenChange={(o) => { if (!o) closeDialog(); }}>
         <DialogContent className="glass border-white/10 rounded-[2rem] max-w-md">
           <DialogHeader>
             <DialogTitle className="text-xl font-bold flex items-center gap-2">
-              <Plus className="w-5 h-5 text-primary" />
-              {t("tokenPlans.createDialog.title")}
+              {editingId ? <Pencil className="w-5 h-5 text-primary" /> : <Plus className="w-5 h-5 text-primary" />}
+              {editingId ? t("tokenPlans.editDialog.title") : t("tokenPlans.createDialog.title")}
             </DialogTitle>
           </DialogHeader>
 
@@ -325,11 +397,11 @@ export function TokenPlansPage() {
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="ghost" onClick={() => setDialogOpen(false)} className="rounded-xl h-11">
+            <Button variant="ghost" onClick={closeDialog} className="rounded-xl h-11">
               {t("common.cancel")}
             </Button>
-            <Button onClick={handleCreate} className="rounded-xl h-11 px-8 bg-primary shadow-lg shadow-primary/20">
-              {t("tokenPlans.createDialog.confirm")}
+            <Button onClick={() => void handleSubmit()} className="rounded-xl h-11 px-8 bg-primary shadow-lg shadow-primary/20">
+              {editingId ? t("common.save") : t("tokenPlans.createDialog.confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>

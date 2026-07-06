@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-git-read"
+description = "Enables the git_read command without any pre-configured scope."
+commands.allow = ["git_read"]
+
+[[permission]]
+identifier = "deny-git-read"
+description = "Denies the git_read command without any pre-configured scope."
+commands.deny = ["git_read"]

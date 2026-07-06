@@ -46,6 +46,13 @@ export function markModelSucceeded(modelId: string): void {
   state.delete(modelId);
 }
 
+/** 距冷却结束还剩多少毫秒（不在冷却中 / 已过期 → 0）。给"全员冷却"报错拼出"还需 N 分钟"用。 */
+export function getCooldownRemainingMs(modelId: string): number {
+  const s = state.get(modelId);
+  if (!s || s.cooldownUntil === null) return 0;
+  return Math.max(0, s.cooldownUntil - Date.now());
+}
+
 /** 单测用：清空所有 cooldown 状态 */
 export function _resetCooldowns(): void {
   state.clear();

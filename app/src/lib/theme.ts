@@ -1,23 +1,42 @@
-// 主题切换 hook：浅/深模式
-// - 启动时读 localStorage > 系统偏好 > 默认浅色
-// - 切换时写 localStorage + html.class
+// 主题切换 hook：浅色 / 深色 / 跟随系统
+// - 新安装默认跟随系统
+// - 用户手动切换后写入新 key；旧版默认写入的 dark 不再锁死主题
 import { useEffect, useState } from "react";
 
-export type Theme = "light" | "dark";
+export type Theme = "light" | "dark" | "system";
+type ResolvedTheme = "light" | "dark";
 
-const STORAGE_KEY = "cosmgrid.theme";
+export const LEGACY_THEME_STORAGE_KEY = "cosmgrid.theme";
+export const THEME_STORAGE_KEY = "cosmgrid.theme.v2";
 
-function getInitialTheme(): Theme {
-  if (typeof window === "undefined") return "dark";
-  const stored = localStorage.getItem(STORAGE_KEY) as Theme | null;
-  if (stored === "light" || stored === "dark") return stored;
-  // 默认深色（参考官网风格）
-  return "dark";
+function isTheme(value: string | null): value is Theme {
+  return value === "light" || value === "dark" || value === "system";
+}
+
+function systemTheme(): ResolvedTheme {
+  if (typeof window === "undefined") return "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+export function getInitialTheme(): Theme {
+  if (typeof localStorage === "undefined") return "system";
+  const stored = localStorage.getItem(THEME_STORAGE_KEY);
+  if (isTheme(stored)) return stored;
+
+  // 旧版启动会把默认 dark 写进 cosmgrid.theme。没有 v2 key 时，把它当作“未选择”，默认跟随系统。
+  const legacy = localStorage.getItem(LEGACY_THEME_STORAGE_KEY);
+  if (legacy === "light") return "light";
+  return "system";
+}
+
+export function resolveTheme(theme: Theme): ResolvedTheme {
+  return theme === "system" ? systemTheme() : theme;
 }
 
 function applyTheme(theme: Theme) {
+  const resolved = resolveTheme(theme);
   const root = document.documentElement;
-  if (theme === "dark") {
+  if (resolved === "dark") {
     root.classList.add("dark");
   } else {
     root.classList.remove("dark");
@@ -27,7 +46,7 @@ function applyTheme(theme: Theme) {
   if (meta) {
     meta.setAttribute(
       "content",
-      theme === "dark" ? "#0F172A" : "#FFFFFF",
+      resolved === "dark" ? "#0F172A" : "#FFFFFF",
     );
   }
 }
@@ -45,28 +64,25 @@ export function useTheme(): {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 主题变化时同步
+  // 主题变化时同步用户选择
   useEffect(() => {
     applyTheme(theme);
-    localStorage.setItem(STORAGE_KEY, theme);
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
 
-  // 监听系统主题变化（用户没手动设过时跟随）
+  // 监听系统主题变化（仅“跟随系统”时实时更新外观）
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = (e: MediaQueryListEvent) => {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored !== "light" && stored !== "dark") {
-        setThemeState(e.matches ? "dark" : "light");
-      }
+    const handler = () => {
+      if (theme === "system") applyTheme("system");
     };
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
-  }, []);
+  }, [theme]);
 
   return {
     theme,
-    toggleTheme: () => setThemeState((t) => (t === "light" ? "dark" : "light")),
+    toggleTheme: () => setThemeState((t) => (resolveTheme(t) === "light" ? "dark" : "light")),
     setTheme: setThemeState,
   };
 }

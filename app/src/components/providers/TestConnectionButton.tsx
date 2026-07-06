@@ -81,27 +81,20 @@ export function TestConnectionButton({
         {testing ? t("addProvider.testing") : t("addProvider.testConnection")}
       </Button>
       {result && (
+        // 注意：图标与 AlertDescription 必须是 Alert 的「直接子元素」——
+        // shadcn Alert 是 grid 布局，靠 has-[>svg] 给图标列宽度、AlertDescription 用 col-start-2 占满。
+        // 若再包一层 <div>，该 div 会落进 0 宽的第一列，导致中文逐字竖排（之前的 bug）。
         <Alert variant={result.success ? "default" : "destructive"}>
-          <div className="flex items-center gap-2">
-            {result.success ? (
-              <>
-                <CheckCircle2 className="w-4 h-4 text-green-500" />
-                <AlertDescription>
-                  {result.latencyMs
-                    ? t("addProvider.connectSuccessWithLatency", { ms: result.latencyMs })
-                    : t("addProvider.connectSuccess")}
-                  {result.modelResponse ? `: ${result.modelResponse}` : ""}
-                </AlertDescription>
-              </>
-            ) : (
-              <>
-                <XCircle className="w-4 h-4" />
-                <AlertDescription>
-                  {t("addProvider.connectFailed", { error: result.error?.userMessage ?? t("addProvider.unknownError") })}
-                </AlertDescription>
-              </>
-            )}
-          </div>
+          {result.success ? (
+            <CheckCircle2 className="text-green-500" />
+          ) : (
+            <XCircle />
+          )}
+          <AlertDescription>
+            {result.success
+              ? `${result.latencyMs ? t("addProvider.connectSuccessWithLatency", { ms: result.latencyMs }) : t("addProvider.connectSuccess")}${result.modelResponse ? `: ${result.modelResponse}` : ""}`
+              : t("addProvider.connectFailed", { error: result.error?.userMessage ?? t("addProvider.unknownError") })}
+          </AlertDescription>
         </Alert>
       )}
     </div>

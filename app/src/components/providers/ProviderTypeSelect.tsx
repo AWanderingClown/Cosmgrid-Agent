@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 
-export const PROVIDER_TYPES = [
+const PROVIDER_TYPES = [
   { value: "anthropic", labelKey: "addProvider.providerTypes.anthropic" },
   { value: "openai", labelKey: "addProvider.providerTypes.openai" },
   { value: "google", labelKey: "addProvider.providerTypes.google" },
