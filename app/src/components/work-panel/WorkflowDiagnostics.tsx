@@ -1,7 +1,7 @@
 import { AlertTriangle, GitBranch, Hammer, Route, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ToolCallView } from "@/lib/work-artifact-views";
-import type { WorkflowAuditEventLike } from "@/lib/workflow/audit";
+import type { WorkflowAuditEventLike } from "@/lib/db/workflow-audit";
 import type { WorkflowSnapshot } from "@/lib/workflow/types";
 import type { ChatMessage } from "@/pages/chat/types";
 import { deriveWorkflowDiagnostics } from "./derive-workflow-diagnostics";

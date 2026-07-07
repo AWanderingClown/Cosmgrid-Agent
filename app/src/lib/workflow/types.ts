@@ -1,4 +1,4 @@
-import type { RoleId } from "@/lib/llm/orchestrator";
+import type { RoleId } from "@/lib/roles";
 
 export type TurnAction =
   | "start_run"

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createCodeTaskWorkflowSnapshot } from "../code-task-template";
-import { deriveWorkflowAuditSummary } from "../audit";
+import { createCodeTaskWorkflowSnapshot } from "../../workflow/code-task-template";
+import { deriveWorkflowAuditSummary } from "../workflow-audit";
 
 function snapshot() {
   const base = createCodeTaskWorkflowSnapshot({

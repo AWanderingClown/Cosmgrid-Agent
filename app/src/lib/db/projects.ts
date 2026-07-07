@@ -1,5 +1,5 @@
 import { RETIRED_BUILT_IN_TEMPLATE_NAMES } from "../templates";
-import { ROLE_IDS, type RoleId } from "../llm/orchestrator";
+import { ROLE_IDS, type RoleId } from "../roles";
 import { getDb } from "./connection";
 import { boolToInt, newId, now } from "./utils";
 

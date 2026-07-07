@@ -1,6 +1,6 @@
 import type { IntentRouteAction } from "../workflow/semantic-intent-router";
 import type { WorkflowRunStatus, WorkflowSnapshot } from "../workflow/types";
-import { deriveWorkflowAuditSummary, type WorkflowAuditSummary } from "../workflow/audit";
+import { deriveWorkflowAuditSummary, type WorkflowAuditSummary } from "./workflow-audit";
 import { getDb } from "./connection";
 import { boolToInt, newId, now } from "./utils";
 

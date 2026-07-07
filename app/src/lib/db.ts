@@ -3,7 +3,7 @@
 // 所有 id 用 crypto.randomUUID()，Boolean 存 INTEGER，DateTime 存 TEXT ISO
 
 import { BUILT_IN_TEMPLATES } from "./templates";
-import { ROLE_IDS, type RoleId } from "./llm/orchestrator";
+import { ROLE_IDS, type RoleId } from "./roles";
 import { getDb } from "./db/connection";
 import { conversations } from "./db/conversations";
 import { projectTemplateRoles, projects } from "./db/projects";

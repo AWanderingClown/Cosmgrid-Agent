@@ -27,28 +27,9 @@ import type { ScorableModel } from "./model-capabilities";
 import { detectModelTier } from "./model-capabilities";
 import { pickBestModelWithRolePerformance, type RolePerformanceScores } from "./model-performance-scoring";
 import type { WorkRole } from "../api";
+import { ROLE_IDS, type RoleId } from "../roles";
 
-/** 8 个团队角色（阶段 C 引入）。
- *  - leader:    团队 Leader / 编排者（粗活，便宜档；用户手选不覆盖）
- *  - architect: 方案 / 架构评审（精活，强模型）
- *  - frontend:  前端工程师
- *  - backend:   后端工程师
- *  - runner:    运行执行员（粗活，便宜；跑 build/lint/起服务）
- *  - tester:    测试工程师
- *  - reviewer:  审查工程师（强模型；只在用户明确说审查/复核/检查时才激活）
- *  - security:  安全工程师（强模型；只在用户明确要安全检查时激活）
- */
-export const ROLE_IDS = [
-  "leader",
-  "architect",
-  "frontend",
-  "backend",
-  "runner",
-  "tester",
-  "reviewer",
-  "security",
-] as const;
-export type RoleId = (typeof ROLE_IDS)[number];
+export { ROLE_IDS, type RoleId };
 
 /** 角色 → 用于模型评分的 workRole（复用 model-capabilities 的角色能力分）
  *  - security 暂用 final_review（终审）；runner 暂用 direct_generation（直生成）—— 13 个 workRoles 里没有专门的 terminal/security

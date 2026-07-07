@@ -1,4 +1,4 @@
-import { inferModelCapabilities } from "../llm/model-capabilities";
+import { inferModelCapabilities } from "../model-capabilities";
 import type { DatabaseLike } from "../db-migrations";
 
 function now(): string {

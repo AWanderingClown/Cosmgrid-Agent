@@ -1,5 +1,5 @@
 import type { ToolCallView } from "@/lib/work-artifact-views";
-import { deriveWorkflowAuditSummary, type WorkflowAuditEventLike } from "@/lib/workflow/audit";
+import { deriveWorkflowAuditSummary, type WorkflowAuditEventLike } from "@/lib/db/workflow-audit";
 import type { WorkflowSnapshot } from "@/lib/workflow/types";
 import type { ChatMessage } from "@/pages/chat/types";
 
