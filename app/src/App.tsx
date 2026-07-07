@@ -2,6 +2,7 @@
 // 布局：根容器用 h-full/w-full，依赖 index.css 建立的 html→body→#root height:100% 链。
 // 不用 dvh/dvw——WKWebView(Tauri 内核)下动态视口单位 resize 后不重算，会导致窗口变大露白。
 import { Suspense, lazy, useState, useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { AlertTriangle, KeyRound, MessageSquare, LayoutTemplate, Coins, X, Settings, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -87,6 +88,30 @@ function App() {
   const sidebar = usePanelResize({ initial: 288, min: 200, max: 460, edge: "right" });
 
   useTheme();
+
+  // macOS 原生菜单"全选"(Cmd+A) 走的是自定义菜单项(见 lib.rs)，不是 Tauri 的
+  // PredefinedMenuItem::select_all——那个在 WKWebView 下不认聚焦元素，会把整个页面的
+  // 内容都选中。这里按 document.activeElement 判断：焦点在输入框/可编辑区域内就只选中
+  // 该元素的内容，否则什么都不做，避免"全选"变成"全页面乱选"。
+  useEffect(() => {
+    const unlisten = listen("menu-select-all", () => {
+      const el = document.activeElement;
+      if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+        el.select();
+        return;
+      }
+      if (el instanceof HTMLElement && el.isContentEditable) {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      }
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
 
   useEffect(() => {
     void initSchema()

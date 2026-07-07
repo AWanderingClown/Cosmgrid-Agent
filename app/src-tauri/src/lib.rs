@@ -11,6 +11,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use keyring::Entry;
 use tauri::ipc::Channel;
+use tauri::Emitter;
 use tauri::Manager;
 use tauri::State;
 use tauri_plugin_shell::process::CommandEvent;
@@ -763,7 +764,7 @@ fn build_localized_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     lang: &str,
 ) -> tauri::Result<tauri::menu::Menu<R>> {
-    use tauri::menu::{AboutMetadata, MenuBuilder, PredefinedMenuItem, SubmenuBuilder};
+    use tauri::menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 
     let zh = lang.starts_with("zh");
     // 小助手：按语言二选一
@@ -792,7 +793,13 @@ fn build_localized_menu<R: tauri::Runtime>(
         .item(&PredefinedMenuItem::cut(app, Some(l("剪切", "Cut")))?)
         .item(&PredefinedMenuItem::copy(app, Some(l("复制", "Copy")))?)
         .item(&PredefinedMenuItem::paste(app, Some(l("粘贴", "Paste")))?)
-        .item(&PredefinedMenuItem::select_all(app, Some(l("全选", "Select All")))?)
+        // 不用 PredefinedMenuItem::select_all：Tauri/WKWebView 下它不会把选区限定在当前
+        // 聚焦的输入框内，而是对整个页面执行选择（"全选"变成选中一整屏杂乱内容）。
+        // 改成自定义菜单项 + on_menu_event 转发给前端，由前端按 document.activeElement 判断
+        // 焦点是否在可编辑元素内，是则只选中该元素内容，不是则忽略。
+        .item(&MenuItemBuilder::with_id("edit_select_all", l("全选", "Select All"))
+            .accelerator("CmdOrCtrl+A")
+            .build(app)?)
         .build()?;
 
     let view_menu = SubmenuBuilder::new(app, l("视图", "View"))
@@ -847,6 +854,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(CliChildren::default())
         .manage(RenderChannels::default())
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == "edit_select_all" {
+                let _ = app.emit("menu-select-all", ());
+            }
+        })
         .setup(|_app| {
             // 设初始原生菜单（macOS）。默认 zh，前端 i18n 就绪后会按真实语言重设。
             #[cfg(target_os = "macos")]
