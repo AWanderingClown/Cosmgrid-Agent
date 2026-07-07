@@ -58,6 +58,8 @@ export interface DebateResult {
   topic: string;
   rounds: RoleOutput[];
   finalSolution: string;
+  /** 模型调用失败但已被跳过的内部明细。默认不直接展示给用户，避免一屏底层报错污染聊天。 */
+  failures?: string[];
 }
 
 /** Judge 结构化裁决结果 */
@@ -323,7 +325,9 @@ export async function runDynamicDebate(input: DynamicDebateInput, runRole: RunRo
       }
     }
     if (!proposal) {
-      throw new Error(`所有参与模型都无法出方案：\n${failures.join("\n")}`);
+      const err = new Error("当前参与博弈的模型都没有成功响应。请稍后重试，或临时切到可用的 Codex / 其他模型后再开博弈。");
+      (err as { debateFailures?: string[] }).debateFailures = failures;
+      throw err;
     }
     rounds.push(proposal);
 
@@ -382,10 +386,5 @@ export async function runDynamicDebate(input: DynamicDebateInput, runRole: RunRo
     // 循环条件：!approved && iter < maxIterations
   }
 
-  // ===== 附加失败摘要 =====
-  if (failures.length > 0) {
-    finalSolution += `\n\n---\n⚠️ 本场博弈有 ${failures.length} 个模型调用失败（已跳过）：\n${failures.map((f) => `- ${f}`).join("\n")}`;
-  }
-
-  return { topic: input.topic, rounds, finalSolution };
+  return { topic: input.topic, rounds, finalSolution, ...(failures.length ? { failures } : {}) };
 }

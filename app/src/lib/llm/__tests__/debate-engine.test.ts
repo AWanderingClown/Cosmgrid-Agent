@@ -322,7 +322,7 @@ describe("runDynamicDebate 多轮收敛循环", () => {
 // 降级（单参与者失败不全挂）
 // ============================================================
 describe("runDynamicDebate 降级（单参与者失败不全挂）", () => {
-  it("proposer 失败 → 换下一个参与者顶上出方案", async () => {
+  it("proposer 失败 → 换下一个参与者顶上出方案，失败明细不污染最终方案", async () => {
     const calls: string[] = [];
     const run: RunRole = vi.fn(async ({ config }) => {
       calls.push(`${config.modelId}:${config.role}`);
@@ -340,7 +340,8 @@ describe("runDynamicDebate 降级（单参与者失败不全挂）", () => {
     );
     // m-a 出方案失败 → m-b 顶上当 solver，最终能产出
     expect(r.rounds.find((x) => x.role === "solver")?.modelId).toBe("m-b");
-    expect(r.finalSolution).toContain("失败");
+    expect(r.failures).toHaveLength(1);
+    expect(r.finalSolution).not.toContain("失败");
   });
 
   it("critic 失败 → 跳过它，judge 仍产出最终方案", async () => {
@@ -356,16 +357,25 @@ describe("runDynamicDebate 降级（单参与者失败不全挂）", () => {
       run,
     );
     expect(r.rounds.some((x) => x.role === "judge")).toBe(true);
-    expect(r.finalSolution).toContain("失败");
+    expect(r.failures).toHaveLength(1);
+    expect(r.finalSolution).not.toContain("boom");
   });
 
-  it("全部参与者出方案都失败 → 抛清晰聚合错误", async () => {
+  it("全部参与者出方案都失败 → 抛用户能看懂的错误，内部保留明细", async () => {
     const run: RunRole = vi.fn(async ({ config }) => {
       throw new Error(`模型「${config.modelName}」失败：Load failed`);
     });
     await expect(
       runDynamicDebate({ topic: "T", participants: [cfg("p1", "m-a"), cfg("p2", "m-b")], maxIterations: 1 }, run),
-    ).rejects.toThrow("所有参与模型都无法出方案");
+    ).rejects.toThrow("当前参与博弈的模型都没有成功响应");
+    try {
+      await runDynamicDebate(
+        { topic: "T", participants: [cfg("p1", "m-a"), cfg("p2", "m-b")], maxIterations: 1 },
+        run,
+      );
+    } catch (err) {
+      expect((err as { debateFailures?: string[] }).debateFailures).toHaveLength(2);
+    }
   });
 
   it("中止信号在降级路径里仍然原样抛 AbortError", async () => {
@@ -393,6 +403,7 @@ describe("runDynamicDebate 降级（单参与者失败不全挂）", () => {
     // 没有 judge round（失败了），但仍然有 finalSolution
     expect(r.rounds.some((x) => x.role === "judge")).toBe(false);
     expect(r.finalSolution).toContain("solver-output");
-    expect(r.finalSolution).toContain("失败");
+    expect(r.failures).toHaveLength(1);
+    expect(r.finalSolution).not.toContain("judge 炸了");
   });
 });

@@ -9,6 +9,7 @@ import { resolveMaxOutputTokens } from "./model-limits";
 import { recordUsageEvent } from "./usage-tracker";
 import { isCliProviderType } from "./cli-protocol";
 import { streamViaCli } from "./cli-engine";
+import { markModelFailed, markModelSucceeded } from "./model-cooldown";
 import type { RunRole } from "./debate-engine";
 
 /** 生产用 RunRole：调真实模型 + 记录用量（role 记成 debate_<角色>，StatsPage 可见对弈成本） */
@@ -53,6 +54,7 @@ export const realRunRole: RunRole = async ({ systemPrompt, userPrompt, config, s
   } catch (err) {
     // 用户中止：原样抛，让上层按"已停止"处理，不污染成模型错误。
     if ((err as { name?: string })?.name === "AbortError" || signal?.aborted) throw err;
+    markModelFailed(config.modelId);
     // 其余失败：带上「哪个模型 / 哪个角色 / 原因」再抛——否则博弈只剩一句 "Load failed"，无从排查。
     const reason = err instanceof Error ? err.message : String(err);
     const tagged = new Error(`模型「${config.modelName}」（${config.role}）调用失败：${reason}`);
@@ -71,5 +73,6 @@ export const realRunRole: RunRole = async ({ systemPrompt, userPrompt, config, s
     finishReason: "stop",
   });
 
+  markModelSucceeded(config.modelId);
   return { content, inputTokens, outputTokens };
 };

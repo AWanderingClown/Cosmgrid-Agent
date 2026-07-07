@@ -10,12 +10,18 @@ export interface FormattedDebateResult {
   };
 }
 
+export function isFullDebateResult(result: DebateResult): boolean {
+  const roles = new Set(result.rounds.map((round) => round.role));
+  return roles.has("solver") && [...roles].some((role) => role.startsWith("critic")) && roles.has("judge");
+}
+
 export function formatDebateResultMessage(args: {
   result: DebateResult;
   participantCount: number;
   modelNameFor: (modelId: string) => string;
   t: TFunction;
 }): FormattedDebateResult {
+  const hasFullDebate = isFullDebateResult(args.result);
   const usage = args.result.rounds.reduce(
     (acc, round) => ({
       inputTokens: acc.inputTokens + round.inputTokens,
@@ -31,7 +37,12 @@ export function formatDebateResultMessage(args: {
   const content = [
     args.participantCount === 1
       ? args.t("chat.debate.singleModelNotice")
+      : !hasFullDebate
+      ? args.t("chat.debate.incomplete")
       : args.t("chat.debate.completed", { count: args.participantCount }),
+    ...(args.result.failures?.length
+      ? ["", args.t("chat.debate.partialFailure", { count: args.result.failures.length })]
+      : []),
     "",
     args.result.finalSolution,
     "",
@@ -40,6 +51,12 @@ export function formatDebateResultMessage(args: {
       `### ${index + 1}. ${args.modelNameFor(round.modelId)} · ${round.role}`,
       round.content,
     ].join("\n")),
+    ...(args.result.failures?.length
+      ? [
+          `### ${args.t("chat.debate.skippedFailuresTitle")}`,
+          args.t("chat.debate.skippedFailuresBody", { count: args.result.failures.length }),
+        ]
+      : []),
     "</debate_process>",
   ].join("\n");
 
