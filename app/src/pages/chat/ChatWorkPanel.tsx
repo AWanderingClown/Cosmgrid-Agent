@@ -5,10 +5,14 @@ import { Button } from "@/components/ui/button";
 import { ResizeHandle } from "@/components/ui/resize-handle";
 import { ChainNodeGraph } from "@/components/work-panel/ChainNodeGraph";
 import type { ChainNodeView } from "@/components/work-panel/derive-chain-node-graph";
+import { WorkflowDiagnostics } from "@/components/work-panel/WorkflowDiagnostics";
 import { WorkArtifacts } from "@/components/work-panel/WorkArtifacts";
 import { DebateHistory } from "@/components/work-panel/DebateHistory";
 import type { ModelListItem } from "@/lib/api";
+import type { ToolCallView } from "@/lib/work-artifact-views";
 import type { WorkArtifact } from "@/lib/work-artifacts";
+import type { WorkflowEvent } from "@/lib/db";
+import type { WorkflowSnapshot } from "@/lib/workflow/types";
 import { formatElapsed } from "./streaming-status";
 import type { ChatMessage } from "./types";
 
@@ -30,6 +34,8 @@ interface ChatWorkPanelProps {
   onResizeMouseDown: (event: MouseEvent) => void;
   onClose: () => void;
   nodes: ChainNodeView[];
+  workflowEvents: WorkflowEvent[];
+  workflowSnapshot: WorkflowSnapshot | null;
   availableModels: ModelListItem[];
   disabled: boolean;
   onMainModelChange: (modelId: string) => void;
@@ -37,6 +43,7 @@ interface ChatWorkPanelProps {
   conversationId: string | null;
   workspacePath: string | null;
   artifacts: WorkArtifact[];
+  toolCalls: ToolCallView[];
   running: boolean;
   streamElapsedMs: number;
   activeModelLabel: string;
@@ -48,6 +55,8 @@ export function ChatWorkPanel({
   onResizeMouseDown,
   onClose,
   nodes,
+  workflowEvents,
+  workflowSnapshot,
   availableModels,
   disabled,
   onMainModelChange,
@@ -55,6 +64,7 @@ export function ChatWorkPanel({
   conversationId,
   workspacePath,
   artifacts,
+  toolCalls,
   running,
   streamElapsedMs,
   activeModelLabel,
@@ -170,6 +180,7 @@ export function ChatWorkPanel({
             onMainModelChange={onMainModelChange}
             onNodeModelChange={onNodeModelChange}
           />
+          <WorkflowDiagnostics workflowEvents={workflowEvents} workflowSnapshot={workflowSnapshot} toolCalls={toolCalls} messages={messages} />
           <Suspense
             fallback={
               <div className="glass rounded-2xl border border-white/5 p-4 text-[11px] font-bold uppercase tracking-widest text-muted-foreground/50">

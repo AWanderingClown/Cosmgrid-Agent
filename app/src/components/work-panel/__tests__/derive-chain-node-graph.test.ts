@@ -200,3 +200,88 @@ describe("deriveChainNodeGraph — 对弈节点显示真实参与者", () => {
     expect(debateNode?.modelName).toBe("MiniMax-M3、Opus 4.8");
   });
 });
+
+describe("deriveChainNodeGraph — workflow 阶段节点", () => {
+  it("显示已完成的博弈节点和当前执行节点", () => {
+    const workflow: WorkflowSnapshot = {
+      version: 1,
+      runId: "run-1",
+      conversationId: "conv-1",
+      status: "running",
+      intent: {
+        objective: "执行方案",
+        requestedOutcome: "按方案落地",
+        taskKind: "feature",
+        executionMode: "execute_directly",
+        reviewRequested: false,
+        debateRequested: false,
+        verificationRequired: true,
+        securitySensitive: false,
+        needsWorkspace: true,
+        stickyUntil: [],
+      },
+      currentNodeId: "execute",
+      nodes: [
+        {
+          id: "read_project",
+          phase: "read_project",
+          title: "读取项目",
+          status: "done",
+          optional: false,
+          dependsOn: [],
+          assignedRoles: [],
+          autoAdvance: "always",
+        },
+        {
+          id: "plan",
+          phase: "plan",
+          title: "制定方案",
+          status: "done",
+          optional: false,
+          dependsOn: ["read_project"],
+          assignedRoles: [],
+          autoAdvance: "never",
+        },
+        {
+          id: "debate",
+          phase: "debate",
+          title: "模型博弈",
+          status: "done",
+          optional: true,
+          dependsOn: ["plan"],
+          assignedRoles: [],
+          autoAdvance: "never",
+        },
+        {
+          id: "execute",
+          phase: "execute",
+          title: "执行方案",
+          status: "ready",
+          optional: false,
+          dependsOn: ["plan"],
+          assignedRoles: [],
+          autoAdvance: "never",
+        },
+      ],
+      nextActions: [],
+      context: { projectFacts: [], changedFiles: [], riskLevel: "low" },
+    };
+
+    const graph = deriveChainNodeGraph({
+      orchestration: null,
+      workflowSnapshot: workflow,
+      selectedModelId: "m3",
+      selectedModelName: "MiniMax-M3",
+      availableModels: models,
+      chainRunning: false,
+      chainExecutedRoles: [],
+      chainSkippedRoles: [],
+      chainAbortedRole: null,
+    });
+
+    const byRole = Object.fromEntries(graph.nodes.map((node) => [node.role, node]));
+    expect(byRole.debate).toMatchObject({ stepName: "模型博弈", status: "done" });
+    expect(byRole.execute).toMatchObject({ stepName: "执行方案", status: "active", modelName: "dynamic" });
+    expect(graph.nodes.map((node) => node.role)).toContain("leader");
+  });
+});
