@@ -110,6 +110,8 @@ function toDecision(args: {
           objective: args.judged.objective ?? args.text,
           requestedOutcome: args.judged.requestedOutcome ?? "执行用户要求",
           executionMode: "execute_directly",
+          debateRequested: false,
+          reviewRequested: false,
         },
       };
     case "verify":

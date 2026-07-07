@@ -30,6 +30,8 @@ export function buildChatPromptMessages(args: {
   projectMemoryPreamble: string | null;
   crossProjectPreamble: string | null;
   workspacePreamble: string | null;
+  workflowPreamble?: string | null;
+  skillPreamble?: string | null;
   tooLargeNotice: (name: string) => string;
   /** 当前选中模型的人类可读名（如 "MiniMax-M3"），用于系统提示词里的身份陈述 */
   modelLabel?: string | null;
@@ -43,6 +45,8 @@ export function buildChatPromptMessages(args: {
     ...(args.projectMemoryPreamble ? [{ role: "system" as const, content: args.projectMemoryPreamble }] : []),
     ...(args.crossProjectPreamble ? [{ role: "system" as const, content: args.crossProjectPreamble }] : []),
     ...(args.workspacePreamble ? [{ role: "system" as const, content: args.workspacePreamble }] : []),
+    ...(args.workflowPreamble ? [{ role: "system" as const, content: args.workflowPreamble }] : []),
+    ...(args.skillPreamble ? [{ role: "system" as const, content: args.skillPreamble }] : []),
     ...(args.effectiveWorkspace ? [{ role: "system" as const, content: buildImageGuardPreamble() }] : []),
     ...(!args.effectiveWorkspace && !args.primaryIsCli
       ? [{ role: "system" as const, content: buildNoToolsPreamble() }]

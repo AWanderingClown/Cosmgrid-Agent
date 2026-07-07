@@ -53,6 +53,27 @@ export type WorkflowPhase =
   | "execute"
   | "verify";
 
+export type WorkflowPlanSourceKind =
+  | "message_summary"
+  | "desktop_file"
+  | "debate_full"
+  | "debate_degraded";
+
+export interface WorkflowPlanSource {
+  kind: WorkflowPlanSourceKind;
+  phase: WorkflowPhase;
+  capturedAt: string;
+  path?: string;
+  label?: string;
+}
+
+export interface WorkflowActiveSkill {
+  id: string;
+  label: string;
+  selectedAt: string;
+  reason: string;
+}
+
 export type WorkflowRunStatus =
   | "running"
   | "waiting_user"
@@ -110,7 +131,9 @@ export interface WorkflowSnapshot {
   context: {
     workspacePath?: string | null;
     projectFacts: string[];
+    activeSkill?: WorkflowActiveSkill;
     planSummary?: string;
+    planSource?: WorkflowPlanSource;
     reviewSummary?: string;
     debateSummary?: string;
     changedFiles: string[];

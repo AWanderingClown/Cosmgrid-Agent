@@ -1,5 +1,5 @@
 import { defaultNextActionsForPhase } from "./code-task-template";
-import type { TurnIntentDecision, WorkflowNode, WorkflowPhase, WorkflowSnapshot } from "./types";
+import type { TurnIntentDecision, WorkflowActiveSkill, WorkflowNode, WorkflowPhase, WorkflowPlanSource, WorkflowSnapshot } from "./types";
 
 function updateNode(snapshot: WorkflowSnapshot, nodeId: string, patch: Partial<WorkflowNode>): WorkflowSnapshot {
   return {
@@ -27,16 +27,43 @@ function setCurrentPhase(snapshot: WorkflowSnapshot, phase: WorkflowPhase): Work
 export function completeCurrentWorkflowNode(args: {
   snapshot: WorkflowSnapshot;
   summary?: string;
+  planSource?: WorkflowPlanSource;
   artifactIds?: string[];
   toolExecutionIds?: string[];
 }): WorkflowSnapshot {
   const node = args.snapshot.nodes.find((n) => n.id === args.snapshot.currentNodeId);
   if (!node) return args.snapshot;
+  const summary = args.summary;
+  const context = { ...args.snapshot.context };
+
+  if (summary) {
+    if (node.phase === "plan") {
+      context.planSummary = summary;
+      context.planSource = args.planSource ?? {
+        kind: "message_summary",
+        phase: "plan",
+        capturedAt: new Date().toISOString(),
+      };
+    } else if (node.phase === "review") {
+      context.reviewSummary = summary;
+    } else if (node.phase === "debate") {
+      context.debateSummary = summary;
+      context.planSummary = summary;
+      context.planSource = args.planSource ?? {
+        kind: "debate_degraded",
+        phase: "debate",
+        capturedAt: new Date().toISOString(),
+      };
+    } else if (node.phase === "verify") {
+      context.verificationSummary = summary;
+    }
+  }
+
   const next = updateNode(args.snapshot, node.id, {
     status: "done",
     outputs: {
       ...(node.outputs ?? {}),
-      ...(args.summary ? { summary: args.summary } : {}),
+      ...(summary ? { summary } : {}),
       ...(args.artifactIds ? { artifactIds: args.artifactIds } : {}),
       ...(args.toolExecutionIds ? { toolExecutionIds: args.toolExecutionIds } : {}),
     },
@@ -44,6 +71,7 @@ export function completeCurrentWorkflowNode(args: {
 
   return {
     ...next,
+    context,
     status: "waiting_user",
     nextActions: defaultNextActionsForPhase(node.phase),
     pendingDecision: defaultNextActionsForPhase(node.phase).length > 0
@@ -53,6 +81,34 @@ export function completeCurrentWorkflowNode(args: {
           choices: defaultNextActionsForPhase(node.phase).map((action) => action.id),
         }
       : undefined,
+  };
+}
+
+export function attachPlanSourceToWorkflow(args: {
+  snapshot: WorkflowSnapshot;
+  summary: string;
+  source: WorkflowPlanSource;
+}): WorkflowSnapshot {
+  return {
+    ...args.snapshot,
+    context: {
+      ...args.snapshot.context,
+      planSummary: args.summary,
+      planSource: args.source,
+    },
+  };
+}
+
+export function attachActiveSkillToWorkflow(args: {
+  snapshot: WorkflowSnapshot;
+  skill: WorkflowActiveSkill;
+}): WorkflowSnapshot {
+  return {
+    ...args.snapshot,
+    context: {
+      ...args.snapshot.context,
+      activeSkill: args.skill,
+    },
   };
 }
 

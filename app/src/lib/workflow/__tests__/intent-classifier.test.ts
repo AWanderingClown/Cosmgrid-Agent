@@ -30,6 +30,8 @@ describe("classifyTurnIntent", () => {
     const decision = classifyTurnIntent({ text: "OK，直接执行这份方案", activeRun: snapshot() });
     expect(decision.action).toBe("approve_node");
     expect(decision.patch?.executionMode).toBe("execute_directly");
+    expect(decision.patch?.debateRequested).toBe(false);
+    expect(decision.patch?.reviewRequested).toBe(false);
   });
 
   it("要求评审和博弈会变成当前 workflow 的继续动作", () => {

@@ -92,7 +92,7 @@ export function classifyTurnIntent(args: {
         confidence: 0.94,
         reason: "用户明确要求执行当前方案或进入实现。",
         evidenceTurnIds: args.recentTurnIds,
-        patch: { executionMode: "execute_directly" },
+        patch: { executionMode: "execute_directly", debateRequested: false, reviewRequested: false },
       });
     }
 
@@ -182,7 +182,13 @@ export function classifyTurnIntent(args: {
       confidence: activeRun ? 0.9 : 0.72,
       reason: activeRun ? "用户要求执行当前任务。" : "用户要求执行，但没有 active plan，需先建立任务上下文。",
       evidenceTurnIds: args.recentTurnIds,
-      patch: { objective: text, requestedOutcome: "执行用户要求", executionMode: "execute_directly" },
+      patch: {
+        objective: text,
+        requestedOutcome: "执行用户要求",
+        executionMode: "execute_directly",
+        debateRequested: false,
+        reviewRequested: false,
+      },
     });
   }
 

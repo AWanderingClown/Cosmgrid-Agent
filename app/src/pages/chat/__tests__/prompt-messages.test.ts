@@ -48,6 +48,39 @@ describe("buildChatPromptMessages", () => {
     expect(prompt.some((m) => textContent(m.content).includes("没有接入任何工具"))).toBe(false);
   });
 
+  it("injects workflow context as a system fact so plan provenance survives model switching", () => {
+    const prompt = buildChatPromptMessages({
+      messages: [{ id: "user-1", role: "user", content: "开始执行" }],
+      effectiveWorkspace: "/repo",
+      primaryIsCli: false,
+      projectMemoryPreamble: null,
+      crossProjectPreamble: null,
+      workspacePreamble: "工作区说明",
+      workflowPreamble: "当前工作流上下文：执行基于 /Users/me/Desktop/PLAN.md",
+      tooLargeNotice: (name) => `${name} 太大`,
+    });
+
+    expect(prompt.some((m) => m.role === "system" && textContent(m.content).includes("当前工作流上下文"))).toBe(true);
+    expect(prompt.some((m) => m.role === "system" && textContent(m.content).includes("/Users/me/Desktop/PLAN.md"))).toBe(true);
+  });
+
+  it("injects active skill guidance as a system fact", () => {
+    const prompt = buildChatPromptMessages({
+      messages: [{ id: "user-1", role: "user", content: "开始执行" }],
+      effectiveWorkspace: "/repo",
+      primaryIsCli: false,
+      projectMemoryPreamble: null,
+      crossProjectPreamble: null,
+      workspacePreamble: null,
+      workflowPreamble: "当前工作流上下文：execute",
+      skillPreamble: "当前启用技能：按方案执行\n验收标准：必须真实修改并验证。",
+      tooLargeNotice: (name) => `${name} 太大`,
+    });
+
+    expect(prompt.some((m) => m.role === "system" && textContent(m.content).includes("当前启用技能：按方案执行"))).toBe(true);
+    expect(prompt.some((m) => m.role === "system" && textContent(m.content).includes("必须真实修改并验证"))).toBe(true);
+  });
+
   // 真实事故（2026-07-04）：模型上一轮回复"好，再试一次。"但 0 次真实工具调用，
   // 下一轮完全没有依据判断"上一轮到底做了什么"，只能瞎编。见 prompt-messages.ts
   // 的 buildLastTurnNoToolReminder。
