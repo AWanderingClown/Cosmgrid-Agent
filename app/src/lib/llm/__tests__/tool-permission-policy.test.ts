@@ -40,6 +40,11 @@ describe("impliesWriteIntent", () => {
     expect(impliesWriteIntent({ text: "创建文件并保存到桌面", decision: decision() })).toBe(true);
   });
 
+  it("只要求构建/验证也识别为需要执行工具，不能让模型纯文字说通过", () => {
+    expect(impliesWriteIntent({ text: "构建一下，确认能不能通过", decision: decision() })).toBe(true);
+    expect(impliesWriteIntent({ text: "跑一下 typecheck 和 lint", decision: decision() })).toBe(true);
+  });
+
   it("纯讨论/软文类意图 → false", () => {
     expect(
       impliesWriteIntent({
