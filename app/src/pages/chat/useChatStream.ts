@@ -60,6 +60,7 @@ import { shouldExposeWriteTools, impliesWriteIntent } from "@/lib/llm/tool-permi
 import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
 import { buildProjectMemoryPreamble } from "@/lib/llm/context-preamble";
 import { buildWorkspacePreamble } from "@/lib/llm/workspace-context";
+import { getFsAdapter } from "@/lib/llm/tools/fs-adapter";
 import {
   prepareWorkspaceToolRuntime,
   type WorkspaceToolRuntime,
@@ -69,7 +70,10 @@ import { classifyTurnIntentWithJudge } from "@/lib/workflow/intent-judge";
 import { isExplicitDebateRequest } from "@/lib/workflow/intent-classifier";
 import { detectIntentCorrection, intentActionLabel } from "@/lib/workflow/intent-feedback";
 import { downweightMisjudgedExampleInDb } from "@/lib/workflow/intent-decay";
-import { applyTurnIntentDecision, completeCurrentWorkflowNode } from "@/lib/workflow/reducer";
+import { buildSkillPreamble } from "@/lib/skills/preamble";
+import { selectSkillForTurn } from "@/lib/skills/selector";
+import { applyTurnIntentDecision, attachActiveSkillToWorkflow, attachPlanSourceToWorkflow, completeCurrentWorkflowNode } from "@/lib/workflow/reducer";
+import { buildWorkflowContextPreamble, readDesktopPlanForExecution } from "@/lib/workflow/execution-context";
 import { evaluateHarness, isClean, detectIntentNoToolCall } from "@/lib/llm/harness/feedback";
 import { runChain as runChainImpl } from "@/lib/llm/chain-runner";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
@@ -91,7 +95,7 @@ import {
   updateChainRoleContent,
 } from "@/pages/chat/chain-messages";
 import { buildDebateParticipants } from "@/pages/chat/debate-participants";
-import { buildDebateTopic, formatDebateResultMessage } from "@/pages/chat/debate-result";
+import { buildDebateTopic, formatDebateResultMessage, isFullDebateResult } from "@/pages/chat/debate-result";
 import { buildMainChatModelChain } from "@/pages/chat/model-chain";
 import { buildOrchestrationReceipt } from "@/pages/chat/orchestration-receipt";
 import { applyPromptCompression } from "@/pages/chat/prompt-compression";
@@ -547,18 +551,13 @@ export function useChatStream(opts: UseChatStreamOptions) {
         convId,
         effectiveWorkspace,
         turnIntentDecision,
-        workflowAdvancedThisTurn,
       } = prep;
-      const currentWorkflowNode = turnWorkflowSnapshot?.nodes.find((n) => n.id === turnWorkflowSnapshot?.currentNodeId) ?? null;
       const explicitDebateRequest =
         turnIntentDecision?.patch?.debateRequested === true ||
         isExplicitDebateRequest(text);
       const shouldRunDebateTurn =
         !pureMode &&
-        (explicitDebateRequest ||
-          (currentWorkflowNode?.phase === "debate" &&
-            !!turnWorkflowSnapshot?.intent.debateRequested &&
-            workflowAdvancedThisTurn));
+        explicitDebateRequest;
       if (!shouldRunDebateTurn) return false;
 
       let activeSnapshot = turnWorkflowSnapshot;
@@ -670,9 +669,16 @@ export function useChatStream(opts: UseChatStreamOptions) {
         });
 
         if (convId && activeSnapshot && activeRunId) {
+          const fullDebate = isFullDebateResult(result);
           const nextWorkflow = completeCurrentWorkflowNode({
             snapshot: activeSnapshot,
             summary: result.finalSolution.slice(0, 1200),
+            planSource: {
+              kind: fullDebate ? "debate_full" : "debate_degraded",
+              phase: "debate",
+              capturedAt: new Date().toISOString(),
+              label: fullDebate ? "完整多模型博弈结果" : "多模型博弈未完成后的降级方案",
+            },
           });
           await workflowRuns.saveSnapshot({
             runId: activeRunId,
@@ -810,6 +816,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         turnWorkflowRunId,
         shouldCompleteWorkflowNode,
       } = prep;
+      let activeTurnWorkflowSnapshot = turnWorkflowSnapshot;
 
       let chain: ModelEndpoint[];
       try {
@@ -835,6 +842,8 @@ export function useChatStream(opts: UseChatStreamOptions) {
 
       let tools: WorkspaceToolRuntime["tools"];
       let workspacePreamble: string | null = null;
+      let workflowPreamble: string | null = null;
+      let skillPreamble: string | null = null;
       let projectMemoryPreamble: string | null = null;
       let crossProjectPreamble: string | null = null;
       let effectivePermissionMode = permissionMode;
@@ -878,11 +887,11 @@ export function useChatStream(opts: UseChatStreamOptions) {
       }
 
       const includeWriteTools = shouldExposeWriteTools(effectivePermissionMode);
+      const desktopPath = await desktopDir().catch(() => null);
 
       if (effectiveWorkspace) {
-        const desktopPath = includeWriteTools ? await desktopDir().catch(() => null) : null;
         if (primaryIsCli) {
-          workspacePreamble = await buildWorkspacePreamble(effectiveWorkspace, { includeWrite: includeWriteTools, desktopPath });
+          workspacePreamble = await buildWorkspacePreamble(effectiveWorkspace, { includeWrite: includeWriteTools, desktopPath: includeWriteTools ? desktopPath : null });
           if (stopIfAborted()) return;
         } else {
           const runtime = await prepareWorkspaceToolRuntime({
@@ -896,7 +905,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
             confirm: effectivePermissionMode === "auto" ? async () => true : requestConfirm,
             askUser: requestAskUser,
             includePreamble: true,
-            desktopPath,
+            desktopPath: includeWriteTools ? desktopPath : null,
           });
           if (stopIfAborted()) return;
           tools = runtime.tools;
@@ -916,6 +925,58 @@ export function useChatStream(opts: UseChatStreamOptions) {
         if (stopIfAborted()) return;
         tools = runtime.tools;
       }
+
+      const desktopPlan = await readDesktopPlanForExecution({
+        userText: text,
+        desktopPath,
+        fs: getFsAdapter(),
+      });
+      if (desktopPlan && convId && activeTurnWorkflowSnapshot && turnWorkflowRunId) {
+        const nextWorkflow = attachPlanSourceToWorkflow({
+          snapshot: activeTurnWorkflowSnapshot,
+          summary: desktopPlan.content.slice(0, 1200),
+          source: {
+            kind: "desktop_file",
+            phase: "plan",
+            capturedAt: new Date().toISOString(),
+            path: desktopPlan.path,
+            label: "用户桌面方案文件",
+          },
+        });
+        await workflowRuns.saveSnapshot({
+          runId: turnWorkflowRunId,
+          snapshot: nextWorkflow,
+          eventType: "workflow.plan_source_attached",
+          eventPayload: { path: desktopPlan.path },
+        }).catch(() => {});
+        activeTurnWorkflowSnapshot = nextWorkflow;
+        applyWorkflowSnapshot(nextWorkflow);
+      }
+      workflowPreamble = buildWorkflowContextPreamble({
+        snapshot: activeTurnWorkflowSnapshot,
+        userText: text,
+        desktopPlan,
+      });
+
+      const selectedSkill = selectSkillForTurn({
+        text,
+        workflowSnapshot: activeTurnWorkflowSnapshot,
+      });
+      if (selectedSkill && convId && activeTurnWorkflowSnapshot && turnWorkflowRunId) {
+        const nextWorkflow = attachActiveSkillToWorkflow({
+          snapshot: activeTurnWorkflowSnapshot,
+          skill: selectedSkill,
+        });
+        await workflowRuns.saveSnapshot({
+          runId: turnWorkflowRunId,
+          snapshot: nextWorkflow,
+          eventType: "workflow.skill_selected",
+          eventPayload: { skillId: selectedSkill.id, reason: selectedSkill.reason },
+        }).catch(() => {});
+        activeTurnWorkflowSnapshot = nextWorkflow;
+        applyWorkflowSnapshot(nextWorkflow);
+      }
+      skillPreamble = buildSkillPreamble(selectedSkill);
 
       const currentProjectId =
         (convId ? conversationList.find((c) => c.id === convId)?.projectId : null) ?? null;
@@ -942,6 +1003,8 @@ export function useChatStream(opts: UseChatStreamOptions) {
         projectMemoryPreamble,
         crossProjectPreamble,
         workspacePreamble,
+        workflowPreamble,
+        skillPreamble,
         tooLargeNotice,
         modelLabel: model.displayName ?? model.name,
       });
@@ -1069,10 +1132,10 @@ export function useChatStream(opts: UseChatStreamOptions) {
           undefined,
           streamingState.lastToolCallCount,
         );
-        if (convId && shouldCompleteWorkflowNode && turnWorkflowSnapshot && turnWorkflowRunId && streamingState.fullContent && !controller.signal.aborted) {
+        if (convId && shouldCompleteWorkflowNode && activeTurnWorkflowSnapshot && turnWorkflowRunId && streamingState.fullContent && !controller.signal.aborted) {
           try {
             const nextWorkflow = completeCurrentWorkflowNode({
-              snapshot: turnWorkflowSnapshot,
+              snapshot: activeTurnWorkflowSnapshot,
               summary: streamingState.fullContent.slice(0, 1200),
             });
             await workflowRuns.saveSnapshot({
@@ -1080,7 +1143,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
               snapshot: nextWorkflow,
               eventType: "workflow.node_completed",
               eventPayload: {
-                nodeId: turnWorkflowSnapshot.currentNodeId,
+                nodeId: activeTurnWorkflowSnapshot.currentNodeId,
                 summaryPreview: streamingState.fullContent.slice(0, 240),
               },
             });

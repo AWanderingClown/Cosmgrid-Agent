@@ -92,6 +92,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     chainSkippedRoles,
     chainAbortedRole,
     chainRunning,
+    workflowEvents,
     workflowSnapshot,
     setChainExecutedRoles,
     setChainSkippedRoles,
@@ -559,6 +560,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
       {/* 对话列表容器 */}
       <div
         ref={scrollRef}
+        data-chat-transcript-region="true"
         className="flex-1 overflow-y-auto scroll-smooth custom-scrollbar"
       >
         <ChatTranscript
@@ -622,6 +624,8 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           onResizeMouseDown={workPanel.onMouseDown}
           onClose={() => setPanelOpen(false)}
           nodes={chainNodeGraph.nodes}
+          workflowEvents={workflowEvents}
+          workflowSnapshot={workflowSnapshot}
           availableModels={availableModels}
           disabled={isStreaming}
           onMainModelChange={handleModelChange}
@@ -629,6 +633,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           conversationId={conversationId}
           workspacePath={workspacePath}
           artifacts={artifacts}
+          toolCalls={toolCallViews}
           running={isStreaming}
           streamElapsedMs={streamElapsedMs}
           activeModelLabel={activeModelLabel}

@@ -4,7 +4,7 @@ import {
   type RoleId,
 } from "@/lib/llm/orchestrator";
 import type { WorkflowSnapshot } from "@/lib/workflow/types";
-import { workflowRuns } from "@/lib/db";
+import { workflowRuns, type WorkflowEvent } from "@/lib/db";
 
 interface OrchState {
   orchestration: OrchestrationState | null;
@@ -13,6 +13,7 @@ interface OrchState {
   chainAbortedRole: RoleId | null;
   chainRunning: boolean;
   workflowSnapshot: WorkflowSnapshot | null;
+  workflowEvents: WorkflowEvent[];
 }
 
 const initialOrchState: OrchState = {
@@ -22,6 +23,7 @@ const initialOrchState: OrchState = {
   chainAbortedRole: null,
   chainRunning: false,
   workflowSnapshot: null,
+  workflowEvents: [],
 };
 
 type OrchAction =
@@ -32,6 +34,7 @@ type OrchAction =
   | { type: "chain_abort"; role: RoleId }
   | { type: "chain_end" }
   | { type: "apply_workflow"; snapshot: WorkflowSnapshot | null }
+  | { type: "apply_workflow_events"; events: WorkflowEvent[] }
   | { type: "set_chain_executed_roles"; updater: (prev: RoleId[]) => RoleId[] }
   | { type: "set_chain_skipped_roles"; updater: (prev: RoleId[]) => RoleId[] }
   | { type: "set_chain_aborted_role"; role: RoleId | null }
@@ -73,6 +76,8 @@ function reducer(state: OrchState, action: OrchAction): OrchState {
       };
     case "apply_workflow":
       return { ...state, workflowSnapshot: action.snapshot };
+    case "apply_workflow_events":
+      return { ...state, workflowEvents: action.events };
     case "set_chain_executed_roles":
       return { ...state, chainExecutedRoles: action.updater(state.chainExecutedRoles) };
     case "set_chain_skipped_roles":
@@ -115,6 +120,10 @@ export function useOrchestration(_opts: UseOrchestrationOptions = {}) {
     dispatch({ type: "apply_workflow", snapshot: next });
   }
 
+  function applyWorkflowEvents(events: WorkflowEvent[]): void {
+    dispatch({ type: "apply_workflow_events", events });
+  }
+
   // 兼容 setState 接口（handleSend 内部用 functional update 模式）
   function setChainExecutedRoles(updater: RoleId[] | ((prev: RoleId[]) => RoleId[])): void {
     const fn = typeof updater === "function" ? updater : () => updater;
@@ -135,8 +144,14 @@ export function useOrchestration(_opts: UseOrchestrationOptions = {}) {
     try {
       const activeRun = await workflowRuns.getActiveByConversation(id);
       applyWorkflowSnapshot(activeRun?.snapshot ?? null);
+      if (activeRun) {
+        applyWorkflowEvents(await workflowRuns.listEvents(activeRun.id));
+      } else {
+        applyWorkflowEvents([]);
+      }
     } catch {
       applyWorkflowSnapshot(null);
+      applyWorkflowEvents([]);
     }
   }, []);
 
@@ -147,6 +162,7 @@ export function useOrchestration(_opts: UseOrchestrationOptions = {}) {
     chainRunning: state.chainRunning,
     chainSkippedRoles: state.chainSkippedRoles,
     orchestration: state.orchestration,
+    workflowEvents: state.workflowEvents,
     workflowSnapshot: state.workflowSnapshot,
     // setter（兼容 handleSend 内部的 setState 模式）
     setChainAbortedRole,
@@ -159,6 +175,7 @@ export function useOrchestration(_opts: UseOrchestrationOptions = {}) {
     workflowSnapshotRef,
     // 协调函数（ref 同步 + dispatch）
     applyOrchestration,
+    applyWorkflowEvents,
     applyWorkflowSnapshot,
     // load
     loadWorkflowForConversation,

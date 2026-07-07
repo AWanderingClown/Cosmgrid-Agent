@@ -82,7 +82,7 @@
       "cancelText": "先不切换"
     },
     "harnessRetry": "检测到可能编造 · 正在让模型自查重答",
-      "intentNudgeRetry": "上条说要做但没真调工具 · 自动催一次…",
+    "intentNudgeRetry": "上条说要做但没真调工具 · 自动催一次…",
     "smartPick": "智能推荐",
     "workspace": {
       "choose": "工作文件夹",
@@ -154,9 +154,13 @@
     "debate": {
       "running": "模型博弈进行中…",
       "completed": "已用 {{count}} 个可用模型完成博弈。",
+      "incomplete": "多模型博弈未完成，已用成功响应的模型生成降级方案。",
       "singleModelNotice": "当前只有 1 个可用模型，无法进行真正的多模型 PK；下面是单模型自审结果。",
       "noParticipants": "当前没有可用于博弈的模型，请先检查模型和 API Key 配置。",
       "failed": "模型博弈失败，请检查模型配置后重试。",
+      "partialFailure": "有 {{count}} 个模型本次没有成功响应，已自动跳过；下面是成功响应模型给出的结果。",
+      "skippedFailuresTitle": "已跳过的失败调用",
+      "skippedFailuresBody": "本次有 {{count}} 个模型调用失败。详细错误已保存在内部记录里，聊天正文不展开。",
       "costWarning": "即将开始多模型对弈，预计消耗约 {{count}} 次模型调用。",
       "processLabel": "查看博弈过程"
     },
@@ -216,7 +220,12 @@
         "tester": "测试",
         "reviewer": "最终审查",
         "security": "安全审查",
-        "debate": "模型博弈"
+        "read_project": "读取项目",
+        "plan": "制定方案",
+        "review": "评审方案",
+        "debate": "模型博弈",
+        "execute": "执行方案",
+        "verify": "验证结果"
       },
       "ideTitle": "IDE 视图",
       "noFileOpen": "还没有打开文件",
@@ -243,7 +252,27 @@
       "htmlJsDisabledHint": "预览中 JavaScript 已被禁用（安全），如需完整效果请下载到本地浏览器打开",
       "htmlTooLarge": "HTML 工件过大（{{size}} 字节）— 降级显示源码而非沙箱预览",
       "diffNoChange": "无变化",
-      "diffTooLarge": "共 {{total}} 行，仅显示前 {{shown}} 行"
+      "diffTooLarge": "共 {{total}} 行，仅显示前 {{shown}} 行",
+      "diagnostics": {
+        "title": "工程化验证",
+        "noWorkflow": "当前还没有工作流状态。普通聊天不会生成任务链路。",
+        "phase": "阶段",
+        "status": "状态",
+        "mode": "模式",
+        "objective": "目标",
+        "latestEvent": "最新事件",
+        "eventCount": "事件数",
+        "planSource": "当前任务依据",
+        "noPlanSource": "尚未绑定方案来源",
+        "debateBasis": "对弈依据",
+        "tools": "工具事实",
+        "toolStats": "共 {{total}} 次，成功 {{success}}，失败 {{error}}，待确认/拒绝 {{denied}}",
+        "noTools": "还没有工具调用",
+        "fallback": "模型切换",
+        "fallbackStats": "共 {{total}} 次 fallback",
+        "noFallback": "没有模型切换",
+        "degradedPlanWarning": "当前执行依据来自降级方案，不是完整多模型博弈结果。"
+      }
     },
     "workflow": {
       "title": "任务进度",

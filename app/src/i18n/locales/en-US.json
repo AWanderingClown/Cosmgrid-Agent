@@ -82,7 +82,7 @@
       "cancelText": "Not now"
     },
     "harnessRetry": "Possible fabrication · asking the model to self-check and redo",
-      "intentNudgeRetry": "Said you'd act but didn't call any tool · asking again…",
+    "intentNudgeRetry": "Said you'd act but didn't call any tool · asking again…",
     "smartPick": "Smart Pick",
     "workspace": {
       "choose": "Workspace",
@@ -154,9 +154,13 @@
     "debate": {
       "running": "Model debate is running...",
       "completed": "Debate completed with {{count}} available models.",
+      "incomplete": "Multi-model debate did not complete. A fallback answer was generated from the models that responded successfully.",
       "singleModelNotice": "Only 1 model is currently available, so this is not a true multi-model PK. Below is a single-model self-review.",
       "noParticipants": "No model is available for debate. Check model and API key settings first.",
       "failed": "Model debate failed. Check model settings and retry.",
+      "partialFailure": "{{count}} model call(s) did not respond this time and were skipped. Below is the result from the models that did respond.",
+      "skippedFailuresTitle": "Skipped failed calls",
+      "skippedFailuresBody": "{{count}} model call(s) failed. Detailed errors were kept in the internal record and are not expanded in the chat body.",
       "costWarning": "Starting multi-model debate — will use about {{count}} model calls.",
       "processLabel": "View debate process"
     },
@@ -216,7 +220,12 @@
         "tester": "Test",
         "reviewer": "Final Review",
         "security": "Security Review",
-        "debate": "Model Debate"
+        "read_project": "Read Project",
+        "plan": "Plan",
+        "review": "Review Plan",
+        "debate": "Model Debate",
+        "execute": "Execute",
+        "verify": "Verify"
       },
       "ideTitle": "IDE View",
       "noFileOpen": "No file open",
@@ -243,7 +252,27 @@
       "htmlJsDisabledHint": "JavaScript is disabled in this preview for safety. Download the file to view in a browser for full effect.",
       "htmlTooLarge": "HTML artifact is too large ({{size}} bytes) — showing raw source instead of sandboxed preview",
       "diffNoChange": "No changes",
-      "diffTooLarge": "{{total}} lines, showing first {{shown}}"
+      "diffTooLarge": "{{total}} lines, showing first {{shown}}",
+      "diagnostics": {
+        "title": "Engineering Checks",
+        "noWorkflow": "No workflow state yet. Plain chat does not create a task workflow.",
+        "phase": "Phase",
+        "status": "Status",
+        "mode": "Mode",
+        "objective": "Objective",
+        "latestEvent": "Latest event",
+        "eventCount": "Events",
+        "planSource": "Task basis",
+        "noPlanSource": "No plan source bound yet",
+        "debateBasis": "Debate basis",
+        "tools": "Tool facts",
+        "toolStats": "{{total}} total, {{success}} success, {{error}} failed, {{denied}} pending/denied",
+        "noTools": "No tool calls yet",
+        "fallback": "Model switching",
+        "fallbackStats": "{{total}} fallbacks",
+        "noFallback": "No model fallback",
+        "degradedPlanWarning": "The current execution basis is a degraded plan, not a complete multi-model debate result."
+      }
     },
     "workflow": {
       "title": "Task Progress",
