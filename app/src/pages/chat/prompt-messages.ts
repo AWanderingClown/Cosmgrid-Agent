@@ -1,4 +1,4 @@
-import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble } from "@/lib/llm/context-preamble";
+import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble, buildDomesticModelReminder } from "@/lib/llm/context-preamble";
 import { buildCorePreamble } from "@/lib/llm/cosmgrid-rules";
 import { toUserCoreMessage } from "@/lib/llm/attachments";
 import { detectIntentNoToolCall } from "@/lib/llm/harness/feedback";
@@ -35,9 +35,11 @@ export function buildChatPromptMessages(args: {
   modelLabel?: string | null;
 }): ChatMsg[] {
   const lastTurnReminder = buildLastTurnNoToolReminder(args.messages);
+  const domesticModelReminder = buildDomesticModelReminder(args.modelLabel);
   return [
     { role: "system", content: buildCorePreamble(args.effectiveWorkspace, args.modelLabel) },
     { role: "system", content: buildTimePreamble() },
+    ...(domesticModelReminder ? [{ role: "system" as const, content: domesticModelReminder }] : []),
     ...(args.projectMemoryPreamble ? [{ role: "system" as const, content: args.projectMemoryPreamble }] : []),
     ...(args.crossProjectPreamble ? [{ role: "system" as const, content: args.crossProjectPreamble }] : []),
     ...(args.workspacePreamble ? [{ role: "system" as const, content: args.workspacePreamble }] : []),

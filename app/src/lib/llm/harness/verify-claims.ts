@@ -76,3 +76,131 @@ export function verifyFileClaims(
 export function unverifiedClaims(claims: ClaimVerification[]): ClaimVerification[] {
   return claims.filter((c) => !c.verified);
 }
+
+// ============ web_fetch 版本（2026-07-07 补）============
+//
+// 上面这套只认 `read` 工具的本地文件路径。模型声称"抓取过某个网页"这类谎完全在覆盖范围外——
+// tool_executions 里 web_fetch 记录的 input 是 {url,...} 不是 {file_path,...}，没有对应校验。
+// 逻辑跟 verifyFileClaims 完全一份：路径级比对换成 URL 级比对，其余不变。
+
+export interface FetchRecord {
+  /** tool_executions.input，JSON 字符串，web_fetch 工具的形如 {url,...} */
+  input: string;
+  /** status：success/denied/error，非 success 都算「没真抓到内容」 */
+  status: string;
+}
+
+/** 从一条 web_fetch 审计记录的 input 里解析出 url */
+function extractFetchUrl(input: string): string | null {
+  try {
+    const obj = JSON.parse(input) as unknown;
+    if (obj && typeof obj === "object" && "url" in obj) {
+      const u = (obj as { url: unknown }).url;
+      if (typeof u === "string" && u) return u;
+    }
+  } catch {
+    // 坏 JSON 忽略
+  }
+  return null;
+}
+
+/** URL 匹配：忽略协议头大小写和末尾斜杠差异 */
+function urlMatches(claimed: string, actual: string): boolean {
+  const norm = (u: string) => u.replace(/^https?:\/\//i, "").replace(/\/+$/, "").toLowerCase();
+  return norm(claimed) === norm(actual);
+}
+
+/**
+ * 校验模型声称抓取过的 URL 列表。
+ * @param claimedUrls 模型文本里提取的 URL（extractUrlClaims 的输出）
+ * @param fetchRecords 本次对话 tool_executions 里所有 web_fetch 工具的审计记录
+ */
+export function verifyUrlClaims(
+  claimedUrls: string[],
+  fetchRecords: FetchRecord[],
+): ClaimVerification[] {
+  const fetchedUrls = fetchRecords
+    .filter((r) => r.status === "success")
+    .map((r) => extractFetchUrl(r.input))
+    .filter((u): u is string => u !== null);
+
+  return claimedUrls.map((claimed) => {
+    const matched = fetchedUrls.some((u) => urlMatches(claimed, u));
+    return matched
+      ? { claimed, verified: true }
+      : {
+          claimed,
+          verified: false,
+          reason: "模型声称抓取过此网页，但本次对话没有对应的 web_fetch 成功记录——内容可能是编造的",
+        };
+  });
+}
+
+// ============ bash/grep/web_search 版本（2026-07-07 补，系统性排查）============
+//
+// read/web_fetch 都补完之后，`grep`（pattern）、`bash`（command）、`web_search`（query）
+// 三个工具的调用参数还是裸的——不接就意味着"我 grep 出来 X"/"我跑了 `pnpm test` 都过了"这类
+// 谎，不管换哪个模型都抓不到。三个工具的字面目标字段名不同（pattern/command/query），
+// 但校验逻辑一样，合并成一套：只要跟其中任意一个工具的成功记录对得上就算验证通过——
+// 模型说"运行了 X"时我们没法单靠这句话判断它指的是 bash 命令还是 grep pattern，
+// 干脆在三者的并集里找，找不到才算编。
+
+export interface ExecRecord {
+  /** tool_executions.input，JSON 字符串，bash 工具是 {command,...}、grep 是 {pattern,...}、
+   *  web_search 是 {query,...} */
+  input: string;
+  /** status：success/denied/error，非 success 都算「没真跑到结果」 */
+  status: string;
+}
+
+const EXEC_TARGET_FIELDS = ["command", "pattern", "query"] as const;
+
+/** 从一条执行记录的 input 里按已知字段名（command/pattern/query）取值，取第一个命中的 */
+function extractExecTarget(input: string): string | null {
+  try {
+    const obj = JSON.parse(input) as unknown;
+    if (obj && typeof obj === "object") {
+      for (const field of EXEC_TARGET_FIELDS) {
+        const v = (obj as Record<string, unknown>)[field];
+        if (typeof v === "string" && v) return v;
+      }
+    }
+  } catch {
+    // 坏 JSON 忽略
+  }
+  return null;
+}
+
+/** 宽松匹配：命令/pattern/查询词允许模型转述时有细微出入（比如加了参数），只要互相包含就算对上 */
+function looseMatches(claimed: string, actual: string): boolean {
+  const c = claimed.trim().toLowerCase();
+  const a = actual.trim().toLowerCase();
+  if (!c || !a) return false;
+  return c === a || a.includes(c) || c.includes(a);
+}
+
+/**
+ * 校验模型声称运行/搜索过的字面值列表（bash 命令、grep pattern、web_search 查询词的并集）。
+ * @param claimedValues 模型文本里提取的字面值（extractQuotedClaims 的输出）
+ * @param execRecords 本次对话 tool_executions 里 bash/grep/web_search 三个工具的审计记录
+ */
+export function verifyCommandClaims(
+  claimedValues: string[],
+  execRecords: ExecRecord[],
+): ClaimVerification[] {
+  const actualValues = execRecords
+    .filter((r) => r.status === "success")
+    .map((r) => extractExecTarget(r.input))
+    .filter((v): v is string => v !== null);
+
+  return claimedValues.map((claimed) => {
+    const matched = actualValues.some((a) => looseMatches(claimed, a));
+    return matched
+      ? { claimed, verified: true }
+      : {
+          claimed,
+          verified: false,
+          reason: "模型声称运行/搜索过此内容，但本次对话没有对应的 bash/grep/web_search 成功记录——内容可能是编造的",
+        };
+  });
+}

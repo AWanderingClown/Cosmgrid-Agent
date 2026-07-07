@@ -31,3 +31,51 @@ export function extractFilePaths(text: string): string[] {
   }
   return [...found];
 }
+
+// 修订（2026-07-07，真实事故）：上面 extractFilePaths 会先把 URL 整段删掉再抓路径——
+// 这个设计对本地文件 claim 是对的（避免 URL 里的路径片段误报成文件），但代价是模型声称
+// "抓取过某个网页"这类谎完全不在覆盖范围内：verify-claims 之前只比对 `read` 工具的记录，
+// 跟 `web_fetch` 毫无关系。实测一个模型编了"我读到 GitHub 上 README/SKILL.md 说……"，
+// 但那次它是靠 web_fetch 失败后硬编的——这个谎本该被抓，但结构上抓不到。
+// 补一条同思路的 URL claim 提取：动词 + 紧跟着的 URL，才算"声称抓取过"，跟文件路径一样
+// 语境提取、漏报优先于误报（模型没把 URL 写回正文时就漏检，不强行猜）。
+const URL_CLAIM_RE =
+  /(?:读取了|读取|读过|读到了|读到|读了|查看了|查看过|查看|看过|看了|已读|阅读了|阅读|打开了|打开|访问了|访问|抓取了|抓取到|抓到|拉到了|拉到|(?:I\s+)?(?:read|fetched|opened|visited|loaded)(?:\s+(?:the\s+)?(?:page|url|link))?)\s*[:：]?\s*[`'"\(\[]?\s*(https?:\/\/[^\s"'<>)\]，。！？、]+)/gi;
+
+/**
+ * 从 assistant 文本提取模型「声明抓取过」的网页 URL（语境提取，跟 extractFilePaths 同一套思路）。
+ * @returns 去重、去掉尾部标点后的 URL 数组
+ */
+export function extractUrlClaims(text: string): string[] {
+  const found = new Set<string>();
+  for (const m of text.matchAll(URL_CLAIM_RE)) {
+    const u = m[1]?.replace(/[.,;:!?，。！？]+$/, "");
+    if (u) found.add(u);
+  }
+  return [...found];
+}
+
+// 修订（2026-07-07，系统性排查）：`read`/`web_fetch` 补完之后，工具注册表里还有
+// `grep`/`glob`/`bash`/`web_search`/`git_read` 五个工具完全没接入校验——不管换哪个模型，
+// 只要编的是"我 grep 出来 X"、"我跑了 `pnpm test` 都过了"、"我搜了一下看到 Y"这类话，
+// 现在结构上就抓不到，这才是"换什么模型都会编"的真正原因（不是模型问题，是覆盖面问题）。
+//
+// bash 命令、grep pattern、web_search 查询词跟文件路径/URL 不一样——没有扩展名/协议头
+// 这种天然可识别的字符形状，随便一句话都可能"看起来像"命令。只有模型自己明确用反引号/
+// 引号把它包起来时才算"声称"，裸词一律不抓（漏报优先于误报——见文件顶部原则）。
+const QUOTED_CLAIM_RE =
+  /(?:运行了|执行了|跑了|跑过|运行|执行|搜索了|搜了|查询了|查了|搜到了|搜到|(?:I\s+)?(?:ran|executed|run|searched|queried))\s*(?:一下)?\s*[:：]?\s*[`'"]([^`'"\n]{1,200})[`'"]/gi;
+
+/**
+ * 从 assistant 文本提取模型「声明运行/搜索过」的字面值（命令/pattern/查询词，反引号或引号
+ * 包起来的才算，跟 extractFilePaths/extractUrlClaims 同一套语境提取思路）。
+ * @returns 去重、去空白后的字面值数组
+ */
+export function extractQuotedClaims(text: string): string[] {
+  const found = new Set<string>();
+  for (const m of text.matchAll(QUOTED_CLAIM_RE)) {
+    const v = m[1]?.trim();
+    if (v) found.add(v);
+  }
+  return [...found];
+}

@@ -2,15 +2,33 @@ import type { ToolExecutionRow, DbMessage } from "@/lib/db";
 import { parseAttachments } from "@/lib/llm/attachments";
 import type { RoleId } from "@/lib/llm/orchestrator";
 import { ROLE_IDS } from "@/lib/llm/orchestrator";
-import type { ReadRecord } from "@/lib/llm/harness/verify-claims";
+import type { ReadRecord, FetchRecord, ExecRecord } from "@/lib/llm/harness/verify-claims";
 import type { ModelListItem } from "@/lib/api";
 import type { ChatMessage, ReceiptContent } from "./types";
 
-export function filterReadRecordsSince(rows: ToolExecutionRow[], sinceIso: string | null): ReadRecord[] {
+/** 按工具名 + 起始时间筛 tool_executions，harness 各类 claim 校验的共用底座 */
+function filterToolRecordsSince(
+  rows: ToolExecutionRow[],
+  sinceIso: string | null,
+  toolNames: readonly string[],
+): { input: string; status: string }[] {
   const sinceTs = sinceIso ? Date.parse(sinceIso) : Number.NEGATIVE_INFINITY;
   return rows
-    .filter((r) => r.toolName === "read" && Date.parse(r.createdAt) >= sinceTs)
+    .filter((r) => toolNames.includes(r.toolName) && Date.parse(r.createdAt) >= sinceTs)
     .map((r) => ({ input: r.input, status: r.status }));
+}
+
+export function filterReadRecordsSince(rows: ToolExecutionRow[], sinceIso: string | null): ReadRecord[] {
+  return filterToolRecordsSince(rows, sinceIso, ["read"]);
+}
+
+export function filterFetchRecordsSince(rows: ToolExecutionRow[], sinceIso: string | null): FetchRecord[] {
+  return filterToolRecordsSince(rows, sinceIso, ["web_fetch"]);
+}
+
+/** bash/grep/web_search 三个工具的执行记录并集，喂给 verifyCommandClaims */
+export function filterExecRecordsSince(rows: ToolExecutionRow[], sinceIso: string | null): ExecRecord[] {
+  return filterToolRecordsSince(rows, sinceIso, ["bash", "grep", "web_search"]);
 }
 
 function parseReceipt(content: string): ReceiptContent | null {

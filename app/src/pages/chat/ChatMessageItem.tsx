@@ -125,12 +125,22 @@ export const MessageItem = memo(function MessageItem({
               </span>
             )}
           </div>
-          {isAssistant && harness && (harness.unverifiedPaths.length > 0 || harness.pseudoToolNames.length > 0 || !!harness.fabricatedUsageCount) && (
+          {isAssistant && harness && (harness.unverifiedPaths.length > 0 || (harness.unverifiedUrls?.length ?? 0) > 0 || (harness.unverifiedCommands?.length ?? 0) > 0 || harness.pseudoToolNames.length > 0 || !!harness.fabricatedUsageCount) && (
             <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
               <div className="font-semibold">⚠️ 内容真实性校验：模型可能编造了内容，请勿轻信</div>
               {harness.unverifiedPaths.length > 0 && (
                 <div className="mt-1">
                   引用了但本次对话未实际读取的文件：{harness.unverifiedPaths.slice(0, 5).join("、")}{harness.unverifiedPaths.length > 5 ? " 等" : ""}
+                </div>
+              )}
+              {(harness.unverifiedUrls?.length ?? 0) > 0 && (
+                <div className="mt-1">
+                  声称抓取过但本次对话未实际抓取成功的网页：{harness.unverifiedUrls!.slice(0, 5).join("、")}{harness.unverifiedUrls!.length > 5 ? " 等" : ""}
+                </div>
+              )}
+              {(harness.unverifiedCommands?.length ?? 0) > 0 && (
+                <div className="mt-1">
+                  声称运行/搜索过但本次对话没有对应成功记录的内容：{harness.unverifiedCommands!.slice(0, 5).join("、")}{harness.unverifiedCommands!.length > 5 ? " 等" : ""}
                 </div>
               )}
               {harness.pseudoToolNames.length > 0 && (

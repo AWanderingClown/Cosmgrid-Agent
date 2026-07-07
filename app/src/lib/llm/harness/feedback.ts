@@ -9,15 +9,19 @@
 // - 重答封顶 1 次（调用方控制），避免模型反复造假烧 token。
 // - 有工具 vs 没工具，纠正话术不同：没工具时不能叫它「去用真工具」（根本没有）。
 
-import { extractFilePaths } from "./extract-claims";
-import { verifyFileClaims, unverifiedClaims } from "./verify-claims";
+import { extractFilePaths, extractUrlClaims, extractQuotedClaims } from "./extract-claims";
+import { verifyFileClaims, verifyUrlClaims, verifyCommandClaims, unverifiedClaims } from "./verify-claims";
 import { detectPseudoToolCalls } from "./detect-pseudo-tools";
 import { detectFabricatedUsageCount } from "./detect-usage-narration";
-import type { ReadRecord } from "./verify-claims";
+import type { ReadRecord, FetchRecord, ExecRecord } from "./verify-claims";
 
 export interface HarnessVerdict {
   /** 模型声称读过、但 tool_executions 无对应 read 记录的文件路径 */
   unverifiedPaths: string[];
+  /** 模型声称抓取过、但 tool_executions 无对应 web_fetch 成功记录的网页 URL */
+  unverifiedUrls?: string[];
+  /** 模型声称运行/搜索过、但 tool_executions 无对应 bash/grep/web_search 成功记录的命令/pattern/查询词 */
+  unverifiedCommands?: string[];
   /** 模型在正文里吐的伪工具名（run_command 等），未真实执行 */
   pseudoToolNames: string[];
   /** 模型声称的工具/命令使用次数超过本轮真实 toolCallCount——数字化的编造信号，无此类声称则为 null */
@@ -25,27 +29,42 @@ export interface HarnessVerdict {
 }
 
 /**
- * 评估一条 assistant 回答：声称读的文件有没有真读、有没有吐伪工具调用、有没有编造使用次数。
- * 纯函数——readRecords 由调用方从 tool_executions 查好传进来；actualToolCallCount 默认 0
- * （不传时按"本轮没有真实工具调用"的最严格口径判定，向后兼容旧调用点）。
+ * 评估一条 assistant 回答：声称读的文件/网页/命令有没有真执行、有没有吐伪工具调用、有没有编造使用次数。
+ * 纯函数——readRecords/fetchRecords/execRecords 由调用方从 tool_executions 查好传进来；actualToolCallCount
+ * 默认 0（不传时按"本轮没有真实工具调用"的最严格口径判定，向后兼容旧调用点）。fetchRecords/execRecords
+ * 不传则不校验对应类型的 claim。
  */
 export function evaluateHarness(
   content: string,
   readRecords: ReadRecord[],
   actualToolCallCount = 0,
+  fetchRecords: FetchRecord[] = [],
+  execRecords: ExecRecord[] = [],
 ): HarnessVerdict {
   const claimed = extractFilePaths(content);
   const unverifiedPaths = unverifiedClaims(verifyFileClaims(claimed, readRecords)).map((c) => c.claimed);
+  const claimedUrls = extractUrlClaims(content);
+  const unverifiedUrls = unverifiedClaims(verifyUrlClaims(claimedUrls, fetchRecords)).map((c) => c.claimed);
+  const claimedCommands = extractQuotedClaims(content);
+  const unverifiedCommands = unverifiedClaims(verifyCommandClaims(claimedCommands, execRecords)).map(
+    (c) => c.claimed,
+  );
   const pseudoToolNames = [
     ...new Set(detectPseudoToolCalls(content).map((p) => p.toolName).filter((n): n is string => !!n)),
   ];
   const fabricatedUsageCount = detectFabricatedUsageCount(content, actualToolCallCount);
-  return { unverifiedPaths, pseudoToolNames, fabricatedUsageCount };
+  return { unverifiedPaths, unverifiedUrls, unverifiedCommands, pseudoToolNames, fabricatedUsageCount };
 }
 
 /** verdict 是否干净（没检测到任何违规）。干净 = 不需要标黄、不需要重答。 */
 export function isClean(v: HarnessVerdict): boolean {
-  return v.unverifiedPaths.length === 0 && v.pseudoToolNames.length === 0 && !v.fabricatedUsageCount;
+  return (
+    v.unverifiedPaths.length === 0 &&
+    (v.unverifiedUrls?.length ?? 0) === 0 &&
+    (v.unverifiedCommands?.length ?? 0) === 0 &&
+    v.pseudoToolNames.length === 0 &&
+    !v.fabricatedUsageCount
+  );
 }
 
 /**
@@ -65,6 +84,28 @@ export function buildCorrectionPrompt(v: HarnessVerdict, opts: { hasTools: boole
       opts.hasTools
         ? "  你有可用的 read 工具——请**真正调用 read 读取这些文件后**，根据真实内容重新回答；如果不需要读，就别声称读过。"
         : "  本次你没有可用的文件工具，无法真读文件。请**不要再编造文件内容**——直说你读不了，请用户把文件内容贴过来，或基于已知信息谨慎回答。",
+    );
+  }
+
+  if (v.unverifiedUrls && v.unverifiedUrls.length > 0) {
+    lines.push(
+      `- 你声称抓取过这些网页，但本次对话没有任何真实的 web_fetch 成功记录：${v.unverifiedUrls.join("、")}。`,
+    );
+    lines.push(
+      opts.hasTools
+        ? "  你有可用的 web_fetch 工具——请**真正调用 web_fetch 抓取这些网页后**，根据真实内容重新回答；如果不需要抓，就别声称看过。"
+        : "  本次你没有可用的网页抓取工具，无法真读网页内容。请**不要再编造网页内容**——直说你读不了，请用户把正文贴过来或截图，不要假装已经看过。",
+    );
+  }
+
+  if (v.unverifiedCommands && v.unverifiedCommands.length > 0) {
+    lines.push(
+      `- 你声称运行/搜索过这些内容，但本次对话没有任何真实的 bash/grep/web_search 成功记录：${v.unverifiedCommands.join("、")}。`,
+    );
+    lines.push(
+      opts.hasTools
+        ? "  你有可用的 bash/grep/web_search 工具——请**真正调用对应工具执行后**，根据真实结果重新回答；如果不需要执行，就别声称跑过。"
+        : "  本次你没有可用的命令/搜索工具，无法真跑这些内容。请**不要再编造执行结果**——直说你做不到，请用户把结果贴过来，或基于已知信息谨慎回答。",
     );
   }
 

@@ -91,6 +91,42 @@ describe("buildChatPromptMessages", () => {
     expect(prompt.some((m) => m.role === "system" && textContent(m.content).includes("0 次真实工具调用"))).toBe(false);
   });
 
+  // 真实问题（2026-07-07）：国产模型比 Claude/GPT 更容易在没真调用工具时编造"我看到/
+  // 读到"这类话（对照 opencode kimi.txt 的做法），照 modelLabel 命中才追加这段提醒。
+  it("modelLabel 是 MiniMax 系列 → 插入国产模型反编造提醒", () => {
+    const prompt = buildChatPromptMessages({
+      messages: [{ id: "user-1", role: "user", content: "帮我查一下这个仓库" }],
+      effectiveWorkspace: "/repo",
+      primaryIsCli: false,
+      projectMemoryPreamble: null,
+      crossProjectPreamble: null,
+      workspacePreamble: null,
+      tooLargeNotice: (name) => `${name} 太大`,
+      modelLabel: "MiniMax-M3",
+    });
+
+    expect(prompt.some((m) => m.role === "system" && textContent(m.content).includes("我看到/我读到/我运行了"))).toBe(
+      true,
+    );
+  });
+
+  it("modelLabel 是 Claude/未传 → 不插入国产模型专属提醒", () => {
+    const prompt = buildChatPromptMessages({
+      messages: [{ id: "user-1", role: "user", content: "帮我查一下这个仓库" }],
+      effectiveWorkspace: "/repo",
+      primaryIsCli: false,
+      projectMemoryPreamble: null,
+      crossProjectPreamble: null,
+      workspacePreamble: null,
+      tooLargeNotice: (name) => `${name} 太大`,
+      modelLabel: "Claude Opus 4.8",
+    });
+
+    expect(prompt.some((m) => m.role === "system" && textContent(m.content).includes("我看到/我读到/我运行了"))).toBe(
+      false,
+    );
+  });
+
   it("上一条 assistant 消息真有工具调用（toolCallCount>0）→ 不插入提醒", () => {
     const messages: ChatMessage[] = [
       { id: "user-1", role: "user", content: "看一下这个网站" },

@@ -98,7 +98,7 @@ import { applyPromptCompression } from "@/pages/chat/prompt-compression";
 import { buildChatPromptMessages } from "@/pages/chat/prompt-messages";
 import { decideStreamRetry } from "@/pages/chat/stream-retry";
 import { createStreamingTurnCallbacks, createStreamingTurnState } from "@/pages/chat/streaming-callbacks";
-import { filterReadRecordsSince } from "@/pages/chat/history";
+import { filterReadRecordsSince, filterFetchRecordsSince, filterExecRecordsSince } from "@/pages/chat/history";
 import type { ChatMessage, PendingRoutingDecision, PendingSend } from "@/pages/chat/types";
 
 type ChatUsage = StreamUsage;
@@ -241,9 +241,11 @@ export function useChatStream(opts: UseChatStreamOptions) {
     try {
       const all = await toolExecutions.listByConversation(convId);
       applyToolExecutionRows(all);
-      // filterReadRecordsSince 静态导入
+      // filterReadRecordsSince/filterFetchRecordsSince/filterExecRecordsSince 静态导入
       const readRecords = filterReadRecordsSince(all, sinceIso);
-      return evaluateHarness(content, readRecords, actualToolCallCount);
+      const fetchRecords = filterFetchRecordsSince(all, sinceIso);
+      const execRecords = filterExecRecordsSince(all, sinceIso);
+      return evaluateHarness(content, readRecords, actualToolCallCount, fetchRecords, execRecords);
     } catch {
       return null;
     }
@@ -939,8 +941,9 @@ export function useChatStream(opts: UseChatStreamOptions) {
       const streamingState = createStreamingTurnState(model.id);
       let convo = outgoing;
       let finalContent = "";
-      // nudge 重答（模型嘴上说要做但 0 工具调用）文字提醒不够硬——模型可能继续嘴炮。
-      // 命中 nudge 后，下一次尝试直接在 API 层锁死 toolChoice:"required"，不给它选择。
+      // harness/nudge 重答光靠纠正话术里"请真正调用工具"这句文字不够硬——模型完全可能继续
+      // 嘴炮或换个说法蒙混过关。两种重答只要本轮挂了工具，都在下一次尝试直接在 API 层锁死
+      // toolChoice:"required"，不给它"继续不调用工具"这个选项（见 stream-retry.ts）。
       let forceToolChoiceRequired = false;
       try {
         for (let attempt = 0; ; attempt++) {
@@ -1002,7 +1005,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
           });
           if (retryDecision.shouldRetry) {
             setHarnessNotice(retryDecision.notice === "harness" ? t("chat.harnessRetry") : t("chat.intentNudgeRetry"));
-            forceToolChoiceRequired = retryDecision.notice === "nudge";
+            forceToolChoiceRequired = retryDecision.forceToolChoice;
             convo = [
               ...convo,
               { role: "assistant" as const, content: streamingState.fullContent },
@@ -1019,6 +1022,8 @@ export function useChatStream(opts: UseChatStreamOptions) {
                       ...m,
                       harness: {
                         unverifiedPaths: verdict!.unverifiedPaths,
+                        unverifiedUrls: verdict!.unverifiedUrls,
+                        unverifiedCommands: verdict!.unverifiedCommands,
                         pseudoToolNames: verdict!.pseudoToolNames,
                         fabricatedUsageCount: verdict!.fabricatedUsageCount ?? null,
                       },

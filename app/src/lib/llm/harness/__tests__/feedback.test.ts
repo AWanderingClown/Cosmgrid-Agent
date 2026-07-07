@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { evaluateHarness, isClean, buildCorrectionPrompt, detectIntentNoToolCall, buildIntentNudgePrompt } from "../feedback";
-import type { ReadRecord } from "../verify-claims";
+import type { ReadRecord, FetchRecord, ExecRecord } from "../verify-claims";
 
 const readOf = (file_path: string): ReadRecord => ({ input: JSON.stringify({ file_path }), status: "success" });
+const fetchOf = (url: string): FetchRecord => ({ input: JSON.stringify({ url }), status: "success" });
+const bashOf = (command: string): ExecRecord => ({ input: JSON.stringify({ command }), status: "success" });
 
 describe("evaluateHarness", () => {
   it("声称读了文件但无 read 记录 → 标为未验证", () => {
@@ -25,6 +27,50 @@ describe("evaluateHarness", () => {
 
   it("纯闲聊无违规 → 干净", () => {
     expect(isClean(evaluateHarness("你好，今天天气不错", []))).toBe(true);
+  });
+
+  // 真实事故（2026-07-07）：模型编"我读到 https://... 说……"，实际 web_fetch 没成功——
+  // 这类网页 claim 之前完全不在覆盖范围（filterReadRecordsSince 只认 read 工具）。
+  it("声称抓取过网页但无 web_fetch 记录 → 标为未验证", () => {
+    const v = evaluateHarness("我读到了 https://github.com/foo/bar 说这是个 MIT 项目", [], 0, []);
+    expect(v.unverifiedUrls).toContain("https://github.com/foo/bar");
+    expect(isClean(v)).toBe(false);
+  });
+
+  it("声称抓取过的网页有真实 web_fetch 成功记录 → 干净", () => {
+    const v = evaluateHarness(
+      "我读到了 https://github.com/foo/bar 说这是个 MIT 项目",
+      [],
+      0,
+      [fetchOf("https://github.com/foo/bar")],
+    );
+    expect(v.unverifiedUrls).toEqual([]);
+    expect(isClean(v)).toBe(true);
+  });
+
+  it("不传 fetchRecords（旧调用点）→ 按最严格口径判定，跟不传 read 记录一样会被标未验证", () => {
+    const v = evaluateHarness("我读到了 https://github.com/foo/bar 说这是个 MIT 项目", []);
+    expect(v.unverifiedUrls).toContain("https://github.com/foo/bar");
+  });
+
+  // 真实事故（2026-07-07，系统性排查）：grep/bash/web_search 三个工具完全没接过校验——
+  // 不管换哪个模型，"我跑了 `pnpm test` 都过了"这类谎都抓不到，这才是"换什么模型都会编"
+  // 的真正原因（覆盖面问题，不是模型问题）。
+  it("声称跑过命令但无 bash/grep/web_search 记录 → 标为未验证", () => {
+    const v = evaluateHarness("我运行了 `pnpm test`，全部通过", [], 0, [], []);
+    expect(v.unverifiedCommands).toContain("pnpm test");
+    expect(isClean(v)).toBe(false);
+  });
+
+  it("声称跑过的命令有真实 bash 成功记录 → 干净", () => {
+    const v = evaluateHarness("我运行了 `pnpm test`，全部通过", [], 0, [], [bashOf("pnpm test")]);
+    expect(v.unverifiedCommands).toEqual([]);
+    expect(isClean(v)).toBe(true);
+  });
+
+  it("不传 execRecords（旧调用点）→ 按最严格口径判定", () => {
+    const v = evaluateHarness("我运行了 `pnpm test`，全部通过", []);
+    expect(v.unverifiedCommands).toContain("pnpm test");
   });
 });
 
@@ -56,6 +102,48 @@ describe("buildCorrectionPrompt", () => {
   it("有工具 + 伪工具调用 → 叫模型改用结构化 tool_call", () => {
     const p = buildCorrectionPrompt({ unverifiedPaths: [], pseudoToolNames: ["view_file"] }, { hasTools: true });
     expect(p).toContain("结构化 tool_call");
+  });
+
+  it("有工具 + 未验证 URL → 叫模型去真调 web_fetch", () => {
+    const p = buildCorrectionPrompt(
+      { unverifiedPaths: [], unverifiedUrls: ["https://example.com/a"], pseudoToolNames: [] },
+      { hasTools: true },
+    );
+    expect(p).toContain("https://example.com/a");
+    expect(p).toContain("web_fetch");
+    expect(p).toContain("真正调用");
+  });
+
+  it("无工具 + 未验证 URL → 叫模型别编、让用户贴内容", () => {
+    const p = buildCorrectionPrompt(
+      { unverifiedPaths: [], unverifiedUrls: ["https://example.com/a"], pseudoToolNames: [] },
+      { hasTools: false },
+    );
+    expect(p).toContain("没有可用的网页抓取工具");
+    expect(p).toContain("贴过来");
+  });
+
+  it("有工具 + 未验证命令 → 叫模型去真调 bash/grep/web_search", () => {
+    const p = buildCorrectionPrompt(
+      { unverifiedPaths: [], unverifiedCommands: ["pnpm test"], pseudoToolNames: [] },
+      { hasTools: true },
+    );
+    expect(p).toContain("pnpm test");
+    expect(p).toContain("bash/grep/web_search");
+    expect(p).toContain("真正调用");
+  });
+
+  it("无工具 + 未验证命令 → 叫模型别编、让用户贴结果", () => {
+    const p = buildCorrectionPrompt(
+      { unverifiedPaths: [], unverifiedCommands: ["pnpm test"], pseudoToolNames: [] },
+      { hasTools: false },
+    );
+    expect(p).toContain("没有可用的命令/搜索工具");
+    expect(p).toContain("贴过来");
+  });
+
+  it("没有 unverifiedUrls/unverifiedCommands 字段（旧调用点字面量）→ isClean 不受影响", () => {
+    expect(isClean({ unverifiedPaths: [], pseudoToolNames: [] })).toBe(true);
   });
 });
 

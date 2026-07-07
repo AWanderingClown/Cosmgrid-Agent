@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { buildTimePreamble, buildNoToolsPreamble, buildProjectMemoryPreamble, buildCrossProjectMemoryPreamble } from "../context-preamble";
+import {
+  buildTimePreamble,
+  buildNoToolsPreamble,
+  buildProjectMemoryPreamble,
+  buildCrossProjectMemoryPreamble,
+  buildDomesticModelReminder,
+} from "../context-preamble";
 
 describe("buildTimePreamble", () => {
   it("用固定时间格式化出年月日 + 星期 + 时分", () => {
@@ -115,6 +121,41 @@ describe("buildProjectMemoryPreamble", () => {
     expect(out).not.toContain("A".repeat(80));
     expect(out).not.toContain("B".repeat(220));
     expect(out).toContain("…");
+  });
+});
+
+// 真实问题（2026-07-07）：查 opencode 源码发现它按 model 分了 8 套系统提示，只有
+// kimi.txt 一份明确写了反编造提醒，其余 7 份（含 anthropic/gpt/gemini）都没有——
+// 说明国产模型需要比通用提示更直白的反编造提醒。照同一思路，只对国产模型家族追加。
+describe("buildDomesticModelReminder", () => {
+  it("MiniMax 系列命中 → 返回反编造提醒", () => {
+    const out = buildDomesticModelReminder("MiniMax-M3");
+    expect(out).not.toBeNull();
+    expect(out).toContain("我看到/我读到/我运行了");
+  });
+
+  it("Kimi/GLM/Qwen/DeepSeek 都命中（大小写不敏感）", () => {
+    expect(buildDomesticModelReminder("Kimi K2")).not.toBeNull();
+    expect(buildDomesticModelReminder("glm-4.6")).not.toBeNull();
+    expect(buildDomesticModelReminder("通义千问 Qwen3")).not.toBeNull();
+    expect(buildDomesticModelReminder("deepseek-v3")).not.toBeNull();
+  });
+
+  it("Claude/GPT/Gemini 等非国产模型 → 不命中，返回 null（不占 token）", () => {
+    expect(buildDomesticModelReminder("Claude Opus 4.8")).toBeNull();
+    expect(buildDomesticModelReminder("GPT-5.4")).toBeNull();
+    expect(buildDomesticModelReminder("Gemini 3 Pro")).toBeNull();
+  });
+
+  it("不传/空值 → 返回 null", () => {
+    expect(buildDomesticModelReminder(null)).toBeNull();
+    expect(buildDomesticModelReminder(undefined)).toBeNull();
+    expect(buildDomesticModelReminder("")).toBeNull();
+  });
+
+  it("提醒里明确区分'写在回复里'和'真的写进文件'", () => {
+    const out = buildDomesticModelReminder("MiniMax-M3")!;
+    expect(out).toContain("写进文件");
   });
 });
 

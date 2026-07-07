@@ -70,6 +70,33 @@ export function buildImageGuardPreamble(): string {
   ].join("\n");
 }
 
+// 修订（2026-07-07）：查 opencode 源码（技术参考/opencode-dev/packages/opencode/src/session/
+// system.ts:25）发现它按 model.api.id 分了 8 套系统提示，只有 kimi.txt 一份里明确写了
+// "Try your best to avoid any hallucination. Do fact checking..."——其余 7 份（含 anthropic/
+// gpt/gemini）都没有这句。说明连成熟的多模型 harness 也认为国产模型需要更直白的反编造提醒，
+// 不是靠一份通用提示词能覆盖的。CosmGrid.md 是所有模型共用的核心提示，不适合把这段只对
+// 部分模型有效的话塞进去——照 opencode 的思路单独判 driverLabel，命中才加。
+const DOMESTIC_MODEL_KEYWORDS = ["minimax", "kimi", "moonshot", "glm", "智谱", "qwen", "通义", "deepseek"];
+
+/** driverLabel（如 "MiniMax-M3"）是否匹配已知国产模型家族，命中才需要额外反编造提醒 */
+function isDomesticModel(driverLabel: string): boolean {
+  const lower = driverLabel.toLowerCase();
+  return DOMESTIC_MODEL_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+/**
+ * 国产模型专属反编造提醒。不传或不匹配已知国产模型家族时返回 null（不占 token）。
+ * @param driverLabel 当前驱动模型的人类可读名，如 "MiniMax-M3"
+ */
+export function buildDomesticModelReminder(driverLabel: string | null | undefined): string | null {
+  if (!driverLabel || !isDomesticModel(driverLabel)) return null;
+  return [
+    "额外提醒：你没有真正调用工具、没有拿到真实执行结果时，绝对不要在正文里描述",
+    "「我看到/我读到/我运行了……」这类话，也不要把「在回复里写出代码」当成「已经把代码写进文件」。",
+    "拿不到真实结果就直接说做不到、请用户提供内容，不要用听起来合理的内容填空。",
+  ].join("");
+}
+
 function shorten(text: string, max = 120): string {
   const trimmed = text.trim().replace(/\s+/g, " ");
   if (trimmed.length <= max) return trimmed;
