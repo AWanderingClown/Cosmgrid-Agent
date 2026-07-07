@@ -26,6 +26,7 @@ interface ChatHeaderProps {
   lastUsage: { inputTokens: number; outputTokens: number } | null;
   switchNotice: string | null;
   cacheNotice: string | null;
+  persistNotice: string | null;
   harnessNotice: string | null;
   onSwitchConversation: (id: string) => void;
   onNewChat: () => void;
@@ -45,6 +46,7 @@ export function ChatHeader({
   lastUsage,
   switchNotice,
   cacheNotice,
+  persistNotice,
   harnessNotice,
   onSwitchConversation,
   onNewChat,
@@ -140,9 +142,12 @@ export function ChatHeader({
           </div>
         )}
         {switchNotice && (
-          <div className="flex items-center gap-2 px-3 py-1 bg-amber-500/10 text-amber-500 rounded-full border border-amber-500/20 animate-pulse">
-            <Zap className="w-3 h-3" />
-            <span className="text-[10px] font-bold uppercase">{switchNotice}</span>
+          <div
+            className="flex items-center gap-2 px-3 py-1 bg-amber-500/10 text-amber-500 rounded-full border border-amber-500/20 animate-pulse"
+            title={switchNotice}
+          >
+            <Zap className="w-3 h-3 shrink-0" />
+            <span className="text-[10px] font-bold uppercase truncate max-w-[320px]">{switchNotice}</span>
           </div>
         )}
         {cacheNotice && (
@@ -155,6 +160,15 @@ export function ChatHeader({
           <div className="flex items-center gap-2 px-3 py-1 bg-rose-500/10 text-rose-500 rounded-full border border-rose-500/20 animate-pulse">
             <ShieldAlert className="w-3 h-3" />
             <span className="text-[10px] font-bold uppercase">{harnessNotice}</span>
+          </div>
+        )}
+        {persistNotice && (
+          <div
+            className="flex items-center gap-2 px-3 py-1 bg-rose-500/10 text-rose-500 rounded-full border border-rose-500/20 animate-pulse"
+            title={persistNotice}
+          >
+            <ShieldAlert className="w-3 h-3 shrink-0" />
+            <span className="text-[10px] font-bold uppercase truncate max-w-[240px]">{persistNotice}</span>
           </div>
         )}
       </div>

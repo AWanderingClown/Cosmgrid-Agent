@@ -59,6 +59,7 @@
     "deleteConvFailed": "Delete failed — the database may be busy right now. Please try again in a moment. This conversation is still in your list, nothing was lost.",
     "loadError": "Failed to load",
     "newChatFailed": "Failed to create a new chat — the app may be running twice and locking the database. Please restart the app and try again.",
+    "persistFailed": "This message wasn't saved to the local database (it may have been busy). It's still showing on screen, but will be lost if you restart the app — copy it somewhere safe now, and avoid force-quitting.",
     "noCredential": "API credential not found",
     "noApiKey": "API Key missing",
     "constructError": "Failed to construct model",

@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   replaceSourceEntries: vi.fn(),
   disableManualForModel: vi.fn(),
+  countBySource: vi.fn(),
   syncUpsert: vi.fn(),
 }));
 
@@ -16,6 +17,7 @@ vi.mock("../../db", () => ({
     create: mocks.create,
     replaceSourceEntries: mocks.replaceSourceEntries,
     disableManualForModel: mocks.disableManualForModel,
+    countBySource: mocks.countBySource,
   },
   priceSyncStatus: {
     upsert: mocks.syncUpsert,
@@ -26,6 +28,7 @@ import {
   lookupPriceFromCatalog,
   parseRemotePriceCatalog,
   saveManualModelPrice,
+  syncModelPrices,
 } from "../price-catalog";
 
 describe("lookupPriceFromCatalog", () => {
@@ -114,6 +117,64 @@ describe("parseRemotePriceCatalog", () => {
         version: "models.dev:test",
       },
     ]);
+  });
+});
+
+describe("syncModelPrices 残缺响应体检", () => {
+  beforeEach(() => {
+    mocks.replaceSourceEntries.mockReset();
+    mocks.countBySource.mockReset();
+    mocks.syncUpsert.mockReset();
+  });
+
+  /** 造一份 models.dev 样式 JSON：n 个供应商各带 1 个有价模型。 */
+  function fakeCatalog(n: number): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (let i = 0; i < n; i++) {
+      out[`prov${i}`] = {
+        models: { [`prov${i}/model${i}`]: { id: `prov${i}/model${i}`, cost: { input: 1, output: 2 } } },
+      };
+    }
+    return out;
+  }
+
+  function mockFetchOnce(body: unknown): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => body }),
+    );
+  }
+
+  it("完整响应（数量与现有相当）正常替换", async () => {
+    mockFetchOnce(fakeCatalog(4960));
+    mocks.countBySource.mockResolvedValueOnce(4953);
+    mocks.replaceSourceEntries.mockResolvedValueOnce(undefined);
+
+    const result = await syncModelPrices();
+
+    expect(result.ok).toBe(true);
+    expect(mocks.replaceSourceEntries).toHaveBeenCalledTimes(1);
+  });
+
+  it("残缺响应（4 行 vs 已有 4953）拒绝替换，保住旧数据", async () => {
+    mockFetchOnce(fakeCatalog(4));
+    mocks.countBySource.mockResolvedValueOnce(4953);
+
+    const result = await syncModelPrices();
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("truncated");
+    expect(mocks.replaceSourceEntries).not.toHaveBeenCalled();
+  });
+
+  it("低于绝对下限（即使库里本来是空的）也拒绝", async () => {
+    mockFetchOnce(fakeCatalog(4));
+    mocks.countBySource.mockResolvedValueOnce(0);
+
+    const result = await syncModelPrices();
+
+    expect(result.ok).toBe(false);
+    expect(mocks.replaceSourceEntries).not.toHaveBeenCalled();
   });
 });
 

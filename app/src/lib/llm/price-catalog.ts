@@ -188,6 +188,26 @@ export async function syncModelPrices(): Promise<SyncModelPricesResult> {
         throw new Error("remote catalog returned no priced models");
       }
 
+      // 残缺响应体检（2026-07-07，用户实测事故 + 备份数据实锤）：今天用户网络（疑似代理）
+      // 把 models.dev 的大响应截断成只剩第一个供应商 requesty 的 4 个模型，一整天每次同步都
+      // 是这 4 行。replaceSourceEntries 现在是真删除再插入——如果不拦，会拿这 4 行残缺数据把
+      // 已有的 4953 行完整价格全删光。两道闸：
+      //   1. 绝对下限：models.dev 正常有几千个带价模型，低于 MIN_REMOTE_ENTRIES 必是残缺/异常。
+      //   2. 相对下限：已有数据时，新抓的数量若不到现有的一半，判定为残缺，宁可保留旧的。
+      // 命中任一条都当失败处理：不替换、保住原有好数据，status 里记明原因。
+      const MIN_REMOTE_ENTRIES = 100;
+      const existingCount = await modelPriceCatalog.countBySource("remote");
+      if (
+        entries.length < MIN_REMOTE_ENTRIES ||
+        (existingCount > 0 && entries.length < existingCount * 0.5)
+      ) {
+        throw new Error(
+          `remote catalog looks truncated: got ${entries.length} entries` +
+            (existingCount > 0 ? ` (already have ${existingCount})` : "") +
+            `，疑似网络截断响应，已保留原有价格不做替换`,
+        );
+      }
+
       await modelPriceCatalog.replaceSourceEntries("remote", entries);
 
       await priceSyncStatus.upsert({

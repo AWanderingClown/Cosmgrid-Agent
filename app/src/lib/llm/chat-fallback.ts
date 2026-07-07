@@ -130,8 +130,14 @@ export interface StreamCallbacks {
    * interrupted=true 表示用户主动 abort（不写 usage，标记 interrupted）。
    */
   onUsage?: (usage: StreamUsage, model: ModelEndpoint, finishReason: string, interrupted: boolean) => void;
-  /** 系统自动恢复的方式：原生续跑 / 上下文重放 / fallback 接力 */
-  onRecovered?: (mode: "native_resume" | "context_replay" | "fallback_handoff") => void;
+  /**
+   * 系统自动恢复的方式：原生续跑 / 上下文重放 / fallback 接力
+   * detail：修复（2026-07-07，用户实测发现）——native_resume 之前只在 UI 上显示一句
+   * 静态"系统已用 CLI 官方会话原生续跑"，触发它的真实原因（首次调用失败的错误文本）
+   * 只打进 devtools 控制台，不懂开发者工具的用户完全看不到、只能来回问。这里把原始
+   * 失败原因带出来，UI 直接拼进同一条提示里，不需要用户会用任何调试工具。
+   */
+  onRecovered?: (mode: "native_resume" | "context_replay" | "fallback_handoff", detail?: string) => void;
   /** CLI/agent 中间状态，不计入最终回答正文 */
   onStatus?: (status: string) => void;
   /** CLI 官方输出的实际模型名，例如 sonnet 别名会解析成 claude-sonnet-4-6 */
@@ -375,11 +381,17 @@ export async function streamWithFallback(
           },
         };
       } catch (error) {
+        // 修复（2026-07-07，用户实测发现）：原来这个 error 只用来取 sessionId，从没打印过就
+        // 直接丢了——如果紧接着的 resume 重试成功，原始失败原因永远无法追溯；如果 resume
+        // 也失败，resume 自己的失败原因还会在下面的空 catch 里被再丢一次，最终往上抛的是
+        // 第一次的 error，两次真实失败原因全部沉默消失，devtools 里连个痕迹都没有。
+        console.error("[cli-engine] 首次调用失败，尝试 native resume", error);
+        const firstErrorDetail = classifyLlmError(error).technicalMessage || undefined;
         const sessionId =
           (error as { officialSessionId?: string | null })?.officialSessionId ?? officialSessionId;
         if (sessionId && !(options.signal?.aborted ?? false)) {
           try {
-            callbacks.onRecovered?.("native_resume");
+            callbacks.onRecovered?.("native_resume", firstErrorDetail);
             const resumed = await runCli(sessionId);
             persistCliSession(sessionId, isNormalFinishReason(resumed.finishReason) ? "completed" : "failed");
             return {
@@ -393,7 +405,8 @@ export async function streamWithFallback(
                 toolCallCount: 0,
               },
             };
-          } catch {
+          } catch (resumeError) {
+            console.error("[cli-engine] native resume 重试也失败", resumeError);
             persistCliSession(sessionId, "failed");
           }
         }

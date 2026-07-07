@@ -318,7 +318,9 @@ export function classifyLlmError(
     return {
       category: "auth_invalid",
       httpStatus: 401,
-      userMessage: msg("API Key 无效或已过期，请在 API 接入页检查", "errorClassifier.auth_invalid"),
+      userMessage: cliKind
+        ? "本机 CLI 登录状态可能已过期，请在终端运行 `claude /login`（或 `codex login`）后重试"
+        : msg("API Key 无效或已过期，请在 API 接入页检查", "errorClassifier.auth_invalid"),
       technicalMessage: sanitized,
       shouldFallback: true,
     };
@@ -412,10 +414,17 @@ export function classifyLlmError(
     lower.includes("authentication failed") ||
     lower.includes("auth failed")
   ) {
+    // cliKind === "executionFailed" 到这里：这段关键词原本是为 API 直连 provider 写的
+    // （错误来自 HTTP 响应体）。CLI 引擎走订阅 OAuth 登录，压根没有"API Key"这个概念——
+    // "请在 API 接入页检查"这句话对 claude-cli/codex-cli 用户来说是误导性的胡言乱语。
+    // 而且这里的匹配源头是子进程 stderr 原文任意关键词命中，置信度天生不如真实 HTTP 401，
+    // 有可能是别的执行错误（比如 --resume 用了失效的 session id）被误判成"未登录"。
     return {
       category: "auth_invalid",
       httpStatus: 401,
-      userMessage: msg("API Key 无效或已过期，请在 API 接入页检查", "errorClassifier.auth_invalid"),
+      userMessage: cliKind
+        ? "本机 CLI 登录状态可能已过期，或本次执行失败被误判为登录问题——请先在终端确认 `claude`/`codex` 能正常对话，再重试"
+        : msg("API Key 无效或已过期，请在 API 接入页检查", "errorClassifier.auth_invalid"),
       technicalMessage: sanitized,
       shouldFallback: true,
     };

@@ -189,6 +189,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     setSwitchNotice,
     cacheNotice,
     setCacheNotice,
+    persistNotice,
     harnessNotice,
     debateParticipants,
     lastUsage,
@@ -544,6 +545,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         lastUsage={lastUsage}
         switchNotice={switchNotice}
         cacheNotice={cacheNotice}
+        persistNotice={persistNotice}
         harnessNotice={harnessNotice}
         onSwitchConversation={(id) => void switchConversation(id)}
         onNewChat={() => void handleNewChat()}

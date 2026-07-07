@@ -202,6 +202,14 @@ export function useChatStream(opts: UseChatStreamOptions) {
   const [switchNotice, setSwitchNotice] = useState<string | null>(null);
   const [cacheNotice, setCacheNotice] = useState<string | null>(null);
   const [harnessNotice, setHarnessNotice] = useState<string | null>(null);
+  // 2026-07-07 加：会话/消息落库失败之前是纯静默 catch（"降级为纯内存"），UI 照常显示、
+  // 用户毫无察觉——直到重启 app 发现整段对话消失，且没有任何日志能回溯到底发生了什么
+  // （复现过一次真实事故：17 步工具调用的长轮次里，conversation.touch()/tool_executions
+  // 写入 + git 自动提交并发写同一个 sqlite 文件，withBusyRetry 的退避重试预算被打满后
+  // dbMessages.create 静默失败，那一整轮聊天记录再没进过库）。这里不改变"落库失败不阻断
+  // 当前对话"的降级策略本身，只是让失败变得可见——用户至少能在出问题的当下看到提示，
+  // 而不是事后从数据库里找不到任何痕迹。
+  const [persistNotice, setPersistNotice] = useState<string | null>(null);
   // 2026-07-05 加：对弈进行中，右侧工作流面板的"模型博弈"节点原来一直显示死板的"动态分配"
   // 占位符，看不出到底是哪几个模型在博弈——这里把真实参与者存出来给面板渲染。
   // debate 结束（成功/中止/失败）在下面 finally 块里清空，不残留上一轮的参与者列表。
@@ -352,16 +360,21 @@ export function useChatStream(opts: UseChatStreamOptions) {
         try {
           const c = await dbConversations.getOrCreateMainChat(model.id, t("chat.untitledChat"));
           convId = c.id;
-        } catch {
-          // 落库不可用时降级为纯内存
+        } catch (err) {
+          // 落库不可用时降级为纯内存——但必须让用户知道，否则就是本次事故复现：
+          // 屏幕上一切正常，重启后这段对话彻底消失，且没有任何痕迹能回溯原因。
+          console.error("[handleSend] getOrCreateMainChat failed, falling back to memory-only", err);
+          setPersistNotice(t("chat.persistFailed"));
         }
       }
       if (stopIfAborted()) return null;
       if (convId) {
         try {
           userId = (await dbMessages.create({ conversationId: convId, role: "user", content: text, attachments: attachments?.length ? JSON.stringify(attachments) : null })).id;
-        } catch {
-          // 写库失败降级用内存 id
+        } catch (err) {
+          // 写库失败降级用内存 id——同上，必须可见
+          console.error("[handleSend] user message persist failed, falling back to memory-only", err);
+          setPersistNotice(t("chat.persistFailed"));
         }
         if (isFirstMessage) {
           const title = text.slice(0, 40);
@@ -392,7 +405,10 @@ export function useChatStream(opts: UseChatStreamOptions) {
             kind: kind && kind !== "chat" ? kind : null,
             toolCallCount: toolCallCount ?? null,
           })
-          .catch(() => {});
+          .catch((err) => {
+            console.error("[persistAssistant] assistant message persist failed", err);
+            setPersistNotice(t("chat.persistFailed"));
+          });
       };
 
       let turnWorkflowSnapshot = workflowSnapshotRef.current;
@@ -609,6 +625,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
       setStreamError(null);
       setSwitchNotice(null);
       setCacheNotice(null);
+      setPersistNotice(null);
 
       try {
         // getApiKey 静态导入
@@ -734,6 +751,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
       setStreamError(null);
       setSwitchNotice(null);
       setCacheNotice(null);
+      setPersistNotice(null);
 
       const taskRole = classifyMessageComplexity(text);
       const turnStartedAt = new Date().toISOString();
@@ -1086,8 +1104,17 @@ export function useChatStream(opts: UseChatStreamOptions) {
         // 信息量很低（"对话失败，请稍后重试"），而 technicalMessage 早就算出来了却被扔掉——
         // 用户看到空话，连自己是撞了哪种真实错误都无从判断。这两类无信息量兜底才追加技术详情，
         // 其余分类（auth_invalid/rate_limit 等）userMessage 已经讲清楚原因，不需要再堆技术文本。
+        // 修复（2026-07-07，用户实测发现）：CLI 引擎（claude-cli/codex-cli）的分类走的是
+        // 子进程 stderr 原文关键词匹配（见 error-classifier.ts），置信度天生不如 API 直连的
+        // 真实 HTTP 状态码——实测出现过 CLI 本身在终端能正常登录对话，但 app 里因为
+        // --resume 一类执行细节被误判成 auth_invalid 的情况。CLI 来源的错误一律追加原始
+        // stderr，不然连是不是误判都无从判断。
         const classified = classifyLlmError(err, t);
-        const lowInfo = classified.category === "unknown" || classified.category === "tool_budget_exhausted";
+        const isCliError = typeof err === "object" && err !== null && "__cliKind" in err;
+        const lowInfo =
+          classified.category === "unknown" ||
+          classified.category === "tool_budget_exhausted" ||
+          isCliError;
         setStreamError(
           lowInfo && classified.technicalMessage
             ? `${classified.userMessage}（${classified.technicalMessage}）`
@@ -1387,6 +1414,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
     lastUsage,
     messages,
     pendingQueue,
+    persistNotice,
     setLastUsage,
     setMessages,
     setPendingQueue,
@@ -1395,6 +1423,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
     setHarnessNotice,
     setSwitchNotice,
     setCacheNotice,
+    setPersistNotice,
     streamElapsedMs,
     streamError,
     switchNotice,

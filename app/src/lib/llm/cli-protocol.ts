@@ -106,7 +106,12 @@ export function buildCliArgs(
     return args;
   }
   // codex-cli：codex exec --json 输出 JSONL（codex 无 --append-system-prompt，规则随 prompt 文本带过去）
-  const args = ["exec", prompt, "--json"];
+  // --skip-git-repo-check：修复（2026-07-07，用户实测发现）——codex 自带"工作目录必须是
+  // 已信任的 git 仓库"检查，工作文件夹不是 git 仓库时会直接拒绝执行，并且会静默把 cwd
+  // 换成别的目录继续跑（实测复现：换成了完全无关的目录）。这道检查跟我们自己的
+  // 只读/确认写/自动权限模型无关（那套是我们自己控制的，不受这个参数影响）——不跳过
+  // 这道检查，用户选的非 git 工作文件夹会被 codex 直接拒绝或换到错误目录。
+  const args = ["exec", prompt, "--json", "--skip-git-repo-check"];
   if (modelName.trim()) args.push("--model", modelName);
   return args;
 }
@@ -134,7 +139,7 @@ export function buildCliResumeArgs(
     if (modelName.trim()) args.push("--model", modelName);
     return args;
   }
-  const args = ["exec", "resume", officialSessionId, prompt, "--json"];
+  const args = ["exec", "resume", officialSessionId, prompt, "--json", "--skip-git-repo-check"];
   if (modelName.trim()) args.push("--model", modelName);
   return args;
 }
@@ -297,10 +302,39 @@ export function parseCodexStreamLine(line: string): CliStreamEvent[] {
     }
   }
 
+  // 修复（2026-07-07，用户实测发现）：codex 自己读文件/跑命令走的是 command_execution
+  // 这个 item type，不是 mcp_tool_call（那个只对接 MCP 协议的外部工具）——之前完全没识别，
+  // 导致 codex 不管内部真实干了多少活，界面永远只显示死板的"思考中"，看不出它到底在
+  // 动还是卡死了。这里把它接进同一套 status 事件，实测字段名：item.command / item.exit_code。
+  if (type === "item.started" && itemType === "command_execution") {
+    const command = typeof item?.["command"] === "string" ? item.command : "命令";
+    events.push({ kind: "status", text: `正在执行：${command}` });
+  }
+
+  if (type === "item.completed" && itemType === "command_execution") {
+    const exitCode = item?.["exit_code"];
+    const command = typeof item?.["command"] === "string" ? item.command : "命令";
+    if (typeof exitCode === "number" && exitCode !== 0) {
+      events.push({ kind: "status", text: `命令执行失败（退出码 ${exitCode}）：${command}` });
+    } else {
+      events.push({ kind: "status", text: `已执行：${command}` });
+    }
+  }
+
   if (type === "error") {
     const rawMessage = obj["message"];
     const msg = typeof rawMessage === "string" ? rawMessage : "codex returned an error";
-    events.push({ kind: "error", message: msg });
+    // 修复（2026-07-07，用户实测发现，日志实锤）：codex 网络重连时吐的
+    // {"type":"error","message":"Reconnecting... N/5 (request timed out)"} 跟真正致命
+    // 错误长得一模一样（都是顶层 type:"error"）。之前一律当致命错误，一旦收到就把
+    // errorMsg 钉死——即使 codex 之后重连成功、正常跑完整个回合，最终 settle() 时还是会
+    // 把这段已经成功的结果当失败整段扔掉。"N/5" 说明这是 codex 自己在报告重试进度，
+    // 不是终态失败，只当状态提示，不污染最终结果。
+    if (/^reconnecting\.\.\.\s*\d+\/\d+/i.test(msg.trim())) {
+      events.push({ kind: "status", text: `网络连接不稳定，${msg}` });
+    } else {
+      events.push({ kind: "error", message: msg });
+    }
   }
 
   if (type === "task_complete" || type === "turn.completed") {

@@ -85,6 +85,34 @@ const API_KEY_SERVICE: &str = "com.cosmgrid.agent.api-key.v1";
 /// 对齐 API 路径的 sse-chunk-timeout 思路：每收到事件重置计时器。
 const CLI_EVENT_STALL_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// CLI 调试日志（2026-07-07 加）：写在 app 数据目录下的纯文本文件，把每次 spawn 的
+/// 启动参数 + 原始 stdout/stderr 逐行 + 终止/报错事件都记下来。
+/// 目的：之前排查"卡住不知道死活"只能靠反复猜事件类型、拿用户真实额度试，这个日志让
+/// 下次直接读文件看真实发生了什么，不用再猜，也不需要用户会用 devtools。
+/// 单文件超过 5MB 时清空重开，避免长时间调试把磁盘占满。
+fn cli_log_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let dir = app.path().app_data_dir().ok()?;
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join("cli-debug.log"))
+}
+
+fn append_cli_log(app: &tauri::AppHandle, session_id: &str, line: &str) {
+    use std::io::Write as _;
+    let Some(path) = cli_log_path(app) else { return };
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > 5 * 1024 * 1024 {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(file, "[{timestamp}] [{session_id}] {line}");
+    }
+}
+
 /// 1.4 修复：识别 spawn 阶段失败的 OS 错误特征，标记为 spawn_failed
 /// 让前端能给用户"未安装 CLI / 请先安装"的引导，而不是通用重试。
 fn classify_spawn_error(msg: &str) -> CliErrorKind {
@@ -277,6 +305,15 @@ async fn spawn_cli_stream(
         }
     }
 
+    append_cli_log(
+        &app,
+        &session_id,
+        &format!(
+            "SPAWN program={program} cwd={} args={args:?}",
+            working_directory.as_deref().unwrap_or("(default)"),
+        ),
+    );
+
     let mut command = app
         .shell()
         .command(&program)
@@ -295,6 +332,7 @@ async fn spawn_cli_stream(
         Err(e) => {
             let msg = e.to_string();
             let kind = classify_spawn_error(&msg);
+            append_cli_log(&app, &session_id, &format!("SPAWN_FAILED {msg}"));
             let _ = on_event.send(CliStreamEvent::Error { message: msg, kind });
             return Ok(());
         }
@@ -325,6 +363,11 @@ async fn spawn_cli_stream(
         let event = tokio::select! {
             event = rx.recv() => event,
             _ = tokio::time::sleep(CLI_EVENT_STALL_TIMEOUT) => {
+                append_cli_log(
+                    &app,
+                    &session_id,
+                    &format!("STALLED after {}s with no event", CLI_EVENT_STALL_TIMEOUT.as_secs()),
+                );
                 let _ = on_event.send(CliStreamEvent::Error {
                     message: format!(
                         "CLI 进程超过 {} 秒未产生任何事件，已自动终止",
@@ -344,17 +387,24 @@ async fn spawn_cli_stream(
         let Some(event) = event else { break };
 
         let payload = match event {
-            CommandEvent::Stdout(bytes) => CliStreamEvent::Stdout {
-                line: String::from_utf8_lossy(&bytes).trim_end().to_string(),
-            },
-            CommandEvent::Stderr(bytes) => CliStreamEvent::Stderr {
-                line: String::from_utf8_lossy(&bytes).trim_end().to_string(),
-            },
-            CommandEvent::Terminated(p) => CliStreamEvent::Terminated { code: p.code },
-            CommandEvent::Error(err) => CliStreamEvent::Error {
-                message: err,
-                kind: CliErrorKind::ExecutionFailed,
-            },
+            CommandEvent::Stdout(bytes) => {
+                let line = String::from_utf8_lossy(&bytes).trim_end().to_string();
+                append_cli_log(&app, &session_id, &format!("STDOUT {line}"));
+                CliStreamEvent::Stdout { line }
+            }
+            CommandEvent::Stderr(bytes) => {
+                let line = String::from_utf8_lossy(&bytes).trim_end().to_string();
+                append_cli_log(&app, &session_id, &format!("STDERR {line}"));
+                CliStreamEvent::Stderr { line }
+            }
+            CommandEvent::Terminated(p) => {
+                append_cli_log(&app, &session_id, &format!("TERMINATED code={:?}", p.code));
+                CliStreamEvent::Terminated { code: p.code }
+            }
+            CommandEvent::Error(err) => {
+                append_cli_log(&app, &session_id, &format!("EVENT_ERROR {err}"));
+                CliStreamEvent::Error { message: err, kind: CliErrorKind::ExecutionFailed }
+            }
             _ => continue,
         };
         // 通道关闭（前端 abort）→ 停止读取
@@ -400,26 +450,99 @@ struct ShellOutput {
     code: Option<i32>,
 }
 
+/// bash 工具单条命令的**静默**上限——按空闲计时，不按总时长计时（跟 sse-chunk-timeout.ts
+/// 同一个思路：真在干活的命令会不断吐 stdout/stderr，每来一行就重置计时，pnpm install /
+/// cargo build 这类跑几分钟的真实构建永不误触发；只有连续 N 秒**一丁点输出都没有**（连进程
+/// 退出事件都没有）才判定为卡死。
+/// 卡死的典型触发点：tauri-plugin-shell 的 `Command::stdin()` 接的是一根管道而非继承父进程
+/// tty，子进程一旦读 stdin 就永久阻塞在这——没人会往这根管道写字节（例如模型跑了缺 -m 的
+/// `git commit` 拉起 $EDITOR 等交互输入、或损坏的 heredoc 让 sh 一直等一个不会出现的结束定界符）。
+/// 之前用 `.output()` 对这种情况完全没有超时，会一路挂到 bash 工具的 `execute()` 不 resolve，
+/// 进而拖死整条对话的 isStreaming。
+const SHELL_IDLE_TIMEOUT_SECS: u64 = 180;
+
+/// git 相关子命令（init/config/add/commit -m/status/diff/log）用的静默上限——这些都是轻量本地
+/// 操作，正常情况零点几秒就该出结果，没有理由长时间沉默，超时收紧到 30s 就够，不用等 bash
+/// 工具那档的 180s（那档是留给 pnpm install / cargo build 这类真实构建时间的）。
+const GIT_IDLE_TIMEOUT_SECS: u64 = 30;
+
+/// 统一的"子进程 + 空闲超时"执行器：spawn 出来的子进程只要还在吐 stdout/stderr（或退出）就不会
+/// 被杀，只有连续 idle_secs 秒完全静默才判定卡死、kill 掉并报错。run_shell_command 和几个内部
+/// git 操作共用同一份逻辑——都是同一类风险（子进程可能因为读 stdin 卡住等交互输入而永久挂起）。
+async fn run_with_idle_timeout(
+    mut rx: tauri::async_runtime::Receiver<CommandEvent>,
+    child: tauri_plugin_shell::process::CommandChild,
+    idle_secs: u64,
+) -> Result<ShellOutput, String> {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut code = None;
+    let idle = Duration::from_secs(idle_secs);
+
+    loop {
+        match tokio::time::timeout(idle, rx.recv()).await {
+            Ok(Some(event)) => match event {
+                CommandEvent::Terminated(payload) => {
+                    code = payload.code;
+                    break;
+                }
+                CommandEvent::Stdout(line) => {
+                    stdout.extend(line);
+                    stdout.push(b'\n');
+                }
+                CommandEvent::Stderr(line) => {
+                    stderr.extend(line);
+                    stderr.push(b'\n');
+                }
+                CommandEvent::Error(_) => {}
+                _ => {}
+            },
+            // 通道自然关闭（进程确实退出了，只是 Terminated 事件先一步没接住）
+            Ok(None) => break,
+            // 连续 idle_secs 秒没有任何事件——真在干活的命令不会触发这条分支
+            Err(_) => {
+                let _ = child.kill();
+                return Err(format!(
+                    "命令连续 {idle_secs} 秒没有任何输出，判定卡死已强制终止（真在跑的构建/安装会持续有日志，不会被这个误杀；卡死常见于等交互输入，比如缺 -m 的 git commit）"
+                ));
+            }
+        }
+    }
+
+    Ok(ShellOutput {
+        stdout: String::from_utf8_lossy(&stdout).to_string(),
+        stderr: String::from_utf8_lossy(&stderr).to_string(),
+        code,
+    })
+}
+
 #[tauri::command]
 async fn run_shell_command(
     app: tauri::AppHandle,
     command: String,
     cwd: String,
 ) -> Result<ShellOutput, String> {
-    let output = app
+    let (rx, child) = app
         .shell()
         .command("sh")
         .args(["-c", &command])
         .current_dir(cwd)
-        .output()
-        .await
+        .spawn()
         .map_err(|e| e.to_string())?;
+    run_with_idle_timeout(rx, child, SHELL_IDLE_TIMEOUT_SECS).await
+}
 
-    Ok(ShellOutput {
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        code: output.status.code(),
-    })
+/// git_commit_file / init_shadow_git_repo / git_read 共用的 git 子进程执行——同样套
+/// run_with_idle_timeout，用 GIT_IDLE_TIMEOUT_SECS（这几个都是轻量本地操作，不该长时间沉默）。
+async fn run_git(app: &tauri::AppHandle, args: Vec<String>, cwd: &str) -> Result<ShellOutput, String> {
+    let (rx, child) = app
+        .shell()
+        .command("git")
+        .args(args)
+        .current_dir(cwd)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    run_with_idle_timeout(rx, child, GIT_IDLE_TIMEOUT_SECS).await
 }
 
 /// web_fetch 工具的后端实现（2026-07-05 新增）。
@@ -639,33 +762,28 @@ async fn init_shadow_git_repo(app: tauri::AppHandle, workspace: String) -> Resul
     let git_dir_flag = format!("--git-dir={}", git_dir.to_string_lossy());
     let work_tree_flag = format!("--work-tree={workspace}");
 
-    let output = app
-        .shell()
-        .command("git")
-        .args([git_dir_flag.as_str(), work_tree_flag.as_str(), "init"])
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).into_owned());
+    let output = run_git(
+        &app,
+        vec![git_dir_flag.clone(), work_tree_flag.clone(), "init".to_string()],
+        ".",
+    )
+    .await?;
+    if output.code != Some(0) {
+        return Err(output.stderr);
     }
 
     // 2026-07-02 代码审查发现：原来只检查 spawn 是否成功，没检查 git config 命令本身的
     // 退出码——如果 config 失败（比如权限问题），函数照样返回 Ok(())，用户以为"开启成功"，
     // 但后续 commit 会因为没有 user.name/user.email 报错，表现跟没开启保护一模一样。
     for (key, value) in [("user.name", "Cosmgrid Agent"), ("user.email", "agent@cosmgrid.local")] {
-        let cfg = app
-            .shell()
-            .command("git")
-            .args([git_dir_flag.as_str(), "config", key, value])
-            .output()
-            .await
-            .map_err(|e| e.to_string())?;
-        if !cfg.status.success() {
-            return Err(format!(
-                "failed to set {key}: {}",
-                String::from_utf8_lossy(&cfg.stderr)
-            ));
+        let cfg = run_git(
+            &app,
+            vec![git_dir_flag.clone(), "config".to_string(), key.to_string(), value.to_string()],
+            ".",
+        )
+        .await?;
+        if cfg.code != Some(0) {
+            return Err(format!("failed to set {key}: {}", cfg.stderr));
         }
     }
     Ok(())
@@ -683,24 +801,20 @@ async fn git_commit_file(
     rel_path: String,
     message: String,
 ) -> Result<bool, String> {
-    let add = app
-        .shell()
-        .command("git")
-        .args(["add", "--", &rel_path])
-        .current_dir(&workspace)
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-    if add.status.success() {
-        let commit = app
-            .shell()
-            .command("git")
-            .args(["commit", "-m", &message, "--", &rel_path])
-            .current_dir(&workspace)
-            .output()
-            .await
-            .map_err(|e| e.to_string())?;
-        return Ok(commit.status.success());
+    let add = run_git(
+        &app,
+        vec!["add".to_string(), "--".to_string(), rel_path.clone()],
+        &workspace,
+    )
+    .await?;
+    if add.code == Some(0) {
+        let commit = run_git(
+            &app,
+            vec!["commit".to_string(), "-m".to_string(), message.clone(), "--".to_string(), rel_path.clone()],
+            &workspace,
+        )
+        .await?;
+        return Ok(commit.code == Some(0));
     }
 
     // workspace 本身不是 git 仓库 → 查影子仓库存不存在（用户是否点过"开启修改保护"）
@@ -711,24 +825,30 @@ async fn git_commit_file(
 
     let git_dir_flag = format!("--git-dir={}", shadow_dir.to_string_lossy());
     let work_tree_flag = format!("--work-tree={workspace}");
-    let shadow_add = app
-        .shell()
-        .command("git")
-        .args([git_dir_flag.as_str(), work_tree_flag.as_str(), "add", "--", &rel_path])
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !shadow_add.status.success() {
+    let shadow_add = run_git(
+        &app,
+        vec![git_dir_flag.clone(), work_tree_flag.clone(), "add".to_string(), "--".to_string(), rel_path.clone()],
+        ".",
+    )
+    .await?;
+    if shadow_add.code != Some(0) {
         return Ok(false);
     }
-    let shadow_commit = app
-        .shell()
-        .command("git")
-        .args([git_dir_flag.as_str(), work_tree_flag.as_str(), "commit", "-m", &message, "--", &rel_path])
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(shadow_commit.status.success())
+    let shadow_commit = run_git(
+        &app,
+        vec![
+            git_dir_flag,
+            work_tree_flag,
+            "commit".to_string(),
+            "-m".to_string(),
+            message,
+            "--".to_string(),
+            rel_path,
+        ],
+        ".",
+    )
+    .await?;
+    Ok(shadow_commit.code == Some(0))
 }
 
 /// 只读 git 查询（status / diff / log）：AI 改完代码后能看到自己改了啥。
@@ -741,20 +861,7 @@ async fn git_read(
     workspace: String,
     args: Vec<String>,
 ) -> Result<ShellOutput, String> {
-    let output = app
-        .shell()
-        .command("git")
-        .args(args)
-        .current_dir(workspace)
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(ShellOutput {
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        code: output.status.code(),
-    })
+    run_git(&app, args, &workspace).await
 }
 
 /// 按语言构建 macOS 原生菜单（中/英）。原生菜单不归前端 i18n 管，必须在 Rust 侧建。

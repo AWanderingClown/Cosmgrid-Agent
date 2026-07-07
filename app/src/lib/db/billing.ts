@@ -151,6 +151,16 @@ export const modelPriceCatalog = {
     return rows.map(rowToModelPriceCatalogEntry);
   },
 
+  /** 某个来源当前存了多少条（2026-07-07 加，给同步前的"残缺响应"体检用，只取 COUNT 不拉全行）。 */
+  async countBySource(source: "builtin" | "remote" | "manual"): Promise<number> {
+    const db = await getDb();
+    const rows = await db.select<Array<{ n: number }>>(
+      "SELECT COUNT(*) AS n FROM model_price_catalog WHERE source = $1",
+      [source],
+    );
+    return rows[0]?.n ?? 0;
+  },
+
   async listVersions(): Promise<ModelPriceCatalogVersion[]> {
     const db = await getDb();
     const rows = await db.select<ModelPriceCatalogVersionRow[]>(
@@ -225,7 +235,14 @@ export const modelPriceCatalog = {
     const ts = now();
     await db.execute("BEGIN TRANSACTION");
     try {
-      await db.execute("UPDATE model_price_catalog SET enabled = 0 WHERE source = $1", [source]);
+      // 修复（2026-07-07，用户实测事故 + dbstat 实锤）：这里原来是
+      // `UPDATE ... SET enabled = 0`——只把旧记录标记禁用，从不删除。名字叫"replace"
+      // 实际是"禁用旧的 + 插入新的"，被禁用的僵尸记录永远留在表里。每次远程价格同步
+      // （每次开 app 都会跑）多攒约 4900 行，攒到 33 万行 / 118MB，把整个 sqlite 库拖到
+      // 每次写操作都长时间占锁 → 用户发的消息写 messages 表时 busy 重试预算耗尽 → 静默
+      // 存不进去（"本条内容未能保存到本地数据库"红条 + 退出后历史对话丢失的真正根因）。
+      // 改成 DELETE：真正的替换语义，表大小稳定在一个完整版本（约 5000 行），不再膨胀。
+      await db.execute("DELETE FROM model_price_catalog WHERE source = $1", [source]);
       for (const entry of entries) {
         await db.execute(
           `INSERT INTO model_price_catalog

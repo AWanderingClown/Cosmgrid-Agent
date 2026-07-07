@@ -19,10 +19,18 @@ export function isBusyError(err: unknown): boolean {
 /**
  * 遇到 busy 错误按退避延迟重试，其余错误/重试次数用尽后原样抛出。
  * 抽成独立函数，不依赖真实 Database，方便用假的失败/成功 fn 直接单测退避逻辑。
+ *
+ * 2026-07-07 加固（真实事故复现：app 刚启动那一刻并发查询最密集——对话列表/消息历史/
+ * 模型列表/供应商配置/工作文件夹/价格同步/工具执行记录/编排状态等十几个 useEffect 几乎
+ * 同时发起查询，sqlx 连接池在这个瞬间扩容出的新连接又没有 busy_timeout，原来
+ * [100,300,800] 总共只留 1.2 秒退避——启动瞬间的并发爆发很容易把这点预算耗尽，导致一个
+ * "刚打开 app 发的第一条消息"就写库失败且被上层静默吞掉）。加到 6 次、总计约 6.3 秒，
+ * 覆盖启动突发窗口；真正的持续性锁冲突（如 app 被重复打开）该失败还是会失败，不会被
+ * 这个无限掩盖。
  */
 export async function withBusyRetry<T>(
   fn: () => Promise<T>,
-  delaysMs: number[] = [100, 300, 800],
+  delaysMs: number[] = [100, 200, 400, 800, 1600, 3200],
 ): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {

@@ -49,8 +49,13 @@ export function createStreamingTurnCallbacks(args: {
         ),
       );
     },
-    onRecovered: (mode) => {
-      args.setSwitchNotice(args.t(`chat.recovery.${mode}`));
+    onRecovered: (mode, detail) => {
+      // 2026-07-07 加：detail 是触发这次自动恢复的真实原因（首次调用失败的错误文本）。
+      // 之前这条提示只有一句静态"系统已用 CLI 官方会话原生续跑"，看不出为什么触发——
+      // 用户不会用 devtools 控制台去查那条 console.error，只能干等或来回问。
+      // 直接拼进同一条 UI 提示里，不需要任何调试工具就能看到根因。
+      const base = args.t(`chat.recovery.${mode}`);
+      args.setSwitchNotice(detail ? `${base}（原因：${detail}）` : base);
     },
     onStatus: (status) => {
       args.setSwitchNotice(status);

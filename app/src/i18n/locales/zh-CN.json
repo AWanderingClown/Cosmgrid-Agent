@@ -59,6 +59,7 @@
     "deleteConvFailed": "删除失败，可能是数据库暂时被占用，请稍后重试。这个对话还在列表里，没有丢。",
     "loadError": "加载失败",
     "newChatFailed": "新建对话失败，可能是应用被重复打开导致数据库被占用，请重启应用后重试",
+    "persistFailed": "本条内容未能保存到本地数据库（可能是数据库繁忙），当前仍显示在屏幕上，但重启应用后会丢失——建议现在手动复制保存，不要强制关闭应用。",
     "noCredential": "未找到 API 凭证",
     "noApiKey": "API Key 缺失",
     "constructError": "构造失败",
