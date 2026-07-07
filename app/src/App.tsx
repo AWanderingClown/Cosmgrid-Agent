@@ -38,6 +38,32 @@ interface NavItem {
   icon: React.ReactNode;
 }
 
+function selectElementContents(el: Element): void {
+  const selection = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+function selectActiveTextTarget(): boolean {
+  const el = document.activeElement;
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+    el.select();
+    return true;
+  }
+  if (el instanceof HTMLElement && el.isContentEditable) {
+    selectElementContents(el);
+    return true;
+  }
+  const transcript = document.querySelector("[data-chat-transcript-region='true']");
+  if (transcript) {
+    selectElementContents(transcript);
+    return true;
+  }
+  return false;
+}
+
 function PageLoading() {
   const { t } = useTranslation();
   return (
@@ -89,27 +115,19 @@ function App() {
 
   useTheme();
 
-  // macOS 原生菜单"全选"(Cmd+A) 走的是自定义菜单项(见 lib.rs)，不是 Tauri 的
-  // PredefinedMenuItem::select_all——那个在 WKWebView 下不认聚焦元素，会把整个页面的
-  // 内容都选中。这里按 document.activeElement 判断：焦点在输入框/可编辑区域内就只选中
-  // 该元素的内容，否则什么都不做，避免"全选"变成"全页面乱选"。
+  // 全选：焦点在输入框/可编辑区域内就选中该元素内容；否则优先选聊天记录区域。
   useEffect(() => {
     const unlisten = listen("menu-select-all", () => {
-      const el = document.activeElement;
-      if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
-        el.select();
-        return;
-      }
-      if (el instanceof HTMLElement && el.isContentEditable) {
-        const selection = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        selection?.removeAllRanges();
-        selection?.addRange(range);
-      }
+      selectActiveTextTarget();
     });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "a" || !event.ctrlKey || event.altKey || event.shiftKey) return;
+      if (selectActiveTextTarget()) event.preventDefault();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
     return () => {
       void unlisten.then((fn) => fn());
+      window.removeEventListener("keydown", onKeyDown, true);
     };
   }, []);
 
