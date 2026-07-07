@@ -95,10 +95,12 @@ describe("streamWithFallback - 主模型正常", () => {
     const deltas: string[] = [];
     const switched: Array<unknown> = [];
     const usages: Array<{ mid: string; reason: string }> = [];
+    const audits: Array<unknown> = [];
     const cbs: StreamCallbacks = {
       onDelta: (d) => deltas.push(d),
       onSwitched: (f, t, r) => switched.push({ from: f.modelId, to: t.modelId, r }),
       onUsage: (_u, m, r) => usages.push({ mid: m.modelId, reason: r }),
+      onInvocationAudit: (event) => audits.push(event),
     };
 
     const result = await streamWithFallback([primary, fallback], [{ role: "user", content: "hi" }], cbs);
@@ -106,6 +108,15 @@ describe("streamWithFallback - 主模型正常", () => {
     expect(deltas.join("")).toBe("Hi there");
     expect(switched).toEqual([]);
     expect(usages).toEqual([{ mid: "m-primary", reason: "stop" }]);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      modelId: "m-primary",
+      providerType: "anthropic",
+      providerKind: "api",
+      status: "success",
+      finishReason: "stop",
+      usage: { inputTokens: 10, outputTokens: 5, toolCallCount: 0 },
+    });
   });
 
   it("主模型成功时调用一次 streamText（不调 fallback）", async () => {
@@ -182,9 +193,11 @@ describe("streamWithFallback - 主模型失败分类", () => {
 
     const switched: Array<{ from: string; to: string; reason: SwitchReason }> = [];
     const deltas: string[] = [];
+    const audits: Array<unknown> = [];
     const cbs: StreamCallbacks = {
       onDelta: (d) => deltas.push(d),
       onSwitched: (f, t, r) => switched.push({ from: f.modelId, to: t.modelId, reason: r }),
+      onInvocationAudit: (event) => audits.push(event),
     };
 
     if (shouldSwitch) {
@@ -199,12 +212,25 @@ describe("streamWithFallback - 主模型失败分类", () => {
       expect(switched[0]!.reason).toEqual({ kind: "error", category: label });
       expect(deltas.join("")).toBe("from fallback");
       expect(mocks.streamText).toHaveBeenCalledTimes(2);
+      expect(audits.map((event) => (event as { status: string }).status)).toEqual(["error", "success"]);
+      expect(audits[0]).toMatchObject({
+        modelId: "m-primary",
+        providerKind: "api",
+        status: "error",
+        errorCategory: label,
+      });
     } else {
       await expect(
         streamWithFallback([primary, fallback], [{ role: "user", content: "x" }], cbs),
       ).rejects.toBeDefined();
       expect(switched).toEqual([]);
       expect(mocks.streamText).toHaveBeenCalledTimes(1);
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toMatchObject({
+        modelId: "m-primary",
+        status: "error",
+        errorCategory: label,
+      });
     }
   });
 });

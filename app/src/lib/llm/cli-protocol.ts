@@ -81,14 +81,56 @@ export function buildPromptFromMessages(messages: readonly CliMessage[]): string
   return parts.join("\n\n");
 }
 
+// ============ 权限档位 → CLI 沙箱/权限参数映射 ============
+//
+// 关键（2026-07-07，用户实测"让 codex 保存到桌面被拒 Operation not permitted"）：
+// app 的"只读/确认写/自动"档位，管的是 API 模式下我们自己内置的 write 工具，**从来没
+// 传给过 CLI 引擎**。CLI 引擎（claude/codex）spawn 出去后用的是它们自己的工具、跑在各自
+// 的沙箱/权限体系里，默认只能写工作目录内——用户绑的工作文件夹之外（如桌面）一律拒绝。
+// 用户的真实痛点是"我的意图没传给 CLI"（他直接开 codex 就能写桌面，因为交互模式会弹审批；
+// 我们用 codex exec 非交互模式，那条审批通道断了）。这里把 app 档位翻译成两个引擎各自的
+// 启动参数，让意图在"开工前"就传达到位：
+//   - codex：--sandbox read-only|workspace-write（读写总闸）
+//   - claude：--permission-mode plan|acceptEdits（读写总闸）
+//   - 两者通用：--add-dir <目录> 把工作区之外的目录（用户确认放行的桌面）并入可写范围
+// writableRoots 由上层在"确认写/自动 + 用户确认放行"后填入（见 useChatStream 的折中弹窗）。
+
+export type CliPermissionMode = "read" | "confirm" | "auto";
+
+export interface CliAccessOptions {
+  /** app 权限档位。不传 = 不显式设置，沿用各 CLI 默认（保持旧行为，向后兼容）。 */
+  permissionMode?: CliPermissionMode;
+  /** 工作区之外额外放行的可写目录（如用户确认后的桌面）。两个引擎都用 --add-dir。 */
+  writableRoots?: string[];
+}
+
+/** codex --sandbox：只读→read-only，确认写/自动→workspace-write（不完全放开，仅工作区+放行目录可写）。 */
+function codexSandboxMode(mode: CliPermissionMode): "read-only" | "workspace-write" {
+  return mode === "read" ? "read-only" : "workspace-write";
+}
+
+/** claude --permission-mode：只读→plan（只读规划不写盘），确认写/自动→acceptEdits（可写；非交互 -p 下不逐次弹问）。 */
+function claudePermissionMode(mode: CliPermissionMode): "plan" | "acceptEdits" {
+  return mode === "read" ? "plan" : "acceptEdits";
+}
+
+/** 把 --add-dir <每个 writableRoot> 追加进 args（claude/codex 通用；空/空白目录跳过）。 */
+function appendWritableRoots(args: string[], writableRoots?: string[]): void {
+  for (const dir of writableRoots ?? []) {
+    if (dir.trim()) args.push("--add-dir", dir);
+  }
+}
+
 /** 构造 spawn 用的参数（不含 program 本身）。
  *  systemPrompt：CosmGrid 核心规则，经 claude 的 --append-system-prompt 正式注入——
- *  因为 --setting-sources "" 屏蔽了本机 CLAUDE.md，必须我们显式塞，CLI 才受同一套约束。 */
+ *  因为 --setting-sources "" 屏蔽了本机 CLAUDE.md，必须我们显式塞，CLI 才受同一套约束。
+ *  access：把 app 权限档位 + 放行目录翻译成 CLI 各自的沙箱/权限参数（见上方注释块）。 */
 export function buildCliArgs(
   providerType: CliProviderType,
   modelName: string,
   prompt: string,
   systemPrompt?: string,
+  access?: CliAccessOptions,
 ): string[] {
   if (providerType === "claude-cli") {
     // --output-format stream-json 需要配合 --verbose；--setting-sources "" 隔离被污染的本地配置
@@ -101,6 +143,8 @@ export function buildCliArgs(
       "--setting-sources",
       "",
     ];
+    if (access?.permissionMode) args.push("--permission-mode", claudePermissionMode(access.permissionMode));
+    appendWritableRoots(args, access?.writableRoots);
     if (systemPrompt?.trim()) args.push("--append-system-prompt", systemPrompt);
     if (modelName.trim()) args.push("--model", modelName);
     return args;
@@ -112,6 +156,8 @@ export function buildCliArgs(
   // 只读/确认写/自动权限模型无关（那套是我们自己控制的，不受这个参数影响）——不跳过
   // 这道检查，用户选的非 git 工作文件夹会被 codex 直接拒绝或换到错误目录。
   const args = ["exec", prompt, "--json", "--skip-git-repo-check"];
+  if (access?.permissionMode) args.push("--sandbox", codexSandboxMode(access.permissionMode));
+  appendWritableRoots(args, access?.writableRoots);
   if (modelName.trim()) args.push("--model", modelName);
   return args;
 }
@@ -122,6 +168,7 @@ export function buildCliResumeArgs(
   officialSessionId: string,
   prompt: string,
   systemPrompt?: string,
+  access?: CliAccessOptions,
 ): string[] {
   if (providerType === "claude-cli") {
     const args = [
@@ -135,11 +182,15 @@ export function buildCliResumeArgs(
       "--setting-sources",
       "",
     ];
+    if (access?.permissionMode) args.push("--permission-mode", claudePermissionMode(access.permissionMode));
+    appendWritableRoots(args, access?.writableRoots);
     if (systemPrompt?.trim()) args.push("--append-system-prompt", systemPrompt);
     if (modelName.trim()) args.push("--model", modelName);
     return args;
   }
   const args = ["exec", "resume", officialSessionId, prompt, "--json", "--skip-git-repo-check"];
+  if (access?.permissionMode) args.push("--sandbox", codexSandboxMode(access.permissionMode));
+  appendWritableRoots(args, access?.writableRoots);
   if (modelName.trim()) args.push("--model", modelName);
   return args;
 }

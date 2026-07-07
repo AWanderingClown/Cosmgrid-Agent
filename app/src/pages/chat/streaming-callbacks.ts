@@ -1,5 +1,6 @@
 import type { TFunction } from "i18next";
 import type { StreamCallbacks, StreamUsage } from "@/lib/llm/chat-fallback";
+import type { LlmInvocationAuditEvent } from "@/lib/llm/invocation-audit";
 import type { ChatMessage } from "./types";
 
 export interface StreamingTurnState {
@@ -10,6 +11,7 @@ export interface StreamingTurnState {
   lastResolvedModelLabel?: string;
   lastToolCallCount: number;
   lastFinishReason: string;
+  invocationAudits: LlmInvocationAuditEvent[];
 }
 
 export function createStreamingTurnState(initialModelId: string | null): StreamingTurnState {
@@ -18,6 +20,7 @@ export function createStreamingTurnState(initialModelId: string | null): Streami
     lastModelId: initialModelId,
     lastToolCallCount: 0,
     lastFinishReason: "stop",
+    invocationAudits: [],
   };
 }
 
@@ -59,6 +62,16 @@ export function createStreamingTurnCallbacks(args: {
     },
     onStatus: (status) => {
       args.setSwitchNotice(status);
+    },
+    onInvocationAudit: (event) => {
+      args.state.invocationAudits = [...args.state.invocationAudits, event];
+      args.setMessages((prev) =>
+        prev.map((m) =>
+          m.id === args.assistantId
+            ? { ...m, llmInvocations: [...(m.llmInvocations ?? []), event] }
+            : m,
+        ),
+      );
     },
     onResolvedModel: (actualModelName) => {
       args.state.lastResolvedModelLabel = actualModelName;

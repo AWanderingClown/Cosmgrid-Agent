@@ -13,6 +13,7 @@ import {
   CLI_DEFAULT_PROGRAM,
   type CliProviderType,
   type CliMessage,
+  type CliAccessOptions,
 } from "./cli-protocol";
 import { COSMGRID_RULES, buildIdentityLine } from "./cosmgrid-rules";
 
@@ -83,7 +84,13 @@ export async function streamViaCli(
   endpoint: CliEndpoint,
   messages: readonly CliMessage[],
   callbacks: CliStreamCallbacks,
-  options: { signal?: AbortSignal; resumeSessionId?: string | null; resumePrompt?: string } = {},
+  options: {
+    signal?: AbortSignal;
+    resumeSessionId?: string | null;
+    resumePrompt?: string;
+    /** 权限档位 + 放行目录：翻译成 CLI 各自的 --sandbox/--permission-mode/--add-dir（见 cli-protocol）。 */
+    access?: CliAccessOptions;
+  } = {},
 ): Promise<CliStreamResult> {
   const program = endpoint.program?.trim() || CLI_DEFAULT_PROGRAM[endpoint.providerType];
   const prompt = buildPromptFromMessages(messages);
@@ -95,8 +102,9 @@ export async function streamViaCli(
         options.resumeSessionId,
         options.resumePrompt ?? prompt,
         systemPrompt,
+        options.access,
       )
-    : buildCliArgs(endpoint.providerType, endpoint.modelName, prompt, systemPrompt);
+    : buildCliArgs(endpoint.providerType, endpoint.modelName, prompt, systemPrompt, options.access);
   const sessionId = newCliSessionId();
 
   let usage = { inputTokens: 0, outputTokens: 0 };

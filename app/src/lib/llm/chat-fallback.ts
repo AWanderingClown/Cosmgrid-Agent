@@ -23,10 +23,11 @@ import { getLanguageModel } from "./provider-factory";
 import { classifyLlmError, type LlmErrorCategory } from "./error-classifier";
 import { isInCooldown, markModelFailed, markModelSucceeded, getCooldownRemainingMs } from "./model-cooldown";
 import { recordUsageEvent, type RecordUsageParams } from "./usage-tracker";
-import { isCliProviderType, type CliMessage } from "./cli-protocol";
+import { isCliProviderType, type CliMessage, type CliAccessOptions } from "./cli-protocol";
 import { streamViaCli } from "./cli-engine";
 import { classifyMessageComplexity } from "./message-router";
 import { detectDoomLoop, type StepToolCall } from "./harness/doom-loop";
+import { buildLlmInvocationAuditEvent, type LlmInvocationAuditEvent } from "./invocation-audit";
 import { resolveMaxOutputTokens, ensureModelLimitsLoaded } from "./model-limits";
 import { isNormalFinishReason, isRecoverableTruncation } from "./finish-reason";
 import type { ChatMsg } from "./context-compressor";
@@ -147,6 +148,8 @@ export interface StreamCallbacks {
    * 不传=noop，零侵入。Abort 中断时不调。
    */
   onFinalToolCalls?: (toolCalls: { toolName: string; input?: unknown }[]) => void;
+  /** L1 接入层审计事实：每次模型调用成功/失败/冷却/中断都以统一形态吐出。 */
+  onInvocationAudit?: (event: LlmInvocationAuditEvent) => void;
 }
 
 /**
@@ -216,6 +219,10 @@ export async function streamWithFallback(
      *  嘴上说了要做却 0 工具调用，文字提醒不够硬，直接在 API 层锁死它这次必须调用，
      *  不给它继续嘴炮的选项。不传 = "auto"（照常自行判断）。 */
     toolChoice?: "auto" | "required";
+    /** CLI 引擎（claude/codex）的权限档位 + 放行目录。只在 primaryIsCli 时有意义——
+     *  翻译成 --sandbox/--permission-mode/--add-dir，让 app 的"只读/确认写/自动"真正管到
+     *  CLI 子进程（否则 CLI 只能写工作区内，用户"保存到桌面"被 CLI 自己的沙箱拒绝）。 */
+    cliAccess?: CliAccessOptions;
     /** 单次回答的最大输出 token。不传则用 DEFAULT_MAX_OUTPUT_TOKENS。
      *  关键：很多 OpenAI 兼容端点（MiniMax 等）不传 max_tokens 时默认值很小，
      *  推理型模型会把预算花在 <think> 上、正文没写完就被截断 → 必须显式给足。 */
@@ -242,9 +249,18 @@ export async function streamWithFallback(
   // 跳过 cooldown 中的模型：从前往后找第一个不在 cooldown 的；前面被跳过的都触发 onSwitched("cooldown")
   let startIdx = 0;
   while (startIdx < models.length && isInCooldown(models[startIdx]!.modelId)) {
+    const skipped = models[startIdx]!;
+    const skippedAt = Date.now();
+    callbacks.onInvocationAudit?.(buildLlmInvocationAuditEvent({
+      target: skipped,
+      status: "cooldown",
+      startedAtMs: skippedAt,
+      endedAtMs: skippedAt,
+      finishReason: "cooldown",
+    }));
     if (startIdx < models.length - 1) {
       const next = models[startIdx + 1]!;
-      callbacks.onSwitched?.(models[startIdx]!, next, { kind: "cooldown" });
+      callbacks.onSwitched?.(skipped, next, { kind: "cooldown" });
     }
     startIdx++;
   }
@@ -328,6 +344,7 @@ export async function streamWithFallback(
           },
           {
             ...(options.signal ? { signal: options.signal } : {}),
+            ...(options.cliAccess ? { access: options.cliAccess } : {}),
             ...(resumeSessionId
               ? {
                   resumeSessionId,
@@ -551,6 +568,13 @@ export async function streamWithFallback(
         aggregateToolCalls.push(...attempt.toolCalls);
 
         if (attempt.wasAborted) {
+          callbacks.onInvocationAudit?.(buildLlmInvocationAuditEvent({
+            target,
+            status: "aborted",
+            startedAtMs: modelStartedAt,
+            finishReason: attempt.finishReason,
+            usage: aggregateUsage,
+          }));
           return { usedModelId: target.modelId, switched: usedIndex !== 0 };
         }
 
@@ -617,6 +641,13 @@ export async function streamWithFallback(
         }
 
         markModelSucceeded(target.modelId);
+        callbacks.onInvocationAudit?.(buildLlmInvocationAuditEvent({
+          target,
+          status: "success",
+          startedAtMs: modelStartedAt,
+          finishReason: attempt.finishReason,
+          usage: aggregateUsage,
+        }));
         callbacks.onFinalToolCalls?.(
           aggregateToolCalls.map((tc) => ({ toolName: tc.toolName, input: tc.input })),
         );
@@ -633,6 +664,14 @@ export async function streamWithFallback(
         }
         // 1.2 修复：传 providerType 让 classifyLlmError 按国产 provider 专属规则匹配（中文错误体）
         const classified = classifyLlmError(err, undefined, target.providerType);
+        callbacks.onInvocationAudit?.(buildLlmInvocationAuditEvent({
+          target,
+          status: "error",
+          startedAtMs: modelStartedAt,
+          finishReason: classified.category,
+          errorCategory: classified.category,
+          usage: aggregateUsage,
+        }));
 
         recordUsageEventOnly({
           target,

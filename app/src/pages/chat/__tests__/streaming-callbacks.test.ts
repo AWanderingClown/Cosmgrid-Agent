@@ -83,6 +83,17 @@ describe("createStreamingTurnCallbacks", () => {
     callbacks.onRecovered?.("context_replay");
     callbacks.onStatus?.("正在重放上下文");
     callbacks.onResolvedModel?.("kimi-k2-actual", endpoint("model-b"));
+    callbacks.onInvocationAudit?.({
+      modelId: "model-b",
+      modelName: "kimi-k2",
+      providerType: "openai",
+      providerKind: "api",
+      status: "success",
+      startedAt: "2026-07-07T00:00:00.000Z",
+      endedAt: "2026-07-07T00:00:01.000Z",
+      latencyMs: 1000,
+      finishReason: "stop",
+    });
     callbacks.onUsage?.({ inputTokens: 10, outputTokens: 20, toolCallCount: 2 }, endpoint("model-b", "kimi-k2", "Kimi K2"), "stop", false);
 
     expect(notices).toEqual(["切换到 Kimi K2", "恢复：context_replay", "正在重放上下文"]);
@@ -96,6 +107,7 @@ describe("createStreamingTurnCallbacks", () => {
       switchedTo: "Kimi K2",
       modelLabel: "kimi-k2-actual",
       usage: lastUsage,
+      llmInvocations: [expect.objectContaining({ modelId: "model-b", status: "success" })],
     });
   });
 

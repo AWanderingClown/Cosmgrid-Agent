@@ -1,6 +1,7 @@
 import type { Attachment } from "@/lib/llm/attachments";
 import type { RoleId } from "@/lib/llm/orchestrator";
 import type { SwitchReason } from "@/lib/llm/chat-fallback";
+import type { LlmInvocationAuditEvent } from "@/lib/llm/invocation-audit";
 
 export interface HarnessWarning {
   unverifiedPaths: string[];
@@ -26,6 +27,7 @@ export interface ChatMessage {
   /** 真实切换原因（错误分类/冷却中/异常恢复）；工作面板据此显示具体原因，不能瞎猜成"限额" */
   switchReason?: SwitchReason;
   usage?: { inputTokens: number; outputTokens: number };
+  llmInvocations?: LlmInvocationAuditEvent[];
   kind?: "chat" | "receipt" | "system-notice";
   receipt?: ReceiptContent;
   attachments?: Attachment[];
