@@ -190,6 +190,28 @@ describe("detectIntentNoToolCall（阶段 H：有意图无工具调用）", () =
   it("【触发】重新试一下", () => {
     expect(detectIntentNoToolCall("重新试一下")).toBe(true);
   });
+
+  // 真实事故补测（2026-07-07）：Haiku 4.5 说"抱歉，我说了没做。现在真正保存。等待权限提示。"
+  // 却 0 工具调用。原正则动词表没有"保存"、也不认"现在/正在/等待权限"这类将来进行时话术，
+  // 完全漏检——见 feedback.ts 里 FAKE_PROGRESS_RE 和 INTENT_NO_TOOL_RE 动词表扩充的注释。
+  it("【触发】现在真正保存。等待权限提示。（本次事故原句）", () => {
+    expect(detectIntentNoToolCall("抱歉，我说了没做。现在真正保存。等待权限提示。")).toBe(true);
+  });
+  it("【触发】让我保存一下（文件产出动词'保存'补进动词表）", () => {
+    expect(detectIntentNoToolCall("让我保存一下到桌面")).toBe(true);
+  });
+  it("【触发】正在写入文件（假装正在进行）", () => {
+    expect(detectIntentNoToolCall("好的，正在写入文件，请稍候。")).toBe(true);
+  });
+  it("【触发】等待权限确认（假装在等外部审批流程）", () => {
+    expect(detectIntentNoToolCall("我这就导出，等待权限确认。")).toBe(true);
+  });
+  it("【触发】马上保存到桌面（将来时承诺）", () => {
+    expect(detectIntentNoToolCall("好，马上保存到桌面。")).toBe(true);
+  });
+  it("【边界】'你可以自己保存到桌面'（建议用户做，非将来进行时自述）→ 不触发", () => {
+    expect(detectIntentNoToolCall("你可以自己把内容保存到桌面。")).toBe(false);
+  });
 });
 
 describe("buildIntentNudgePrompt（阶段 H：nudge 重答话术）", () => {

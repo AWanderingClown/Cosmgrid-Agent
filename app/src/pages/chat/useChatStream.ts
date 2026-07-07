@@ -956,6 +956,12 @@ export function useChatStream(opts: UseChatStreamOptions) {
       const compressionStats = compressedPrompt.compressionStats;
 
       const MAX_HARNESS_RETRY = 1;
+      // 客观写意图信号（2026-07-07，Haiku 4.5 "现在真正保存。等待权限提示" 却 0 工具调用的真修法）：
+      // nudge 原来只靠 detectIntentNoToolCall(检测模型正文话术) 触发——话术千变万化，是打地鼠。
+      // 这里并联一条不依赖话术的客观信号：用户**这轮原始消息**就明显要写文件/执行
+      // （impliesWriteIntent，已排除纯软文写作），那么"有 write 工具却 0 工具调用就正常结束"
+      // 几乎必然是没动手。不管模型嘴上说什么（甚至什么都不解释），都触发强制 toolChoice 重答。
+      const turnImpliesWrite = impliesWriteIntent({ text, decision: cacheIntent });
       const streamingState = createStreamingTurnState(model.id);
       let convo = outgoing;
       let finalContent = "";
@@ -1010,7 +1016,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
             !!tools &&
             streamingState.lastFinishReason === "stop" &&
             streamingState.lastToolCallCount === 0 &&
-            detectIntentNoToolCall(streamingState.fullContent);
+            (detectIntentNoToolCall(streamingState.fullContent) || turnImpliesWrite);
 
           const retryDecision = decideStreamRetry({
             pureMode,

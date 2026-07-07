@@ -233,44 +233,60 @@ export const modelPriceCatalog = {
   ): Promise<void> {
     const db = await getDb();
     const ts = now();
-    await db.execute("BEGIN TRANSACTION");
-    try {
-      // 修复（2026-07-07，用户实测事故 + dbstat 实锤）：这里原来是
-      // `UPDATE ... SET enabled = 0`——只把旧记录标记禁用，从不删除。名字叫"replace"
-      // 实际是"禁用旧的 + 插入新的"，被禁用的僵尸记录永远留在表里。每次远程价格同步
-      // （每次开 app 都会跑）多攒约 4900 行，攒到 33 万行 / 118MB，把整个 sqlite 库拖到
-      // 每次写操作都长时间占锁 → 用户发的消息写 messages 表时 busy 重试预算耗尽 → 静默
-      // 存不进去（"本条内容未能保存到本地数据库"红条 + 退出后历史对话丢失的真正根因）。
-      // 改成 DELETE：真正的替换语义，表大小稳定在一个完整版本（约 5000 行），不再膨胀。
-      await db.execute("DELETE FROM model_price_catalog WHERE source = $1", [source]);
-      for (const entry of entries) {
-        await db.execute(
-          `INSERT INTO model_price_catalog
-            (id, model_name, provider_type, input_per_1m, output_per_1m,
-             cache_read_per_1m, cache_write_per_1m, context_window,
-             source, source_url, version, enabled, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-          [
-            newId(),
-            entry.modelName,
-            entry.providerType ?? null,
-            entry.inputPer1m,
-            entry.outputPer1m,
-            entry.cacheReadPer1m ?? null,
-            entry.cacheWritePer1m ?? null,
-            entry.contextWindow ?? null,
-            entry.source,
-            entry.sourceUrl ?? null,
-            entry.version,
-            boolToInt(entry.enabled ?? true),
-            ts,
-          ],
+
+    // 关键修复（2026-07-07，用户实测"数据库写不进"真根因，写锁探测实锤）：
+    // 这里原来用裸 `BEGIN TRANSACTION ... COMMIT`（多次独立 db.execute）。但
+    // tauri-plugin-sql 底层是 sqlx 连接池（见 connection.ts），每次 db.execute 都是
+    // "从池借一个连接→执行→还回池"，不保证 BEGIN/INSERT/COMMIT 落在同一物理连接上。
+    // 结果 BEGIN 在连接 A 上开了事务、拿到写锁后连接 A 被还回池子，COMMIT 却发到了别的
+    // 连接——连接 A 的事务永远没提交、永久持有写锁，直到连接被池子超时回收。此后所有写
+    // 操作（用户消息、助手消息）全撞 "database is locked"，withBusyRetry 退避耗尽后静默
+    // 失败 → 红条"本条内容未能保存到本地数据库" + 退出丢历史。而且时好时坏：BEGIN/COMMIT
+    // 偶尔恰好落在同一连接时又正常，正是用户报的"第一条能回、第二条就卡"。
+    //   修法：连接池上不能用跨 execute 的事务。价格数据非关键、不需要严格原子性（最坏中途
+    //   失败下次同步覆盖），所以去掉裸事务，改成一条 DELETE + 分批多值 INSERT，每条都是独立
+    //   自动提交语句，绝不会有连接挂着未提交事务。
+    // 另（同日早先修复）：原先是 `UPDATE ... SET enabled=0` 只禁用不删除，僵尸记录累积到
+    //   33 万行/118MB，是数据库膨胀的原因；DELETE 才是真正的替换语义。
+    await db.execute("DELETE FROM model_price_catalog WHERE source = $1", [source]);
+
+    // 分批批量插入：每行 13 个占位符，每批 100 行 = 1300 个参数（远低于 SQLite 32766 上限），
+    // 把约 5000 次 execute 压到约 50 次，缩短与用户写入并发时的锁竞争窗口。
+    const COLS = 13;
+    const BATCH_ROWS = 100;
+    for (let i = 0; i < entries.length; i += BATCH_ROWS) {
+      const batch = entries.slice(i, i + BATCH_ROWS);
+      const valueGroups: string[] = [];
+      const params: unknown[] = [];
+      batch.forEach((entry, idx) => {
+        const base = idx * COLS;
+        valueGroups.push(
+          `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9},$${base + 10},$${base + 11},$${base + 12},$${base + 13})`,
         );
-      }
-      await db.execute("COMMIT");
-    } catch (error) {
-      await db.execute("ROLLBACK").catch(() => {});
-      throw error;
+        params.push(
+          newId(),
+          entry.modelName,
+          entry.providerType ?? null,
+          entry.inputPer1m,
+          entry.outputPer1m,
+          entry.cacheReadPer1m ?? null,
+          entry.cacheWritePer1m ?? null,
+          entry.contextWindow ?? null,
+          entry.source,
+          entry.sourceUrl ?? null,
+          entry.version,
+          boolToInt(entry.enabled ?? true),
+          ts,
+        );
+      });
+      await db.execute(
+        `INSERT INTO model_price_catalog
+          (id, model_name, provider_type, input_per_1m, output_per_1m,
+           cache_read_per_1m, cache_write_per_1m, context_window,
+           source, source_url, version, enabled, updated_at)
+         VALUES ${valueGroups.join(",")}`,
+        params,
+      );
     }
   },
 };
