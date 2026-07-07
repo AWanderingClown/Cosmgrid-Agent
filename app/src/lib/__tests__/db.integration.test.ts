@@ -152,6 +152,20 @@ describe("workflowRuns", () => {
       "workflow.created",
       "workflow.node_waiting_user",
     ]);
+
+    const audit = await db.workflowRuns.getAuditSummary(runId);
+    expect(audit).toMatchObject({
+      runId,
+      conversationId: conv.id,
+      status: "waiting_user",
+      currentPhase: "plan",
+      objective: "看项目并制定方案",
+      latestEventType: "workflow.node_waiting_user",
+    });
+    expect(audit?.eventCounts).toMatchObject({
+      "workflow.created": 1,
+      "workflow.node_waiting_user": 1,
+    });
   });
 });
 

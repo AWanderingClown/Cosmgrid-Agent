@@ -1,5 +1,6 @@
 import type { IntentRouteAction } from "../workflow/semantic-intent-router";
 import type { WorkflowRunStatus, WorkflowSnapshot } from "../workflow/types";
+import { deriveWorkflowAuditSummary, type WorkflowAuditSummary } from "../workflow/audit";
 import { getDb } from "./connection";
 import { boolToInt, newId, now } from "./utils";
 
@@ -388,6 +389,21 @@ export const workflowRuns = {
       [workflowRunId],
     );
     return rows.map(mapWorkflowEventRow);
+  },
+
+  async getAuditSummary(workflowRunId: string): Promise<WorkflowAuditSummary | null> {
+    const run = await this.getById(workflowRunId);
+    if (!run) return null;
+    const events = await this.listEvents(workflowRunId);
+    return deriveWorkflowAuditSummary({
+      snapshot: run.snapshot,
+      events: events.map((event) => ({
+        id: event.id,
+        eventType: event.eventType,
+        createdAt: event.createdAt,
+        payloadJson: event.payloadJson,
+      })),
+    });
   },
 };
 
