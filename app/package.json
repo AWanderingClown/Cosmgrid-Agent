@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "depcruise": "depcruise src --config .dependency-cruiser.cjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.85",
@@ -53,6 +54,7 @@
     "@types/shell-quote": "^1.7.5",
     "@vitejs/plugin-react": "^4.6.0",
     "@vitest/coverage-v8": "^4.1.9",
+    "dependency-cruiser": "^17.0.0",
     "jsdom": "^29.1.1",
     "tsx": "^4.22.4",
     "typescript": "~5.8.3",

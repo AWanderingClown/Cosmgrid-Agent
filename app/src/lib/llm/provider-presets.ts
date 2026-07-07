@@ -6,7 +6,17 @@
 // ⚠️ 产品原则：预设只是「便捷入口」，不是限制。用户永远能选「自定义」手动配任意厂商（绝不硬编码锁死某几家）。
 // 所有 baseUrl 已逐个 curl 核实 /models 端点存在（401=路径正确），不是凭记忆写的。
 
-import type { ProviderTypeValue } from "@/components/providers/ProviderTypeSelect";
+// Provider 类型的值集合归属 lib 层（UI 组件从这里派生选项，不倒置依赖）。
+export const PROVIDER_TYPE_VALUES = [
+  "anthropic",
+  "openai",
+  "google",
+  "openai-compatible",
+  "claude-cli",
+  "codex-cli",
+] as const;
+
+export type ProviderTypeValue = (typeof PROVIDER_TYPE_VALUES)[number];
 
 export interface ProviderPreset {
   /** 稳定 id（也用于 i18n key 与图标） */
