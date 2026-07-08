@@ -93,6 +93,7 @@ describe("initSchema", () => {
       "202607040002-conversation-archived-at",
       "202607040003-message-tool-call-count",
       "202607090001-mcp-secret-credential",
+      "202607090002-conversation-summaries",
     ]);
 
     const usageColumns = await adapter.select<Array<{ name: string }>>("PRAGMA table_info(usage_events)");

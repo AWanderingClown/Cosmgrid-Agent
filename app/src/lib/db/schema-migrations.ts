@@ -78,4 +78,31 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       await addColumnIfMissing(db, "mcp_servers", "secret_credential_id", "TEXT");
     },
   },
+  {
+    version: "202607090002-conversation-summaries",
+    description:
+      "Add conversation_summaries table for context-compression summaries (v0.9.1): " +
+      "avoids re-summarizing the same early messages every turn. " +
+      "Session-scoped (conversation_id), not project-scoped (checkpoints is project-scoped).",
+    up: async (db) => {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS conversation_summaries (
+          id TEXT PRIMARY KEY,
+          conversation_id TEXT NOT NULL,
+          summary TEXT NOT NULL,
+          key_decisions_json TEXT,
+          facts_json TEXT,
+          open_threads_json TEXT,
+          model_id TEXT,
+          token_count INTEGER,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        )
+      `);
+      await db.execute(`
+        CREATE INDEX IF NOT EXISTS idx_conversation_summaries_conversation_created
+        ON conversation_summaries(conversation_id, created_at DESC)
+      `);
+    },
+  },
 ];
