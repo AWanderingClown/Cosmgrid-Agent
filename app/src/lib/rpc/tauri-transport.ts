@@ -24,6 +24,8 @@ export interface TauriRpcTransportOptions {
 
 export class TauriRpcTransport implements JsonRpcTransport {
   private listener: ((message: unknown) => void) | null = null;
+  private closeListener: (() => void) | null = null;
+  private errorListener: ((error: Error) => void) | null = null;
   private unlisten: Promise<UnlistenFn> | null = null;
 
   constructor(private readonly options: TauriRpcTransportOptions) {}
@@ -32,15 +34,31 @@ export class TauriRpcTransport implements JsonRpcTransport {
     this.listener = listener;
   }
 
+  onClose(listener: () => void): void {
+    this.closeListener = listener;
+  }
+
+  onError(listener: (error: Error) => void): void {
+    this.errorListener = listener;
+  }
+
   async start(): Promise<void> {
     this.unlisten = listen<RpcProcessEventPayload>("rpc-process-event", (event) => {
       const payload = event.payload;
       if (payload.sessionId !== this.options.sessionId) return;
+      if (payload.type === "terminated") {
+        this.closeListener?.();
+        return;
+      }
+      if (payload.type === "error") {
+        this.errorListener?.(new Error(payload.message ?? "RPC process error"));
+        return;
+      }
       if (payload.type !== "message" || typeof payload.message !== "string") return;
       try {
         this.listener?.(JSON.parse(payload.message));
       } catch {
-        // Ignore malformed server output; stderr/error events still surface via devtools/logs.
+        this.errorListener?.(new Error("RPC process emitted malformed JSON"));
       }
     });
     await invoke("spawn_rpc_process", {

@@ -1,6 +1,8 @@
 export interface JsonRpcTransport {
   send(message: unknown): Promise<void>;
   onMessage(listener: (message: unknown) => void): void;
+  onClose?(listener: () => void): void;
+  onError?(listener: (error: Error) => void): void;
 }
 
 export interface JsonRpcClientOptions {
@@ -18,10 +20,13 @@ export class JsonRpcClient {
   private readonly pending = new Map<string | number, PendingCall>();
   private readonly timeoutMs: number;
   private readonly notificationListeners = new Set<(method: string, params: unknown) => void>();
+  private readonly requestHandlers = new Map<string, (params: unknown) => unknown | Promise<unknown>>();
 
   constructor(private readonly transport: JsonRpcTransport, options: JsonRpcClientOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.transport.onMessage((message) => this.handleMessage(message));
+    this.transport.onClose?.(() => this.rejectPending(new Error("JSON-RPC transport closed")));
+    this.transport.onError?.((error) => this.rejectPending(error));
   }
 
   async call<T = unknown>(method: string, params?: unknown): Promise<T> {
@@ -68,11 +73,20 @@ export class JsonRpcClient {
     return () => this.notificationListeners.delete(listener);
   }
 
+  onRequest(method: string, handler: (params: unknown) => unknown | Promise<unknown>): () => void {
+    this.requestHandlers.set(method, handler);
+    return () => this.requestHandlers.delete(method);
+  }
+
   private handleMessage(raw: unknown): void {
     if (!raw || typeof raw !== "object") return;
     const maybeNotification = raw as { method?: unknown; params?: unknown; id?: unknown };
     if (!("id" in maybeNotification) && typeof maybeNotification.method === "string") {
       for (const listener of this.notificationListeners) listener(maybeNotification.method, maybeNotification.params);
+      return;
+    }
+    if (typeof maybeNotification.method === "string" && maybeNotification.id !== undefined) {
+      void this.handleServerRequest(maybeNotification.id as string | number, maybeNotification.method, maybeNotification.params);
       return;
     }
     if (!("id" in raw)) return;
@@ -90,10 +104,39 @@ export class JsonRpcClient {
     pending.resolve(message.result);
   }
 
+  private async handleServerRequest(id: string | number, method: string, params: unknown): Promise<void> {
+    const handler = this.requestHandlers.get(method);
+    if (!handler) {
+      await this.transport.send({
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32601, message: `Method not found: ${method}` },
+      });
+      return;
+    }
+    try {
+      const result = await handler(params);
+      await this.transport.send({ jsonrpc: "2.0", id, result });
+    } catch (error) {
+      await this.transport.send({
+        jsonrpc: "2.0",
+        id,
+        error: {
+          code: -32603,
+          message: error instanceof Error ? error.message : "Internal error",
+        },
+      });
+    }
+  }
+
   dispose(): void {
+    this.rejectPending(new Error("JSON-RPC client disposed"));
+  }
+
+  private rejectPending(error: Error): void {
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timeout);
-      pending.reject(new Error("JSON-RPC client disposed"));
+      pending.reject(error);
       this.pending.delete(id);
     }
   }
