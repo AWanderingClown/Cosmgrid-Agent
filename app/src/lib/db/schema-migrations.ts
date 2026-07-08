@@ -71,4 +71,11 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       await addColumnIfMissing(db, "messages", "tool_call_count", "INTEGER");
     },
   },
+  {
+    version: "202607090001-mcp-secret-credential",
+    description: "Store only an OS-keychain credential reference for MCP headers and environment secrets",
+    up: async (db) => {
+      await addColumnIfMissing(db, "mcp_servers", "secret_credential_id", "TEXT");
+    },
+  },
 ];

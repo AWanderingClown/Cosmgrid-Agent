@@ -92,6 +92,7 @@ describe("initSchema", () => {
       "202607040001-tool-execution-message-id",
       "202607040002-conversation-archived-at",
       "202607040003-message-tool-call-count",
+      "202607090001-mcp-secret-credential",
     ]);
 
     const usageColumns = await adapter.select<Array<{ name: string }>>("PRAGMA table_info(usage_events)");
@@ -103,6 +104,58 @@ describe("initSchema", () => {
     expect(messageColumns.map((c) => c.name)).toEqual(
       expect.arrayContaining(["actor_role", "chain_step_index", "chain_step_total", "chain_done", "kind", "tool_call_count"]),
     );
+
+    const mcpColumns = await adapter.select<Array<{ name: string }>>("PRAGMA table_info(mcp_servers)");
+    expect(mcpColumns.map((c) => c.name)).toContain("secret_credential_id");
+  });
+});
+
+describe("mcpServers", () => {
+  it("rejects non-HTTP remote transports at the database boundary", async () => {
+    await expect(db.mcpServers.create({
+      name: "unsafe",
+      transport: "remote_http",
+      url: "file:///tmp/mcp",
+    })).rejects.toThrow("http or https");
+  });
+
+  it("stores only a keychain credential reference, never header/env secret values", async () => {
+    const server = await db.mcpServers.create({
+      name: "secure MCP",
+      transport: "remote_http",
+      url: "https://example.test/mcp",
+      headers: { Authorization: "Bearer should-not-enter-sqlite" },
+      env: { TOKEN: "should-not-enter-sqlite" },
+      secretCredentialId: "mcp-server:secure",
+    });
+    expect(server.headers).toEqual({});
+    expect(server.env).toEqual({});
+    expect(server.secretCredentialId).toBe("mcp-server:secure");
+
+    const raw = await adapter.select<Array<{ headers_json: string; env_json: string }>>(
+      "SELECT headers_json, env_json FROM mcp_servers WHERE id = $1",
+      [server.id],
+    );
+    expect(raw[0]).toEqual({ headers_json: "{}", env_json: "{}" });
+  });
+
+  it("persists and revokes workspace-scoped launch approvals", async () => {
+    const server = await db.mcpServers.create({
+      name: "local MCP",
+      transport: "local_stdio",
+      command: "node",
+      args: ["server.js"],
+    });
+    const approval = {
+      serverId: server.id,
+      workspacePath: "/workspace-a",
+      configFingerprint: "fingerprint",
+    };
+    expect(await db.mcpServerApprovals.isApproved(approval)).toBe(false);
+    await db.mcpServerApprovals.approve(approval);
+    expect(await db.mcpServerApprovals.isApproved(approval)).toBe(true);
+    await db.mcpServers.setEnabled(server.id, false);
+    expect(await db.mcpServerApprovals.isApproved(approval)).toBe(false);
   });
 });
 

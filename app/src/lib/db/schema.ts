@@ -492,6 +492,7 @@ export async function initSchemaForDb(db: DatabaseLike): Promise<void> {
       args_json TEXT NOT NULL DEFAULT '[]',
       env_json TEXT NOT NULL DEFAULT '{}',
       headers_json TEXT NOT NULL DEFAULT '{}',
+      secret_credential_id TEXT,
       enabled INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -500,6 +501,19 @@ export async function initSchemaForDb(db: DatabaseLike): Promise<void> {
   await db.execute(`
     CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled
     ON mcp_servers(enabled, updated_at DESC)
+  `);
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS mcp_server_approvals (
+      server_id TEXT NOT NULL,
+      workspace_path TEXT NOT NULL,
+      config_fingerprint TEXT NOT NULL,
+      approved_at TEXT NOT NULL,
+      PRIMARY KEY (server_id, workspace_path, config_fingerprint)
+    )
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_mcp_server_approvals_server
+    ON mcp_server_approvals(server_id)
   `);
 
   // v0.10：任务工作流状态。区别于 conversations.orchestration（角色链 UI），这里保存“任务做到哪一步”。

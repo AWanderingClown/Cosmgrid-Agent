@@ -77,8 +77,14 @@ export type {
 } from "./db/usage";
 export { debateSessions, toolExecutions, workspaceConfigs } from "./db/workspace";
 export type { DebateRoundData, DebateSessionRow, ToolExecutionRow } from "./db/workspace";
-export { mcpServers } from "./db/mcp";
-export type { CreateMcpServerInput, McpServerRow, McpTransport, UpdateMcpServerInput } from "./db/mcp";
+export { mcpServers, mcpServerApprovals } from "./db/mcp";
+export type {
+  CreateMcpServerInput,
+  McpServerApprovalInput,
+  McpServerRow,
+  McpTransport,
+  UpdateMcpServerInput,
+} from "./db/mcp";
 export { memoryKindLabel, projectMemories, projectMemoryVectors } from "./db/memory";
 export { modelCooldowns } from "./db/model-cooldowns";
 export type {
