@@ -815,6 +815,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         apiKey,
         effectiveWorkspace,
         convId,
+        intentJudgeModel,
         turnWorkflowSnapshot,
         turnWorkflowRunId,
         shouldCompleteWorkflowNode,
@@ -1024,12 +1025,26 @@ export function useChatStream(opts: UseChatStreamOptions) {
       // v0.9.1 摘要式压缩：async + 失败退回抽取式（绝不阻断发送）
       // 注意：await 必须在 outgoing = compressedPrompt.messages 之前，
       // 否则 outgoing 会拿到一个未 resolve 的 Promise，后续 convo = outgoing 直接坏掉。
+      //
+      // summarizeModel 复用 intentJudgeModel：当前项目里"已经跑起来的辅助模型解析入口"
+      // 就是 intent-judge 路径（line 344-351）。如果将来想用更便宜的模型做摘要（而非主对话
+      // 模型），可以新建 SmartRouter util 角色解析——现在先用 intentJudgeModel 把链路接通，
+      // 让 history-summarizer / conversation_summaries 不再是死代码。
       const compressedPrompt = await applyPromptCompressionWithSummary({
         enabled: smart,
         messages: outgoing,
         modelName: model.name,
         contextWindow: model.contextWindow,
         noticeText: (n) => t("chat.contextTrimmed", { count: n }),
+        summarizeModel: intentJudgeModel ?? undefined,
+        persistence: convId
+          ? {
+              conversationId: convId,
+              modelId: model.id,
+              // tokenCount 留给将来 fingerprint 算法决策时再计算
+              tokenCount: null,
+            }
+          : undefined,
       });
       outgoing = compressedPrompt.messages;
       const compressionStats = compressedPrompt.compressionStats;
