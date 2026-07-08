@@ -4,6 +4,7 @@ import { webFetchTool } from "./tools/web-fetch-tool";
 import { rememberTool } from "./tools/memory-tool";
 import { askUserTool } from "./tools/ask-user-tool";
 import { buildWorkspacePreamble } from "./workspace-context";
+import { registerEnabledMcpTools } from "@/lib/mcp/register-tools";
 
 export interface WorkspaceToolRuntimeOptions {
   workspacePath?: string | null;
@@ -43,6 +44,7 @@ export async function prepareWorkspaceToolRuntime(
       registry.register(webFetchTool);
       registry.register(askUserTool);
       if (options.conversationId) registry.register(rememberTool);
+      await registerEnabledMcpTools(registry);
       tools = buildAiSdkTools(registry, {
         workspacePath: "",
         projectId: options.projectId,
@@ -61,7 +63,9 @@ export async function prepareWorkspaceToolRuntime(
   let workspacePreamble: string | null = null;
 
   try {
-    tools = buildAiSdkTools(createDefaultToolRegistry({ includeWrite: options.includeWrite }), {
+    const registry = createDefaultToolRegistry({ includeWrite: options.includeWrite });
+    await registerEnabledMcpTools(registry, options.workspacePath);
+    tools = buildAiSdkTools(registry, {
       workspacePath: options.workspacePath,
       projectId: options.projectId,
       conversationId: options.conversationId,

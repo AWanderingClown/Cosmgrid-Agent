@@ -23,7 +23,7 @@ beforeEach(() => {
 });
 
 describe("createDefaultToolRegistry", () => {
-  it("注册 read/glob/grep/git_read/web_fetch/web_search/todo_write/ask_user_question 八个只读工具", () => {
+  it("注册默认只读工具，包含 LSP 查询能力", () => {
     const r = createDefaultToolRegistry();
     expect(r.has("read")).toBe(true);
     expect(r.has("glob")).toBe(true);
@@ -33,7 +33,10 @@ describe("createDefaultToolRegistry", () => {
     expect(r.has("web_search")).toBe(true);
     expect(r.has("todo_write")).toBe(true);
     expect(r.has("ask_user_question")).toBe(true);
-    expect(r.listReadOnly()).toHaveLength(8);
+    expect(r.has("lsp_diagnostics")).toBe(true);
+    expect(r.has("lsp_definition")).toBe(true);
+    expect(r.has("lsp_hover")).toBe(true);
+    expect(r.listReadOnly()).toHaveLength(11);
   });
 });
 
@@ -46,6 +49,9 @@ describe("buildAiSdkTools", () => {
       "git_read",
       "glob",
       "grep",
+      "lsp_definition",
+      "lsp_diagnostics",
+      "lsp_hover",
       "read",
       "remember",
       "todo_write",

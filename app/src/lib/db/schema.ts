@@ -481,6 +481,27 @@ export async function initSchemaForDb(db: DatabaseLike): Promise<void> {
     )
   `);
 
+  // v0.11：MCP 客户端配置（远程 HTTP / 本地 stdio）。工具执行仍走统一 ToolRegistry 和确认审计。
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS mcp_servers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      transport TEXT NOT NULL,
+      url TEXT,
+      command TEXT,
+      args_json TEXT NOT NULL DEFAULT '[]',
+      env_json TEXT NOT NULL DEFAULT '{}',
+      headers_json TEXT NOT NULL DEFAULT '{}',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled
+    ON mcp_servers(enabled, updated_at DESC)
+  `);
+
   // v0.10：任务工作流状态。区别于 conversations.orchestration（角色链 UI），这里保存“任务做到哪一步”。
   await db.execute(`
     CREATE TABLE IF NOT EXISTS workflow_runs (

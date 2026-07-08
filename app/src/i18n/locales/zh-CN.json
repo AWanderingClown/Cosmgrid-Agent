@@ -775,6 +775,23 @@
       "checking": "检查中...",
       "done": "已完成，无输出"
     },
+    "mcp": {
+      "title": "MCP 工具服务器",
+      "desc": "把外部 MCP 工具接入当前工作台。启用后，AI 会在工具列表里看到这些能力；调用前仍会弹出确认。",
+      "name": "名称",
+      "namePlaceholder": "例如 GitHub MCP",
+      "transport": "连接方式",
+      "remoteHttp": "远程 HTTP",
+      "localStdio": "本地命令",
+      "url": "服务地址",
+      "command": "命令",
+      "args": "参数 JSON",
+      "add": "添加",
+      "empty": "还没有 MCP 工具服务器。",
+      "invalidArgs": "参数必须是 JSON 字符串数组，例如 [\"-y\",\"server-name\"]。",
+      "saved": "MCP 服务器已保存。",
+      "saveFailed": "保存 MCP 服务器失败。"
+    },
     "webSearch": {
       "title": "网页搜索",
       "desc": "配置后 AI 才能使用 web_search 工具在公网搜索（不知道具体网址时用这个；已知网址直接抓取用 web_fetch，不需要配置）。后端用 Tavily，免费额度约每月1000次请求。",

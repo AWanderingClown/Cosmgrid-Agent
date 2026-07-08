@@ -7,9 +7,13 @@
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use keyring::Entry;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::process::ChildStdin;
 use tauri::ipc::Channel;
 use tauri::Emitter;
 use tauri::Manager;
@@ -22,6 +26,16 @@ use tauri_plugin_shell::ShellExt;
 /// abort 时前端调 kill_cli(sessionId) → 按 pid 真正杀掉子进程，停止白耗订阅额度。
 #[derive(Default)]
 struct CliChildren(Mutex<HashMap<String, u32>>);
+
+struct RpcChild {
+    pid: u32,
+    stdin: Arc<tokio::sync::Mutex<ChildStdin>>,
+}
+
+/// LSP / MCP stdio 这类长期 JSON-RPC 子进程。不同于 CliChildren，这里必须保留 stdin，
+/// 因为前端会持续写请求，不能像 spawn_cli_stream 那样 spawn 后立刻 drop child。
+#[derive(Default)]
+struct RpcChildren(Mutex<HashMap<String, RpcChild>>);
 
 /// fetch_url_rendered 的等待表（2026-07-05 新增）：requestId → oneshot 发送端。
 /// 隐藏窗口里的页面加载完、脚本执行完之后，通过 report_rendered_page 命令把提取到的文本
@@ -66,6 +80,15 @@ enum CliStreamEvent {
     Stderr { line: String },
     Terminated { code: Option<i32> },
     Error { message: String, kind: CliErrorKind },
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+enum RpcProcessEvent {
+    Message { session_id: String, message: String },
+    Stderr { session_id: String, line: String },
+    Terminated { session_id: String, code: Option<i32> },
+    Error { session_id: String, message: String },
 }
 
 /// cc switch / Claude Code 会往环境里注入这些前缀的变量，会让 spawn 出来的 claude
@@ -419,6 +442,229 @@ async fn spawn_cli_stream(
     }
 
     Ok(())
+}
+
+fn emit_rpc_event(app: &tauri::AppHandle, event: RpcProcessEvent) {
+    let _ = app.emit("rpc-process-event", event);
+}
+
+fn find_header_end(buffer: &[u8]) -> Option<usize> {
+    buffer.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn parse_content_length(header: &[u8]) -> Option<usize> {
+    let text = String::from_utf8_lossy(header);
+    text.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if name.trim().eq_ignore_ascii_case("content-length") {
+            value.trim().parse::<usize>().ok()
+        } else {
+            None
+        }
+    })
+}
+
+async fn read_rpc_content_length_stdout(
+    app: tauri::AppHandle,
+    session_id: String,
+    stdout: tokio::process::ChildStdout,
+) {
+    let mut reader = BufReader::new(stdout);
+    let mut chunk = [0u8; 4096];
+    let mut buffer: Vec<u8> = Vec::new();
+
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(0) => break,
+            Ok(n) => {
+                buffer.extend_from_slice(&chunk[..n]);
+                loop {
+                    let Some(header_end) = find_header_end(&buffer) else { break };
+                    let Some(content_len) = parse_content_length(&buffer[..header_end]) else {
+                        emit_rpc_event(&app, RpcProcessEvent::Error {
+                            session_id: session_id.clone(),
+                            message: "RPC content-length frame missing Content-Length header".to_string(),
+                        });
+                        buffer.clear();
+                        break;
+                    };
+                    let body_start = header_end + 4;
+                    let body_end = body_start + content_len;
+                    if buffer.len() < body_end { break; }
+                    let body = String::from_utf8_lossy(&buffer[body_start..body_end]).into_owned();
+                    emit_rpc_event(&app, RpcProcessEvent::Message { session_id: session_id.clone(), message: body });
+                    buffer.drain(..body_end);
+                }
+            }
+            Err(err) => {
+                emit_rpc_event(&app, RpcProcessEvent::Error {
+                    session_id,
+                    message: format!("failed reading RPC stdout: {err}"),
+                });
+                break;
+            }
+        }
+    }
+}
+
+async fn read_rpc_newline_stdout(
+    app: tauri::AppHandle,
+    session_id: String,
+    stdout: tokio::process::ChildStdout,
+) {
+    let mut lines = BufReader::new(stdout).lines();
+    loop {
+        match lines.next_line().await {
+            Ok(Some(line)) => {
+                if !line.trim().is_empty() {
+                    emit_rpc_event(&app, RpcProcessEvent::Message { session_id: session_id.clone(), message: line });
+                }
+            }
+            Ok(None) => break,
+            Err(err) => {
+                emit_rpc_event(&app, RpcProcessEvent::Error {
+                    session_id,
+                    message: format!("failed reading RPC stdout: {err}"),
+                });
+                break;
+            }
+        }
+    }
+}
+
+async fn read_rpc_stderr(app: tauri::AppHandle, session_id: String, stderr: tokio::process::ChildStderr) {
+    let mut lines = BufReader::new(stderr).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        if !line.trim().is_empty() {
+            emit_rpc_event(&app, RpcProcessEvent::Stderr { session_id: session_id.clone(), line });
+        }
+    }
+}
+
+#[tauri::command]
+async fn spawn_rpc_process(
+    app: tauri::AppHandle,
+    children: State<'_, RpcChildren>,
+    session_id: String,
+    program: String,
+    args: Vec<String>,
+    extra_env: HashMap<String, String>,
+    working_directory: Option<String>,
+    framing: String,
+) -> Result<(), String> {
+    if session_id.trim().is_empty() {
+        return Err("session_id is required".to_string());
+    }
+    if program.trim().is_empty() {
+        return Err("program is required".to_string());
+    }
+    if let Ok(map) = children.0.lock() {
+        if map.contains_key(&session_id) {
+            return Err(format!("RPC session already exists: {session_id}"));
+        }
+    }
+
+    let mut env: HashMap<String, String> = std::env::vars().collect();
+    for (k, v) in extra_env {
+        env.insert(k, v);
+    }
+    let extra_dirs = extra_path_dirs();
+    if !extra_dirs.is_empty() {
+        let existing_path = env.get("PATH").cloned().unwrap_or_default();
+        let mut all_dirs = extra_dirs;
+        all_dirs.extend(std::env::split_paths(&existing_path));
+        if let Ok(joined) = std::env::join_paths(&all_dirs) {
+            env.insert("PATH".to_string(), joined.to_string_lossy().into_owned());
+        }
+    }
+
+    let mut command = tokio::process::Command::new(&program);
+    command
+        .args(args)
+        .env_clear()
+        .envs(env)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(cwd) = working_directory.filter(|p| !p.trim().is_empty()) {
+        command.current_dir(cwd);
+    }
+
+    let mut child = command.spawn().map_err(|e| format!("failed to spawn RPC process: {e}"))?;
+    let pid = child.id().ok_or_else(|| "failed to get RPC process pid".to_string())?;
+    let stdin = child.stdin.take().ok_or_else(|| "failed to open RPC stdin".to_string())?;
+    let stdout = child.stdout.take().ok_or_else(|| "failed to open RPC stdout".to_string())?;
+    let stderr = child.stderr.take().ok_or_else(|| "failed to open RPC stderr".to_string())?;
+    let stdin = Arc::new(tokio::sync::Mutex::new(stdin));
+
+    children.0.lock().map_err(|e| e.to_string())?.insert(session_id.clone(), RpcChild {
+        pid,
+        stdin: Arc::clone(&stdin),
+    });
+
+    let stdout_app = app.clone();
+    let stdout_session = session_id.clone();
+    match framing.as_str() {
+        "content-length" => {
+            tauri::async_runtime::spawn(read_rpc_content_length_stdout(stdout_app, stdout_session, stdout));
+        }
+        "newline" => {
+            tauri::async_runtime::spawn(read_rpc_newline_stdout(stdout_app, stdout_session, stdout));
+        }
+        other => {
+            children.0.lock().map_err(|e| e.to_string())?.remove(&session_id);
+            let _ = kill_pid(pid);
+            return Err(format!("unsupported RPC framing: {other}"));
+        }
+    }
+    tauri::async_runtime::spawn(read_rpc_stderr(app.clone(), session_id.clone(), stderr));
+
+    let wait_app = app.clone();
+    let wait_session = session_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let code = child.wait().await.ok().and_then(|status| status.code());
+        let rpc_children = wait_app.state::<RpcChildren>();
+        if let Ok(mut map) = rpc_children.0.lock() {
+            map.remove(&wait_session);
+        }
+        emit_rpc_event(&wait_app, RpcProcessEvent::Terminated { session_id: wait_session, code });
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn write_rpc_stdin(
+    children: State<'_, RpcChildren>,
+    session_id: String,
+    payload: String,
+) -> Result<(), String> {
+    let stdin = {
+        let map = children.0.lock().map_err(|e| e.to_string())?;
+        map.get(&session_id)
+            .map(|child| Arc::clone(&child.stdin))
+            .ok_or_else(|| format!("RPC session not found: {session_id}"))?
+    };
+    let mut writer = stdin.lock().await;
+    writer.write_all(payload.as_bytes()).await.map_err(|e| e.to_string())?;
+    writer.flush().await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn kill_rpc_process(children: State<'_, RpcChildren>, session_id: String) -> Result<bool, String> {
+    let child = children
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .remove(&session_id);
+    match child {
+        Some(child) => {
+            kill_pid(child.pid).map_err(|e| e.to_string())?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
 }
 
 /// 杀掉指定 sessionId 的 CLI 子进程（前端 abort 时调用）。
@@ -960,6 +1206,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(CliChildren::default())
+        .manage(RpcChildren::default())
         .manage(RenderChannels::default())
         .on_menu_event(|app, event| {
             if event.id().as_ref() == "edit_select_all" {
@@ -981,6 +1228,9 @@ pub fn run() {
             delete_api_key,
             spawn_cli_stream,
             kill_cli,
+            spawn_rpc_process,
+            write_rpc_stdin,
+            kill_rpc_process,
             resolve_cli_program,
             run_shell_command,
             fetch_url_backend,

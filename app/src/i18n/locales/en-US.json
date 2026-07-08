@@ -775,6 +775,23 @@
       "checking": "Checking...",
       "done": "Done, no output"
     },
+    "mcp": {
+      "title": "MCP Tool Servers",
+      "desc": "Connect external MCP tools to this workspace. Once enabled, the AI can see them in its tool list; each call still asks for confirmation.",
+      "name": "Name",
+      "namePlaceholder": "Example: GitHub MCP",
+      "transport": "Transport",
+      "remoteHttp": "Remote HTTP",
+      "localStdio": "Local command",
+      "url": "Server URL",
+      "command": "Command",
+      "args": "Args JSON",
+      "add": "Add",
+      "empty": "No MCP tool servers yet.",
+      "invalidArgs": "Args must be a JSON string array, for example [\"-y\",\"server-name\"].",
+      "saved": "MCP server saved.",
+      "saveFailed": "Failed to save MCP server."
+    },
     "webSearch": {
       "title": "Web Search",
       "desc": "Once configured, the AI can use the web_search tool to search the public web (for when you don't know the exact URL — if you already have a URL, web_fetch handles that without any setup). Backed by Tavily, free tier is about 1000 requests/month.",
