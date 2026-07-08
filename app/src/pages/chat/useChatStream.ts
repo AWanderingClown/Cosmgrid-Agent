@@ -674,9 +674,11 @@ export function useChatStream(opts: UseChatStreamOptions) {
             snapshot: activeSnapshot,
             summary: result.finalSolution.slice(0, 1200),
             planSource: {
-              kind: fullDebate ? "debate_full" : "debate_degraded",
+              kind: fullDebate ? "debate_result" : "degraded_debate",
+              ref: `debate:${activeRunId}`,
+              summary: result.finalSolution.slice(0, 1200),
               phase: "debate",
-              capturedAt: new Date().toISOString(),
+              boundAt: new Date().toISOString(),
               label: fullDebate ? "完整多模型博弈结果" : "多模型博弈未完成后的降级方案",
             },
           });
@@ -936,10 +938,11 @@ export function useChatStream(opts: UseChatStreamOptions) {
           snapshot: activeTurnWorkflowSnapshot,
           summary: desktopPlan.content.slice(0, 1200),
           source: {
-            kind: "desktop_file",
+            kind: "file",
+            ref: desktopPlan.path,
+            summary: desktopPlan.content.slice(0, 1200),
             phase: "plan",
-            capturedAt: new Date().toISOString(),
-            path: desktopPlan.path,
+            boundAt: new Date().toISOString(),
             label: "用户桌面方案文件",
           },
         });
@@ -961,6 +964,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
       const selectedSkill = selectSkillForTurn({
         text,
         workflowSnapshot: activeTurnWorkflowSnapshot,
+        intentDecision: cacheIntent,
       });
       if (selectedSkill && convId && activeTurnWorkflowSnapshot && turnWorkflowRunId) {
         const nextWorkflow = attachActiveSkillToWorkflow({

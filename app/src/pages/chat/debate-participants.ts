@@ -1,7 +1,7 @@
 import type { CredentialListItem, ModelListItem } from "@/lib/api";
 import type { DebateRoleConfig } from "@/lib/llm/debate-engine";
 import { isCliProviderType } from "@/lib/llm/cli-protocol";
-import { isInCooldown } from "@/lib/llm/model-cooldown";
+import { hydrateModelCooldowns, isInCooldown } from "@/lib/llm/model-cooldown";
 import { rankFallbackModels } from "@/lib/llm/model-capabilities";
 
 function debateProviderPriority(model: ModelListItem): number {
@@ -32,6 +32,7 @@ export async function buildDebateParticipants(args: {
     if (b.id === args.primaryModel.id) return 1;
     return (fallbackRank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (fallbackRank.get(b.id) ?? Number.MAX_SAFE_INTEGER);
   });
+  await hydrateModelCooldowns(ordered.map((model) => model.id)).catch(() => {});
   const seen = new Set<string>();
   const participants: DebateRoleConfig[] = [];
 

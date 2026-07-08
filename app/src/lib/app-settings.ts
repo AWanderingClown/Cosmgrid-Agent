@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 
 const SMART_ROUTING_KEY = "cosmgrid.smartRouting";
 const PURE_SINGLE_MODEL_MODE_KEY = "cosmgrid.pureSingleModelMode";
+const DEVELOPER_DIAGNOSTICS_KEY = "cosmgrid.developerDiagnostics";
 const MEMORY_EMBEDDING_MODE_KEY = "cosmgrid.memoryEmbedding.mode";
 const MEMORY_EMBEDDING_CREDENTIAL_KEY = "cosmgrid.memoryEmbedding.credentialId";
 const MEMORY_EMBEDDING_MODEL_KEY = "cosmgrid.memoryEmbedding.modelName";
@@ -63,6 +64,27 @@ export function usePureSingleModelModeSetting(): [boolean, (on: boolean) => void
 
   useEffect(() => {
     setPureSingleModelModeEnabled(enabled);
+  }, [enabled]);
+
+  return [enabled, setEnabled];
+}
+
+/** 工程化诊断面板（开发者工具）。默认关，避免普通用户右侧面板被内部状态淹没。 */
+export function isDeveloperDiagnosticsEnabled(): boolean {
+  if (!hasLocalStorage()) return false;
+  return localStorage.getItem(DEVELOPER_DIAGNOSTICS_KEY) === "on";
+}
+
+export function setDeveloperDiagnosticsEnabled(on: boolean): void {
+  if (!hasLocalStorage()) return;
+  localStorage.setItem(DEVELOPER_DIAGNOSTICS_KEY, on ? "on" : "off");
+}
+
+export function useDeveloperDiagnosticsSetting(): [boolean, (on: boolean) => void] {
+  const [enabled, setEnabled] = useState<boolean>(isDeveloperDiagnosticsEnabled);
+
+  useEffect(() => {
+    setDeveloperDiagnosticsEnabled(enabled);
   }, [enabled]);
 
   return [enabled, setEnabled];

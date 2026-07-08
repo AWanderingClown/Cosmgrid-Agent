@@ -44,9 +44,11 @@ describe("deriveWorkflowDiagnostics", () => {
         planSummary: "按桌面方案执行 Phase 1",
         debateSummary: "多模型博弈未完成，采用降级方案",
         planSource: {
-          kind: "debate_degraded" as const,
+          kind: "degraded_debate" as const,
+          ref: "debate:session-1",
+          summary: "按降级方案执行 Phase 1",
           phase: "debate" as const,
-          capturedAt: "2026-07-07T00:00:00.000Z",
+          boundAt: "2026-07-07T00:00:00.000Z",
           label: "降级方案",
         },
       },
@@ -111,7 +113,7 @@ describe("deriveWorkflowDiagnostics", () => {
     expect(view.hasWorkflow).toBe(true);
     expect(view.phase).toBe("execute");
     expect(view.objective).toBe("工程化收口");
-    expect(view.planSource?.kind).toBe("debate_degraded");
+    expect(view.planSource?.kind).toBe("degraded_debate");
     expect(view.latestWorkflowEvent).toBe("workflow.skill_selected");
     expect(view.workflowEventCount).toBe(2);
     expect(view.debateSummary).toContain("降级方案");

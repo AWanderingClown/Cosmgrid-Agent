@@ -9,6 +9,7 @@ import { WorkflowDiagnostics } from "@/components/work-panel/WorkflowDiagnostics
 import { WorkArtifacts } from "@/components/work-panel/WorkArtifacts";
 import { DebateHistory } from "@/components/work-panel/DebateHistory";
 import type { ModelListItem } from "@/lib/api";
+import { useDeveloperDiagnosticsSetting } from "@/lib/app-settings";
 import type { ToolCallView } from "@/lib/work-artifact-views";
 import type { WorkArtifact } from "@/lib/work-artifacts";
 import type { WorkflowEvent } from "@/lib/db";
@@ -71,6 +72,7 @@ export function ChatWorkPanel({
   messages,
 }: ChatWorkPanelProps) {
   const { t } = useTranslation();
+  const [developerDiagnosticsEnabled] = useDeveloperDiagnosticsSetting();
 
   const turns = messages.filter((m) => m.role === "assistant" && (m.modelLabel || m.usage));
 
@@ -180,7 +182,9 @@ export function ChatWorkPanel({
             onMainModelChange={onMainModelChange}
             onNodeModelChange={onNodeModelChange}
           />
-          <WorkflowDiagnostics workflowEvents={workflowEvents} workflowSnapshot={workflowSnapshot} toolCalls={toolCalls} messages={messages} />
+          {developerDiagnosticsEnabled && (
+            <WorkflowDiagnostics workflowEvents={workflowEvents} workflowSnapshot={workflowSnapshot} toolCalls={toolCalls} messages={messages} />
+          )}
           <Suspense
             fallback={
               <div className="glass rounded-2xl border border-white/5 p-4 text-[11px] font-bold uppercase tracking-widest text-muted-foreground/50">

@@ -308,6 +308,21 @@ export async function initSchemaForDb(db: DatabaseLike): Promise<void> {
     )
   `);
 
+  // L2 调度冷却状态（持久化）：模型遇到 session limit / 429 / timeout / spawn failed 后进入冷却。
+  // 这类事实不能只放内存，否则 App 重启后会立刻重试同一个不可用模型。
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS model_cooldowns (
+      model_id TEXT PRIMARY KEY,
+      failures INTEGER NOT NULL DEFAULT 0,
+      cooldown_until TEXT,
+      updated_at TEXT NOT NULL
+    )
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_model_cooldowns_until
+    ON model_cooldowns(cooldown_until)
+  `);
+
   // v0.9 阶段7：语义缓存（重复/相似 query 命中已有答案，省 token）
   // query_embedding 存 JSON float[]；检索时纯 JS 余弦扫描（自用阶段量小够用）
   await db.execute(`

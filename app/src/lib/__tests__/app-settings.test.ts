@@ -13,9 +13,11 @@ const store = new Map<string, string>();
 import {
   DEFAULT_MEMORY_EMBEDDING_MODEL,
   getMemoryEmbeddingSetting,
+  isDeveloperDiagnosticsEnabled,
   getPermissionMode,
   isSmartRoutingEnabled,
   setMemoryEmbeddingSetting,
+  setDeveloperDiagnosticsEnabled,
   setPermissionMode,
   setSmartRoutingEnabled,
 } from "../app-settings";
@@ -36,6 +38,21 @@ describe("智能路由开关", () => {
     setSmartRoutingEnabled(false);
     setSmartRoutingEnabled(true);
     expect(isSmartRoutingEnabled()).toBe(true);
+  });
+});
+
+describe("工程化诊断开关", () => {
+  beforeEach(() => store.clear());
+
+  it("默认关闭，普通用户不显示内部诊断面板", () => {
+    expect(isDeveloperDiagnosticsEnabled()).toBe(false);
+  });
+
+  it("显式开启后才显示诊断面板", () => {
+    setDeveloperDiagnosticsEnabled(true);
+    expect(isDeveloperDiagnosticsEnabled()).toBe(true);
+    setDeveloperDiagnosticsEnabled(false);
+    expect(isDeveloperDiagnosticsEnabled()).toBe(false);
   });
 });
 

@@ -78,6 +78,7 @@ export type {
 export { debateSessions, toolExecutions, workspaceConfigs } from "./db/workspace";
 export type { DebateRoundData, DebateSessionRow, ToolExecutionRow } from "./db/workspace";
 export { memoryKindLabel, projectMemories, projectMemoryVectors } from "./db/memory";
+export { modelCooldowns } from "./db/model-cooldowns";
 export type {
   CreateProjectMemoryInput,
   MemoryKind,

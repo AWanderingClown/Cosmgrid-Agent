@@ -57,9 +57,13 @@ export function buildWorkflowContextPreamble(args: {
 
   if (snapshot.context.planSource) {
     const source = snapshot.context.planSource;
-    const path = source.path ? `，路径：${source.path}` : "";
+    const path = source.kind === "file" ? `，路径：${source.ref}` : "";
     const label = source.label ? `，说明：${source.label}` : "";
-    parts.push(`- 方案来源：${source.kind}，来自 ${source.phase} 阶段${path}${label}`);
+    const phase = source.phase ? `，绑定阶段：${source.phase}` : "";
+    parts.push(`- 方案来源：${source.kind}，引用：${source.ref}，绑定时间：${source.boundAt}${phase}${path}${label}`);
+    if (source.summary && source.summary !== snapshot.context.planSummary) {
+      parts.push(`- 方案来源摘要：${source.summary}`);
+    }
   }
 
   if (snapshot.context.planSummary) {

@@ -124,7 +124,7 @@ export function WorkflowDiagnostics({
           </div>
         </div>
 
-        {view.planSource?.kind === "debate_degraded" && (
+        {view.planSource?.kind === "degraded_debate" && (
           <div className="flex items-start gap-2 rounded-lg border border-amber-400/15 bg-amber-400/10 px-2 py-2 text-[10px] text-amber-200/85">
             <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
             <span>{t("chat.workPanel.diagnostics.degradedPlanWarning")}</span>

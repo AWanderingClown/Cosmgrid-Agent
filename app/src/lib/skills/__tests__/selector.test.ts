@@ -61,4 +61,53 @@ describe("selectSkillForTurn", () => {
 
     expect(selected).toBeNull();
   });
+
+  it("优先消费意图裁判结果，关键词只作为兜底", () => {
+    const selected = selectSkillForTurn({
+      text: "可以了，动手吧",
+      workflowSnapshot: workflow("plan"),
+      intentDecision: {
+        action: "approve_node",
+        targetRunId: "run-1",
+        confidence: 0.91,
+        reason: "用户要求进入实现。",
+        evidenceTurnIds: [],
+        patch: { executionMode: "execute_directly", reviewRequested: false, debateRequested: false },
+      },
+    });
+
+    expect(selected).toMatchObject({
+      id: "plan_execution",
+      reason: "intent classifier execute",
+    });
+  });
+
+  it("可从语义路由结果选择验证技能", () => {
+    const selected = selectSkillForTurn({
+      text: "确认一下刚才改动稳不稳",
+      workflowSnapshot: workflow("plan"),
+      semanticRoute: {
+        top: {
+          action: "verify",
+          score: 0.82,
+          margin: 0.2,
+          matchedExample: {
+            id: "verify-1",
+            action: "verify",
+            text: "检查刚才的改动",
+            explanation: "用户要求验证结果。",
+            source: "builtin",
+            weight: 1,
+            enabled: true,
+          },
+        },
+        candidates: [],
+        confidence: 0.82,
+        noMatch: false,
+      },
+    });
+
+    expect(selected?.id).toBe("verification_closure");
+    expect(selected?.reason).toBe("intent classifier verify");
+  });
 });

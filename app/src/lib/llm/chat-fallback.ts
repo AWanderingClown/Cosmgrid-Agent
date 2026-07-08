@@ -21,7 +21,7 @@ import { streamText, stepCountIs, type ToolSet, type ModelMessage } from "ai";
 import { cliSessions } from "../db";
 import { getLanguageModel } from "./provider-factory";
 import { classifyLlmError, type LlmErrorCategory } from "./error-classifier";
-import { isInCooldown, markModelFailed, markModelSucceeded, getCooldownRemainingMs } from "./model-cooldown";
+import { hydrateModelCooldowns, isInCooldown, markModelFailed, markModelSucceeded, getCooldownRemainingMs } from "./model-cooldown";
 import { recordUsageEvent, type RecordUsageParams } from "./usage-tracker";
 import { isCliProviderType, type CliMessage, type CliAccessOptions } from "./cli-protocol";
 import { streamViaCli } from "./cli-engine";
@@ -245,6 +245,7 @@ export async function streamWithFallback(
 
   // 预热 models.dev 输出上限表（幂等、不阻塞本轮）。首轮没拉到就用 CEILING 兜底，下轮起精确 clamp。
   void ensureModelLimitsLoaded();
+  await hydrateModelCooldowns(models.map((m) => m.modelId)).catch(() => {});
 
   // 跳过 cooldown 中的模型：从前往后找第一个不在 cooldown 的；前面被跳过的都触发 onSwitched("cooldown")
   let startIdx = 0;

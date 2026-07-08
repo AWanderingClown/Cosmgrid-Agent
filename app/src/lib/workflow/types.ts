@@ -54,16 +54,17 @@ export type WorkflowPhase =
   | "verify";
 
 export type WorkflowPlanSourceKind =
-  | "message_summary"
-  | "desktop_file"
-  | "debate_full"
-  | "debate_degraded";
+  | "message"
+  | "file"
+  | "debate_result"
+  | "degraded_debate";
 
 export interface WorkflowPlanSource {
   kind: WorkflowPlanSourceKind;
-  phase: WorkflowPhase;
-  capturedAt: string;
-  path?: string;
+  ref: string;
+  summary: string;
+  boundAt: string;
+  phase?: WorkflowPhase;
   label?: string;
 }
 

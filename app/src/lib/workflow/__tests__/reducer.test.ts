@@ -38,7 +38,9 @@ describe("workflow reducer", () => {
 
     expect(next.nodes.find((n) => n.id === "plan")?.status).toBe("done");
     expect(next.context.planSummary).toBe("Phase 1 先收口工作流");
-    expect(next.context.planSource?.kind).toBe("message_summary");
+    expect(next.context.planSource?.kind).toBe("message");
+    expect(next.context.planSource?.ref).toBe("workflow:run-1:plan");
+    expect(next.context.planSource?.summary).toBe("Phase 1 先收口工作流");
     expect(next.context.planSource?.phase).toBe("plan");
   });
 
@@ -51,16 +53,19 @@ describe("workflow reducer", () => {
       snapshot: ready,
       summary: "降级方案正文",
       planSource: {
-        kind: "debate_degraded",
+        kind: "degraded_debate",
+        ref: "debate:session-1",
+        summary: "降级方案正文",
         phase: "debate",
-        capturedAt: "2026-07-07T00:00:00.000Z",
+        boundAt: "2026-07-07T00:00:00.000Z",
         label: "多模型博弈未完成后的降级方案",
       },
     });
 
     expect(next.context.debateSummary).toBe("降级方案正文");
     expect(next.context.planSummary).toBe("降级方案正文");
-    expect(next.context.planSource?.kind).toBe("debate_degraded");
+    expect(next.context.planSource?.kind).toBe("degraded_debate");
+    expect(next.context.planSource?.ref).toBe("debate:session-1");
   });
 
   it("可以把当前启用的 Skill 沉淀到 workflow context", () => {

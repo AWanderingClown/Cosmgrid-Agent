@@ -40,9 +40,11 @@ export function completeCurrentWorkflowNode(args: {
     if (node.phase === "plan") {
       context.planSummary = summary;
       context.planSource = args.planSource ?? {
-        kind: "message_summary",
+        kind: "message",
+        ref: `workflow:${args.snapshot.runId}:${node.id}`,
+        summary,
         phase: "plan",
-        capturedAt: new Date().toISOString(),
+        boundAt: new Date().toISOString(),
       };
     } else if (node.phase === "review") {
       context.reviewSummary = summary;
@@ -50,9 +52,11 @@ export function completeCurrentWorkflowNode(args: {
       context.debateSummary = summary;
       context.planSummary = summary;
       context.planSource = args.planSource ?? {
-        kind: "debate_degraded",
+        kind: "degraded_debate",
+        ref: `workflow:${args.snapshot.runId}:${node.id}`,
+        summary,
         phase: "debate",
-        capturedAt: new Date().toISOString(),
+        boundAt: new Date().toISOString(),
       };
     } else if (node.phase === "verify") {
       context.verificationSummary = summary;

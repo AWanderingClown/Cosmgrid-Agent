@@ -172,7 +172,7 @@ export function deriveWorkflowDiagnostics(args: {
     planSource: planSource
       ? {
           kind: planSource.kind,
-          path: planSource.path ?? null,
+          path: planSource.kind === "file" ? planSource.ref : null,
           label: planSource.label ?? null,
         }
       : null,

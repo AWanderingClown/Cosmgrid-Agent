@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useTheme, type Theme } from "@/lib/theme";
-import { useMemoryEmbeddingSetting, usePureSingleModelModeSetting, useSmartRoutingSetting } from "@/lib/app-settings";
+import { useDeveloperDiagnosticsSetting, useMemoryEmbeddingSetting, usePureSingleModelModeSetting, useSmartRoutingSetting } from "@/lib/app-settings";
 import { apiCredentials, type ApiCredential } from "@/lib/db";
 import { backfillProjectMemoryVectors } from "@/lib/memory/retrieval";
 import { SUPPORTED_LANGUAGES, LANGUAGE_LABELS, type SupportedLanguage } from "@/i18n";
@@ -31,6 +31,7 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
   const { theme, setTheme } = useTheme();
   const [smartRouting, setSmartRouting] = useSmartRoutingSetting();
   const [pureSingleModelMode, setPureSingleModelMode] = usePureSingleModelModeSetting();
+  const [developerDiagnostics, setDeveloperDiagnostics] = useDeveloperDiagnosticsSetting();
   const [memoryEmbedding, setMemoryEmbedding] = useMemoryEmbeddingSetting();
   const [embeddingCredentials, setEmbeddingCredentials] = useState<ApiCredential[]>([]);
   const [syncingMemoryIndex, setSyncingMemoryIndex] = useState(false);
@@ -344,6 +345,28 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
                   className={cn(
                     "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform duration-300",
                     pureSingleModelMode ? "translate-x-6" : "translate-x-1"
+                  )}
+                />
+              </button>
+            </div>
+            <div className="flex items-center justify-between gap-4 p-5 bg-white/5 rounded-2xl border border-white/5">
+              <div className="space-y-1">
+                <div className="text-sm font-bold">{t("settings.developerDiagnostics.toggleTitle")}</div>
+                <p className="text-xs text-muted-foreground max-w-lg leading-relaxed">{t("settings.developerDiagnostics.toggleDesc")}</p>
+              </div>
+              <button
+                role="switch"
+                aria-checked={developerDiagnostics}
+                onClick={() => setDeveloperDiagnostics(!developerDiagnostics)}
+                className={cn(
+                  "relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors duration-300",
+                  developerDiagnostics ? "bg-primary" : "bg-white/15"
+                )}
+              >
+                <span
+                  className={cn(
+                    "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform duration-300",
+                    developerDiagnostics ? "translate-x-6" : "translate-x-1"
                   )}
                 />
               </button>

@@ -92,16 +92,17 @@ describe("workflow execution context", () => {
       snapshot: workflow(),
       summary: "桌面 PLAN 摘要",
       source: {
-        kind: "desktop_file",
+        kind: "file",
+        ref: "/Users/me/Desktop/PLAN.md",
+        summary: "桌面 PLAN 摘要",
         phase: "plan",
-        capturedAt: "2026-07-07T00:00:00.000Z",
-        path: "/Users/me/Desktop/PLAN.md",
+        boundAt: "2026-07-07T00:00:00.000Z",
         label: "用户桌面方案文件",
       },
     });
 
     expect(attached.context.planSummary).toBe("桌面 PLAN 摘要");
-    expect(attached.context.planSource?.kind).toBe("desktop_file");
-    expect(attached.context.planSource?.path).toBe("/Users/me/Desktop/PLAN.md");
+    expect(attached.context.planSource?.kind).toBe("file");
+    expect(attached.context.planSource?.ref).toBe("/Users/me/Desktop/PLAN.md");
   });
 });

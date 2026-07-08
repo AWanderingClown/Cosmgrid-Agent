@@ -1,4 +1,5 @@
-import type { WorkflowSnapshot } from "@/lib/workflow/types";
+import type { IntentRouteAction, SemanticIntentRoute } from "@/lib/workflow/semantic-intent-router";
+import type { TurnIntentDecision, WorkflowSnapshot } from "@/lib/workflow/types";
 import { CORE_SKILLS } from "./registry";
 import type { SelectedSkill, SkillDefinition } from "./types";
 
@@ -29,27 +30,60 @@ function selected(skill: SkillDefinition, reason: string): SelectedSkill {
 export function selectSkillForTurn(args: {
   text: string;
   workflowSnapshot: WorkflowSnapshot | null;
+  intentDecision?: TurnIntentDecision | null;
+  semanticRoute?: SemanticIntentRoute | null;
 }): SelectedSkill | null {
   const phase = currentPhase(args.workflowSnapshot);
   const verification = CORE_SKILLS.find((skill) => skill.id === "verification_closure")!;
   const execution = CORE_SKILLS.find((skill) => skill.id === "plan_execution")!;
   const audit = CORE_SKILLS.find((skill) => skill.id === "project_audit")!;
+  const action = intentAction(args.intentDecision, args.semanticRoute);
 
-  if (phase === "verify" || keywordHit(verification, args.text)) {
-    return selected(verification, phase === "verify" ? "workflow phase verify" : "verification keyword");
+  if (phase === "verify" || action === "verify" || keywordHit(verification, args.text)) {
+    const reason = phase === "verify"
+      ? "workflow phase verify"
+      : action === "verify"
+        ? "intent classifier verify"
+        : "keyword fallback: verification";
+    return selected(verification, reason);
   }
 
   if (
     phase === "execute"
     || args.workflowSnapshot?.intent.executionMode === "execute_directly"
+    || action === "execute"
     || keywordHit(execution, args.text)
   ) {
-    return selected(execution, phase === "execute" ? "workflow phase execute" : "execution keyword or mode");
+    const reason = phase === "execute"
+      ? "workflow phase execute"
+      : action === "execute"
+        ? "intent classifier execute"
+        : "execution mode or keyword fallback";
+    return selected(execution, reason);
   }
 
-  if (phase === "read_project" || keywordHit(audit, args.text)) {
-    return selected(audit, phase === "read_project" ? "workflow phase read_project" : "audit keyword");
+  if (phase === "read_project" || action === "start_run" || action === "plan" || keywordHit(audit, args.text)) {
+    const reason = phase === "read_project"
+      ? "workflow phase read_project"
+      : action
+        ? `intent classifier ${action}`
+        : "keyword fallback: audit";
+    return selected(audit, reason);
   }
 
+  return null;
+}
+
+function intentAction(
+  decision: TurnIntentDecision | null | undefined,
+  semanticRoute: SemanticIntentRoute | null | undefined,
+): IntentRouteAction | null {
+  if (decision?.patch?.verificationRequired || (decision?.action === "continue_run" && /verify/i.test(decision.reason))) return "verify";
+  if (decision?.patch?.executionMode === "execute_directly" || decision?.action === "approve_node") return "execute";
+  if (decision?.action === "start_run") return "start_run";
+  if (decision?.patch?.executionMode === "plan_only") return "plan";
+  if (semanticRoute && !semanticRoute.noMatch && semanticRoute.confidence >= 0.64) {
+    return semanticRoute.top?.action ?? null;
+  }
   return null;
 }
