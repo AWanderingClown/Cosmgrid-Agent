@@ -87,6 +87,11 @@ export type {
 } from "./db/mcp";
 export { memoryKindLabel, projectMemories, projectMemoryVectors } from "./db/memory";
 export { modelCooldowns } from "./db/model-cooldowns";
+export { conversationSummaries } from "./db/conversation-summaries";
+export type {
+  ConversationSummary,
+  CreateConversationSummaryInput,
+} from "./db/conversation-summaries";
 export type {
   CreateProjectMemoryInput,
   MemoryKind,

@@ -594,9 +594,9 @@ export async function initSchemaForDb(db: DatabaseLike): Promise<void> {
   `);
 
   // v0.9.1：上下文压缩的摘要落库（避免每轮重复摘要同一批早期消息）
-  // 会话级（不挂 checkpoints——checkpoints 是项目级，schema.ts:188 project_id NOT NULL，
+  // 会话级（不挂 checkpoints——checkpoints 是项目级，project_id NOT NULL，
   // 会污染项目维度的状态机读数）。conversation_id → conversations(id) ON DELETE CASCADE
-  // 写法照抄 messages 表（line 168）和 workflow_runs 表（line 530）。
+  // 写法照抄 messages 表和 workflow_runs 表的同一约定。
   await db.execute(`
     CREATE TABLE IF NOT EXISTS conversation_summaries (
       id TEXT PRIMARY KEY,
