@@ -93,4 +93,64 @@ describe("withSseChunkTimeout", () => {
     const res = await wrapped("https://x/stream");
     await expect(drain(res)).resolves.toBe("ab");
   });
+
+  it("连续多个 chunk 间隔超时 → 第一个超时即掐断，不再后续", async () => {
+    vi.useRealTimers();
+    const base = vi.fn(async () =>
+      makeSseResponse([
+        { delayMs: 5, data: "a" },
+        { delayMs: 100, data: "b" }, // 第一个超时点
+        { delayMs: 100, data: "c" }, // 不会再到（流已掐）
+        { delayMs: 100, data: "d" },
+      ]),
+    );
+    const wrapped = withSseChunkTimeout(base as unknown as typeof fetch, 50);
+    const res = await wrapped("https://x/stream");
+    await expect(drain(res)).rejects.toThrow(SSE_CHUNK_TIMEOUT_MARKER);
+  });
+
+  it("chunk 间隔刚好在阈值内（边界不触发）→ 正常透传", async () => {
+    vi.useRealTimers();
+    // 50ms 阈值，chunk 间隔 40ms（留 10ms 余量）→ 不应触发
+    const base = vi.fn(async () =>
+      makeSseResponse([
+        { delayMs: 5, data: "a" },
+        { delayMs: 40, data: "b" },
+        { delayMs: 40, data: "c" },
+      ]),
+    );
+    const wrapped = withSseChunkTimeout(base as unknown as typeof fetch, 50);
+    const res = await wrapped("https://x/stream");
+    await expect(drain(res)).resolves.toBe("abc");
+  });
+
+  it("per-chunk 计时独立：每个 chunk 来时计时器都重置，不会累加", async () => {
+    vi.useRealTimers();
+    // 5 个 chunk 每个间隔 30ms，单个不超 50ms 阈值；但如果计时累加就会在第 3 个时累计到 90ms 触发
+    const base = vi.fn(async () =>
+      makeSseResponse([
+        { delayMs: 5, data: "a" },
+        { delayMs: 30, data: "b" },
+        { delayMs: 30, data: "c" },
+        { delayMs: 30, data: "d" },
+        { delayMs: 30, data: "e" },
+      ]),
+    );
+    const wrapped = withSseChunkTimeout(base as unknown as typeof fetch, 50);
+    const res = await wrapped("https://x/stream");
+    await expect(drain(res)).resolves.toBe("abcde");
+  });
+
+  it("自定义短阈值（如 10ms）生效：长一点的 chunk 间隔即触发", async () => {
+    vi.useRealTimers();
+    const base = vi.fn(async () =>
+      makeSseResponse([
+        { delayMs: 5, data: "a" },
+        { delayMs: 50, data: "b" }, // 超过 10ms 阈值
+      ]),
+    );
+    const wrapped = withSseChunkTimeout(base as unknown as typeof fetch, 10);
+    const res = await wrapped("https://x/stream");
+    await expect(drain(res)).rejects.toThrow(SSE_CHUNK_TIMEOUT_MARKER);
+  });
 });
