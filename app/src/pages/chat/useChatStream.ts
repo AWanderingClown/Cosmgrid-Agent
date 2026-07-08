@@ -99,7 +99,7 @@ import { buildDebateParticipants } from "@/pages/chat/debate-participants";
 import { buildDebateTopic, formatDebateResultMessage, isFullDebateResult } from "@/pages/chat/debate-result";
 import { buildMainChatModelChain } from "@/pages/chat/model-chain";
 import { buildOrchestrationReceipt } from "@/pages/chat/orchestration-receipt";
-import { applyPromptCompression } from "@/pages/chat/prompt-compression";
+import { applyPromptCompressionWithSummary } from "@/pages/chat/prompt-compression";
 import { buildChatPromptMessages } from "@/pages/chat/prompt-messages";
 import { decideStreamRetry } from "@/pages/chat/stream-retry";
 import { createStreamingTurnCallbacks, createStreamingTurnState } from "@/pages/chat/streaming-callbacks";
@@ -1021,7 +1021,10 @@ export function useChatStream(opts: UseChatStreamOptions) {
         tooLargeNotice,
         modelLabel: model.displayName ?? model.name,
       });
-      const compressedPrompt = applyPromptCompression({
+      // v0.9.1 摘要式压缩：async + 失败退回抽取式（绝不阻断发送）
+      // 注意：await 必须在 outgoing = compressedPrompt.messages 之前，
+      // 否则 outgoing 会拿到一个未 resolve 的 Promise，后续 convo = outgoing 直接坏掉。
+      const compressedPrompt = await applyPromptCompressionWithSummary({
         enabled: smart,
         messages: outgoing,
         modelName: model.name,
