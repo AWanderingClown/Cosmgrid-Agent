@@ -3,6 +3,7 @@
 // 不用 dvh/dvw——WKWebView(Tauri 内核)下动态视口单位 resize 后不重算，会导致窗口变大露白。
 import { Suspense, lazy, useState, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { AlertTriangle, KeyRound, MessageSquare, LayoutTemplate, Coins, X, Settings, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,9 @@ import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 import { OnboardingModal } from "@/pages/OnboardingModal";
+import { disposeLspSessions } from "@/lib/lsp/lsp-session";
+import { disposeAllMcpSessions } from "@/lib/mcp/client";
+import { migrateLegacyMcpServerSecrets } from "@/lib/mcp/secret-store";
 
 const ChatPage = lazy(() => import("@/pages/ChatPage").then((m) => ({ default: m.ChatPage })));
 const ProvidersPage = lazy(() => import("@/pages/ProvidersPage").then((m) => ({ default: m.ProvidersPage })));
@@ -115,6 +119,20 @@ function App() {
 
   useTheme();
 
+  useEffect(() => {
+    let closing = false;
+    const unlisten = getCurrentWindow().onCloseRequested(async (event) => {
+      if (closing) return;
+      event.preventDefault();
+      closing = true;
+      await Promise.allSettled([disposeLspSessions(), disposeAllMcpSessions()]);
+      await getCurrentWindow().destroy();
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
+
   // 全选：焦点在输入框/可编辑区域内就选中该元素内容；否则优先选聊天记录区域。
   useEffect(() => {
     const unlisten = listen("menu-select-all", () => {
@@ -140,6 +158,7 @@ function App() {
 
   useEffect(() => {
     if (!dbReady) return;
+    void migrateLegacyMcpServerSecrets().catch(() => {});
     void dbCredentials.list().then((c) => {
       setProviderCount(c.length);
       void migrateLegacyApiKeys(c.map((cred) => cred.id)).catch(() => {});

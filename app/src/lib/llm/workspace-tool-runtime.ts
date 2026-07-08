@@ -5,6 +5,7 @@ import { rememberTool } from "./tools/memory-tool";
 import { askUserTool } from "./tools/ask-user-tool";
 import { buildWorkspacePreamble } from "./workspace-context";
 import { registerEnabledMcpTools } from "@/lib/mcp/register-tools";
+import type { McpServerRow } from "@/lib/db/mcp";
 
 export interface WorkspaceToolRuntimeOptions {
   workspacePath?: string | null;
@@ -15,6 +16,8 @@ export interface WorkspaceToolRuntimeOptions {
    *  让工具执行审计能按真实消息分组，而不是靠时间戳窗口猜。 */
   messageId?: string;
   confirm?: (preview: ToolConfirmRequest) => Promise<boolean>;
+  /** 本地 MCP 进程启动前的独立人工授权；不能被 auto 权限档替换为自动同意。 */
+  approveMcpLaunch?: (server: McpServerRow, workspacePath?: string) => Promise<boolean>;
   /** ask_user_question 工具用：结构化追问用户，返回用户选中的 label */
   askUser?: (request: AskUserRequest) => Promise<string>;
   blockedCommands?: string[];
@@ -44,7 +47,9 @@ export async function prepareWorkspaceToolRuntime(
       registry.register(webFetchTool);
       registry.register(askUserTool);
       if (options.conversationId) registry.register(rememberTool);
-      await registerEnabledMcpTools(registry);
+      await registerEnabledMcpTools(registry, {
+        approveLocalLaunch: options.approveMcpLaunch,
+      });
       tools = buildAiSdkTools(registry, {
         workspacePath: "",
         projectId: options.projectId,
@@ -64,7 +69,10 @@ export async function prepareWorkspaceToolRuntime(
 
   try {
     const registry = createDefaultToolRegistry({ includeWrite: options.includeWrite });
-    await registerEnabledMcpTools(registry, options.workspacePath);
+    await registerEnabledMcpTools(registry, {
+      workspacePath: options.workspacePath,
+      approveLocalLaunch: options.approveMcpLaunch,
+    });
     tools = buildAiSdkTools(registry, {
       workspacePath: options.workspacePath,
       projectId: options.projectId,

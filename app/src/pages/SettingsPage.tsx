@@ -13,6 +13,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useTheme, type Theme } from "@/lib/theme";
 import { useDeveloperDiagnosticsSetting, useMemoryEmbeddingSetting, usePureSingleModelModeSetting, useSmartRoutingSetting } from "@/lib/app-settings";
 import { apiCredentials, mcpServers, type ApiCredential, type McpServerRow, type McpTransport } from "@/lib/db";
+import { deleteMcpServerSecrets, saveMcpServerSecrets } from "@/lib/mcp/secret-store";
+import { disposeMcpServerSessions } from "@/lib/mcp/client";
+import { listMcpTools } from "@/lib/mcp/client";
+import { hydrateMcpServerSecrets } from "@/lib/mcp/secret-store";
+import { buildLocalMcpSessionScope, formatLocalMcpLaunch } from "@/lib/mcp/session-scope";
+import { mcpServerApprovals } from "@/lib/db";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { backfillProjectMemoryVectors } from "@/lib/memory/retrieval";
 import { SUPPORTED_LANGUAGES, LANGUAGE_LABELS, type SupportedLanguage } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -28,6 +35,7 @@ export interface SettingsPageProps {
 
 export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
   const { t, i18n } = useTranslation();
+  const { confirm } = useConfirm();
   const { theme, setTheme } = useTheme();
   const [smartRouting, setSmartRouting] = useSmartRoutingSetting();
   const [pureSingleModelMode, setPureSingleModelMode] = usePureSingleModelModeSetting();
@@ -47,6 +55,8 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
     url: "",
     command: "",
     argsJson: "[]",
+    headersJson: "{}",
+    envJson: "{}",
   });
   const [cliUpdateState, setCliUpdateState] = useState<
     Record<string, { checking: boolean; message: string | null }>
@@ -111,25 +121,49 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
   async function handleAddMcpServer() {
     setMcpMessage(null);
     let args: string[];
+    let headers: Record<string, string>;
+    let env: Record<string, string>;
     try {
       const parsed = JSON.parse(mcpForm.argsJson || "[]");
       if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) {
         throw new Error("args must be a string array");
       }
       args = parsed;
+      const parseStringRecord = (raw: string) => {
+        const value = JSON.parse(raw || "{}");
+        if (!value || typeof value !== "object" || Array.isArray(value)
+          || Object.values(value).some((item) => typeof item !== "string")) {
+          throw new Error("record values must be strings");
+        }
+        return value as Record<string, string>;
+      };
+      headers = parseStringRecord(mcpForm.headersJson);
+      env = parseStringRecord(mcpForm.envJson);
     } catch {
       setMcpMessage(t("settings.mcp.invalidArgs"));
       return;
     }
     try {
-      await mcpServers.create({
+      const created = await mcpServers.create({
         name: mcpForm.name,
         transport: mcpForm.transport,
         url: mcpForm.transport === "remote_http" ? mcpForm.url : null,
         command: mcpForm.transport === "local_stdio" ? mcpForm.command : null,
         args,
+        enabled: mcpForm.transport === "remote_http",
       });
-      setMcpForm({ name: "", transport: "remote_http", url: "", command: "", argsJson: "[]" });
+      if (Object.keys(headers).length > 0 || Object.keys(env).length > 0) {
+        await saveMcpServerSecrets(created.id, { headers, env });
+      }
+      setMcpForm({
+        name: "",
+        transport: "remote_http",
+        url: "",
+        command: "",
+        argsJson: "[]",
+        headersJson: "{}",
+        envJson: "{}",
+      });
       setMcpMessage(t("settings.mcp.saved"));
       await reloadMcpServers();
     } catch (err) {
@@ -138,13 +172,49 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
   }
 
   async function handleToggleMcpServer(server: McpServerRow) {
+    if (server.enabled) {
+      await disposeMcpServerSessions(server.id);
+    }
     await mcpServers.setEnabled(server.id, !server.enabled);
     await reloadMcpServers();
   }
 
   async function handleDeleteMcpServer(server: McpServerRow) {
+    await disposeMcpServerSessions(server.id);
+    await deleteMcpServerSecrets(server);
     await mcpServers.delete(server.id);
     await reloadMcpServers();
+  }
+
+  async function handleTestMcpServer(storedServer: McpServerRow) {
+    setMcpMessage(null);
+    try {
+      const server = await hydrateMcpServerSecrets(storedServer);
+      if (server.transport === "local_stdio") {
+        const scope = buildLocalMcpSessionScope(server);
+        const approval = {
+          serverId: server.id,
+          workspacePath: "",
+          configFingerprint: scope.configFingerprint,
+        };
+        if (!(await mcpServerApprovals.isApproved(approval))) {
+          const approved = await confirm({
+            title: t("settings.mcp.launchConfirmTitle"),
+            description: formatLocalMcpLaunch(server),
+            confirmText: t("settings.mcp.launchConfirm"),
+            destructive: true,
+          });
+          if (!approved) return;
+          await mcpServerApprovals.approve(approval);
+        }
+      }
+      const tools = await listMcpTools(server);
+      setMcpMessage(t("settings.mcp.testSuccess", { count: tools.length }));
+    } catch (error) {
+      setMcpMessage(t("settings.mcp.testFailed", {
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
   }
 
   async function handleSyncMemoryIndex() {
@@ -490,7 +560,7 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
             </div>
             <div className="space-y-4">
               <p className="text-xs text-muted-foreground leading-relaxed">{t("settings.mcp.desc")}</p>
-              <div className="grid gap-3 lg:grid-cols-[1fr_180px_1fr_1fr_auto] p-5 bg-white/5 rounded-2xl border border-white/5">
+              <div className="grid gap-3 lg:grid-cols-2 p-5 bg-white/5 rounded-2xl border border-white/5">
                 <div className="space-y-2">
                   <Label className="text-xs font-bold opacity-60">{t("settings.mcp.name")}</Label>
                   <Input
@@ -542,6 +612,24 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
                     className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm dark:text-white font-mono"
                   />
                 </div>
+                <div className="space-y-2">
+                  <Label className="text-xs font-bold opacity-60">{t("settings.mcp.headers")}</Label>
+                  <Input
+                    value={mcpForm.headersJson}
+                    onChange={(event) => setMcpForm((prev) => ({ ...prev, headersJson: event.target.value }))}
+                    placeholder='{"Authorization":"Bearer ..."}'
+                    className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm dark:text-white font-mono"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs font-bold opacity-60">{t("settings.mcp.env")}</Label>
+                  <Input
+                    value={mcpForm.envJson}
+                    onChange={(event) => setMcpForm((prev) => ({ ...prev, envJson: event.target.value }))}
+                    placeholder='{"TOKEN":"..."}'
+                    className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm dark:text-white font-mono"
+                  />
+                </div>
                 <div className="flex items-end">
                   <Button
                     type="button"
@@ -575,6 +663,15 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
                         </p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void handleTestMcpServer(server)}
+                          className="rounded-xl px-3"
+                        >
+                          {t("settings.mcp.test")}
+                        </Button>
                         <button
                           role="switch"
                           aria-checked={server.enabled}

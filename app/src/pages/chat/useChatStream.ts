@@ -77,6 +77,7 @@ import { buildWorkflowContextPreamble, readDesktopPlanForExecution } from "@/lib
 import { evaluateHarness, isClean, detectIntentNoToolCall } from "@/lib/llm/harness/feedback";
 import { runChain as runChainImpl } from "@/lib/llm/chain-runner";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
+import { formatLocalMcpLaunch } from "@/lib/mcp/session-scope";
 import {
   retrieveCrossProjectMemoriesForPrompt,
   retrieveProjectMemoriesForPrompt,
@@ -905,6 +906,10 @@ export function useChatStream(opts: UseChatStreamOptions) {
             // 把编排模式下其他节点的工具调用张冠李戴到这条消息上。
             messageId: assistantId,
             confirm: effectivePermissionMode === "auto" ? async () => true : requestConfirm,
+            approveMcpLaunch: (server, workspacePath) => requestConfirm({
+              toolName: `mcp-server:${server.name}`,
+              summary: `允许启动本地 MCP server？\n${formatLocalMcpLaunch(server, workspacePath)}`,
+            }),
             askUser: requestAskUser,
             includePreamble: true,
             desktopPath: includeWriteTools ? desktopPath : null,
@@ -922,6 +927,10 @@ export function useChatStream(opts: UseChatStreamOptions) {
           conversationId: convId ?? undefined,
           messageId: assistantId,
           confirm: effectivePermissionMode === "auto" ? async () => true : requestConfirm,
+          approveMcpLaunch: (server, workspacePath) => requestConfirm({
+            toolName: `mcp-server:${server.name}`,
+            summary: `允许启动本地 MCP server？\n${formatLocalMcpLaunch(server, workspacePath)}`,
+          }),
           askUser: requestAskUser,
         });
         if (stopIfAborted()) return;

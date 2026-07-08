@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useTranslation } from "react-i18next";
+import { formatLocalMcpLaunch } from "@/lib/mcp/session-scope";
 import { cn } from "@/lib/utils";
 import {
   projects as dbProjects,
@@ -239,6 +240,10 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
           projectId: stage.projectId,
           conversationId,
           confirm: requestConfirm,
+          approveMcpLaunch: (server, workspacePath) => requestConfirm({
+            toolName: `mcp-server:${server.name}`,
+            summary: `允许启动本地 MCP server？\n${formatLocalMcpLaunch(server, workspacePath)}`,
+          }),
           blockedCommands,
           includePreamble: true,
         });
