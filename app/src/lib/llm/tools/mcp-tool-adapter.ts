@@ -64,10 +64,14 @@ export function buildMcpToolDefinitions(args: {
   callTool: (toolName: string, input: unknown) => Promise<McpToolCallResult>;
 }): AnyToolDefinition[] {
   const serverPart = sanitizeToolPart(args.serverId);
+  const usedNames = new Map<string, number>();
   return args.tools.map((tool): AnyToolDefinition => {
     const toolPart = sanitizeToolPart(tool.name);
+    const baseName = `mcp__${serverPart || "server"}__${toolPart || "tool"}`;
+    const occurrence = (usedNames.get(baseName) ?? 0) + 1;
+    usedNames.set(baseName, occurrence);
     return {
-      name: `mcp__${serverPart}__${toolPart}`,
+      name: occurrence === 1 ? baseName : `${baseName}_${occurrence}`,
       description: tool.description || `MCP tool ${tool.name} from ${args.serverId}`,
       parameters: jsonSchemaToZod(tool.inputSchema),
       readOnly: false,
