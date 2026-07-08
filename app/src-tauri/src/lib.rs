@@ -60,6 +60,38 @@ fn kill_pid(pid: u32) -> std::io::Result<()> {
     Ok(())
 }
 
+/// RPC server may spawn descendants (notably npx -> node). Kill the process tree,
+/// otherwise removing the parent handle leaves the actual MCP/LSP server alive.
+fn kill_process_tree(pid: u32) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::process::Command::new("kill")
+            .args(["-9", "--", &format!("-{pid}")])
+            .status()?;
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .status()?;
+    }
+    Ok(())
+}
+
+fn rpc_base_env<I>(vars: I) -> HashMap<String, String>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    const ALLOWED: &[&str] = &[
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",
+        "TMPDIR", "TMP", "TEMP", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+        "SystemRoot", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PATHEXT", "COMSPEC",
+    ];
+    vars.into_iter()
+        .filter(|(key, _)| ALLOWED.iter().any(|allowed| key.eq_ignore_ascii_case(allowed)))
+        .collect()
+}
+
 /// CliStreamEvent::Error 的 kind 字段（1.4 修复）：
 /// - spawn_failed：spawn 阶段失败（CLI 程序不存在 / 没装 / PATH 找不到），用户必须先装才能用
 /// - execution_failed：CLI 跑起来后失败（进程退出码非 0 / stderr 报错），可尝试 fallback
@@ -464,6 +496,42 @@ fn parse_content_length(header: &[u8]) -> Option<usize> {
     })
 }
 
+#[cfg(test)]
+mod rpc_framing_tests {
+    use super::{find_header_end, parse_content_length, rpc_base_env};
+
+    #[test]
+    fn parses_case_insensitive_content_length() {
+        assert_eq!(parse_content_length(b"content-length: 27\r\nContent-Type: application/json"), Some(27));
+    }
+
+    #[test]
+    fn rejects_missing_or_invalid_content_length() {
+        assert_eq!(parse_content_length(b"Content-Type: application/json"), None);
+        assert_eq!(parse_content_length(b"Content-Length: nope"), None);
+    }
+
+    #[test]
+    fn finds_only_complete_lsp_header_separator() {
+        assert_eq!(find_header_end(b"Content-Length: 2\r\n\r\n{}"), Some(17));
+        assert_eq!(find_header_end(b"Content-Length: 2\r\n"), None);
+    }
+
+    #[test]
+    fn rpc_environment_does_not_inherit_unrelated_secrets() {
+        let env = rpc_base_env([
+            ("PATH".to_string(), "/bin".to_string()),
+            ("HOME".to_string(), "/home/test".to_string()),
+            ("OPENAI_API_KEY".to_string(), "secret".to_string()),
+            ("AWS_SECRET_ACCESS_KEY".to_string(), "secret".to_string()),
+        ]);
+        assert_eq!(env.get("PATH").map(String::as_str), Some("/bin"));
+        assert_eq!(env.get("HOME").map(String::as_str), Some("/home/test"));
+        assert!(!env.contains_key("OPENAI_API_KEY"));
+        assert!(!env.contains_key("AWS_SECRET_ACCESS_KEY"));
+    }
+}
+
 async fn read_rpc_content_length_stdout(
     app: tauri::AppHandle,
     session_id: String,
@@ -564,7 +632,7 @@ async fn spawn_rpc_process(
         }
     }
 
-    let mut env: HashMap<String, String> = std::env::vars().collect();
+    let mut env = rpc_base_env(std::env::vars());
     for (k, v) in extra_env {
         env.insert(k, v);
     }
@@ -586,6 +654,8 @@ async fn spawn_rpc_process(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
     if let Some(cwd) = working_directory.filter(|p| !p.trim().is_empty()) {
         command.current_dir(cwd);
     }
@@ -613,7 +683,7 @@ async fn spawn_rpc_process(
         }
         other => {
             children.0.lock().map_err(|e| e.to_string())?.remove(&session_id);
-            let _ = kill_pid(pid);
+            let _ = kill_process_tree(pid);
             return Err(format!("unsupported RPC framing: {other}"));
         }
     }
@@ -660,7 +730,7 @@ fn kill_rpc_process(children: State<'_, RpcChildren>, session_id: String) -> Res
         .remove(&session_id);
     match child {
         Some(child) => {
-            kill_pid(child.pid).map_err(|e| e.to_string())?;
+            kill_process_tree(child.pid).map_err(|e| e.to_string())?;
             Ok(true)
         }
         None => Ok(false),
