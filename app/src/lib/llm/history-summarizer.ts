@@ -20,8 +20,11 @@ import type { LanguageModel } from "./provider-factory";
 import { resolveMaxOutputTokens } from "./model-limits";
 import type { ChatMsg } from "./context-compressor";
 
+/** 单条消息硬截断阈值——避免 dropped 多条长消息堆爆 prompt */
+const MAX_DROPPED_MESSAGE_CHARS = 2000;
+
 const historySummarySchema = z.object({
-  summary: z.string().describe("这段对话历史的一句话概览（≤80 字）"),
+  summary: z.string().max(160).describe("这段对话历史的一句话概览（≤80 字 / ≤160 字符）"),
   keyDecisions: z
     .array(z.string())
     .describe("用户在对话里做出的关键决策 / 约束 / 选择（最重要、最该被后续轮记住的内容）"),
@@ -52,7 +55,10 @@ export async function summarizeDroppedHistory(
     .map((m) => {
       const content = typeof m.content === "string" ? m.content : "[多模态内容]";
       // 截断单条消息，避免 prompt 过长——dropped 通常是早期对话，单条不会太长
-      const truncated = content.length > 2000 ? `${content.slice(0, 2000)}…` : content;
+      const truncated =
+        content.length > MAX_DROPPED_MESSAGE_CHARS
+          ? `${content.slice(0, MAX_DROPPED_MESSAGE_CHARS)}…`
+          : content;
       return `[${m.role}] ${truncated}`;
     })
     .join("\n\n");

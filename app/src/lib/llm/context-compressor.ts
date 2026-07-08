@@ -13,6 +13,7 @@
 // 两者共用 `splitByBudget` 定位 kept/dropped，避免预算逻辑漂移。
 
 import type { UserContentPart } from "./attachments";
+import { DEFAULT_COMPRESSION_BUDGET } from "./model-limits";
 
 export interface ChatMsg {
   role: "user" | "assistant" | "system";
@@ -51,6 +52,30 @@ export interface CompressOptions {
   minRecent?: number;
   /** 省略提示文案构造（i18n 由调用方注入），默认中性英文 */
   noticeText?: (dropped: number) => string;
+}
+
+/** 模块级默认提示文案——和 splitByBudget 共享给两套压缩路径用 */
+const DEFAULT_NOTICE_TEXT = (n: number): string => `[${n} earlier messages omitted to save tokens]`;
+
+/**
+ * 把 systemMsgs + notice + kept 拼成最终输出，统一给两套压缩路径用。
+ */
+function buildCompressedOutput(
+  systemMsgs: ChatMsg[],
+  kept: ChatMsg[],
+  noticeContent: string,
+  beforeTokens: number,
+  droppedCount: number,
+): CompressResult {
+  const notice: ChatMsg = { role: "system", content: noticeContent };
+  const messages = [...systemMsgs, notice, ...kept];
+  return {
+    messages,
+    compressed: true,
+    droppedCount,
+    beforeTokens,
+    afterTokens: estimateMessagesTokens(messages),
+  };
 }
 
 /**
@@ -98,9 +123,9 @@ function splitByBudget(
  * system 消息全保留；其余从最新往回收，直到超预算或只剩 minRecent。
  */
 export function compressHistory(messages: ChatMsg[], opts: CompressOptions = {}): CompressResult {
-  const maxTokens = opts.maxTokens ?? 12000;
+  const maxTokens = opts.maxTokens ?? DEFAULT_COMPRESSION_BUDGET;
   const minRecent = opts.minRecent ?? 4;
-  const noticeText = opts.noticeText ?? ((n: number) => `[${n} earlier messages omitted to save tokens]`);
+  const noticeText = opts.noticeText ?? DEFAULT_NOTICE_TEXT;
   const beforeTokens = estimateMessagesTokens(messages);
 
   const { systemMsgs, kept, dropped, compressed } = splitByBudget(messages, maxTokens, minRecent);
@@ -109,15 +134,7 @@ export function compressHistory(messages: ChatMsg[], opts: CompressOptions = {})
     return { messages: [...messages], compressed: false, droppedCount: 0, beforeTokens, afterTokens: beforeTokens };
   }
 
-  const notice: ChatMsg = { role: "system", content: noticeText(dropped.length) };
-  const outputMessages = [...systemMsgs, notice, ...kept];
-  return {
-    messages: outputMessages,
-    compressed: true,
-    droppedCount: dropped.length,
-    beforeTokens,
-    afterTokens: estimateMessagesTokens(outputMessages),
-  };
+  return buildCompressedOutput(systemMsgs, kept, noticeText(dropped.length), beforeTokens, dropped.length);
 }
 
 /**
@@ -135,9 +152,9 @@ export async function compressHistoryWithSummary(
     summarize?: (dropped: ChatMsg[]) => Promise<string | null>;
   } = {},
 ): Promise<CompressResult> {
-  const maxTokens = opts.maxTokens ?? 12000;
+  const maxTokens = opts.maxTokens ?? DEFAULT_COMPRESSION_BUDGET;
   const minRecent = opts.minRecent ?? 4;
-  const noticeText = opts.noticeText ?? ((n: number) => `[${n} earlier messages omitted to save tokens]`);
+  const noticeText = opts.noticeText ?? DEFAULT_NOTICE_TEXT;
   const beforeTokens = estimateMessagesTokens(messages);
 
   const { systemMsgs, kept, dropped, compressed } = splitByBudget(messages, maxTokens, minRecent);
@@ -162,13 +179,5 @@ export async function compressHistoryWithSummary(
       ? `[Earlier conversation summary (${dropped.length} messages compressed)]\n${summaryText}`
       : noticeText(dropped.length);
 
-  const notice: ChatMsg = { role: "system", content: noticeContent };
-  const outputMessages = [...systemMsgs, notice, ...kept];
-  return {
-    messages: outputMessages,
-    compressed: true,
-    droppedCount: dropped.length,
-    beforeTokens,
-    afterTokens: estimateMessagesTokens(outputMessages),
-  };
+  return buildCompressedOutput(systemMsgs, kept, noticeContent, beforeTokens, dropped.length);
 }
