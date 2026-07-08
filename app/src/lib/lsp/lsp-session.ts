@@ -9,6 +9,7 @@ import {
   positionToLsp,
 } from "./protocol";
 import { detectLspServer, languageIdForPath, type LspServerConfig } from "./server-detection";
+import { planDocumentSync, type OpenDocumentState } from "./document-sync";
 
 type DiagnosticsMap = Map<string, LspDiagnostic[]>;
 
@@ -16,7 +17,7 @@ interface SessionEntry {
   client: JsonRpcClient;
   transport: TauriRpcTransport;
   diagnostics: DiagnosticsMap;
-  openedUris: Set<string>;
+  openDocuments: Map<string, OpenDocumentState>;
   server: LspServerConfig;
 }
 
@@ -57,6 +58,16 @@ async function createSession(workspacePath: string, server: LspServerConfig): Pr
   const client = new JsonRpcClient(transport, { timeoutMs: 20_000 });
   const diagnostics: DiagnosticsMap = new Map();
 
+  client.onRequest("workspace/configuration", (params) => {
+    const items = (params as { items?: unknown[] } | undefined)?.items;
+    return Array.isArray(items) ? items.map(() => null) : [];
+  });
+  client.onRequest("client/registerCapability", () => null);
+  client.onRequest("client/unregisterCapability", () => null);
+  client.onRequest("workspace/workspaceFolders", () => [
+    { uri: filePathToUri(workspacePath), name: workspacePath.split("/").pop() ?? "workspace" },
+  ]);
+
   client.onNotification((method, params) => {
     if (method !== "textDocument/publishDiagnostics" || !params || typeof params !== "object") return;
     const payload = params as { uri?: unknown; diagnostics?: unknown };
@@ -70,7 +81,8 @@ async function createSession(workspacePath: string, server: LspServerConfig): Pr
     rootUri: filePathToUri(workspacePath),
     capabilities: {
       textDocument: {
-        synchronization: { didOpen: true, didChange: false },
+        synchronization: { didOpen: true, didChange: true },
+        publishDiagnostics: { relatedInformation: true },
         hover: { contentFormat: ["markdown", "plaintext"] },
         definition: { linkSupport: true },
       },
@@ -79,7 +91,7 @@ async function createSession(workspacePath: string, server: LspServerConfig): Pr
   });
   await client.notify("initialized", {});
 
-  return { client, transport, diagnostics, openedUris: new Set(), server };
+  return { client, transport, diagnostics, openDocuments: new Map(), server };
 }
 
 async function getSession(workspacePath: string, filePath: string): Promise<SessionEntry | null> {
@@ -97,24 +109,38 @@ async function getSession(workspacePath: string, filePath: string): Promise<Sess
   return promise;
 }
 
-async function openFile(entry: SessionEntry, filePath: string): Promise<string> {
+async function syncFile(entry: SessionEntry, filePath: string): Promise<{ uri: string; changed: boolean }> {
   const uri = filePathToUri(filePath);
-  if (entry.openedUris.has(uri)) return uri;
   const languageId = languageIdForPath(filePath) ?? entry.server.languageId;
   const content = await getFsAdapter().readTextFile(filePath);
-  await entry.client.notify("textDocument/didOpen", buildDidOpenParams({ path: filePath, languageId, content }));
-  entry.openedUris.add(uri);
-  return uri;
+  const plan = planDocumentSync(entry.openDocuments.get(uri), content);
+  if (plan.kind === "open") {
+    entry.diagnostics.delete(uri);
+    await entry.client.notify("textDocument/didOpen", buildDidOpenParams({
+      path: filePath,
+      languageId,
+      content,
+      version: plan.state.version,
+    }));
+  } else if (plan.kind === "change") {
+    entry.diagnostics.delete(uri);
+    await entry.client.notify("textDocument/didChange", {
+      textDocument: { uri, version: plan.state.version },
+      contentChanges: [{ text: content }],
+    });
+  }
+  entry.openDocuments.set(uri, plan.state);
+  return { uri, changed: plan.kind !== "unchanged" };
 }
 
-async function waitForDiagnostics(entry: SessionEntry, uri: string): Promise<LspDiagnostic[]> {
+async function waitForDiagnostics(entry: SessionEntry, uri: string): Promise<LspDiagnostic[] | null> {
   const started = Date.now();
   while (Date.now() - started < 1_500) {
     const diagnostics = entry.diagnostics.get(uri);
     if (diagnostics) return diagnostics;
     await new Promise((resolve) => setTimeout(resolve, 75));
   }
-  return entry.diagnostics.get(uri) ?? [];
+  return entry.diagnostics.get(uri) ?? null;
 }
 
 export async function getLspDiagnostics(workspacePath: string, filePath: string): Promise<string> {
@@ -122,8 +148,11 @@ export async function getLspDiagnostics(workspacePath: string, filePath: string)
   if (!entry) {
     return "未找到可用的 TypeScript LSP。请在项目里安装 typescript-language-server，或把它加入 PATH。";
   }
-  const uri = await openFile(entry, filePath);
+  const { uri } = await syncFile(entry, filePath);
   const diagnostics = await waitForDiagnostics(entry, uri);
+  if (!diagnostics) {
+    return `LSP diagnostics 超时：${filePath} 尚未返回诊断，不能据此判断代码无错误。`;
+  }
   return formatLspDiagnostics(filePath, diagnostics);
 }
 
@@ -142,7 +171,7 @@ export async function getLspDefinition(
 ): Promise<string> {
   const entry = await getSession(workspacePath, filePath);
   if (!entry) return "未找到可用的 TypeScript LSP，无法跳转定义。";
-  const uri = await openFile(entry, filePath);
+  const { uri } = await syncFile(entry, filePath);
   const result = await entry.client.call("textDocument/definition", {
     textDocument: { uri },
     position: positionToLsp({ line, character }),
@@ -169,7 +198,7 @@ export async function getLspHover(
 ): Promise<string> {
   const entry = await getSession(workspacePath, filePath);
   if (!entry) return "未找到可用的 TypeScript LSP，无法查看悬停信息。";
-  const uri = await openFile(entry, filePath);
+  const { uri } = await syncFile(entry, filePath);
   const result = await entry.client.call<LspHover | null>("textDocument/hover", {
     textDocument: { uri },
     position: positionToLsp({ line, character }),
@@ -183,7 +212,14 @@ export async function disposeLspSessions(): Promise<void> {
   sessions.clear();
   await Promise.all(entries.map((entry) => {
     if (entry.status !== "fulfilled") return Promise.resolve();
-    entry.value.client.dispose();
-    return entry.value.transport.dispose();
+    return (async () => {
+      await Promise.race([
+        entry.value.client.call("shutdown").catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, 1_000)),
+      ]);
+      await entry.value.client.notify("exit").catch(() => undefined);
+      entry.value.client.dispose();
+      await entry.value.transport.dispose();
+    })();
   }));
 }

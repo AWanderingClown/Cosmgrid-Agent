@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildDidOpenParams, formatLspDiagnostics, positionToLsp } from "../protocol";
+import {
+  buildDidOpenParams,
+  filePathToUri,
+  formatLspDiagnostics,
+  positionToLsp,
+  uriToFilePath,
+} from "../protocol";
 
 describe("lsp protocol helpers", () => {
   it("converts 1-based editor positions to 0-based LSP positions", () => {
@@ -36,5 +42,34 @@ describe("lsp protocol helpers", () => {
     expect(output).toContain("3:5");
     expect(output).toContain("error");
     expect(output).toContain("Type 'string'");
+  });
+
+  it("converts file URIs including spaces and preserves non-file URIs", () => {
+    expect(filePathToUri("repo/a b.ts")).toBe("file:///repo/a%20b.ts");
+    expect(uriToFilePath("file:///repo/a%20b.ts")).toBe("/repo/a b.ts");
+    expect(uriToFilePath("https://example.test/a.ts")).toBe("https://example.test/a.ts");
+  });
+
+  it("formats empty diagnostics and all severity labels", () => {
+    expect(formatLspDiagnostics("/repo/a.ts", [])).toContain("has no diagnostics");
+    const diagnostics = [2, 3, 4, undefined].map((severity, index) => ({
+      range: { start: { line: index, character: 0 }, end: { line: index, character: 1 } },
+      severity,
+      message: `message-${index}`,
+    }));
+    const output = formatLspDiagnostics("/repo/a.ts", diagnostics);
+    expect(output).toContain("warning");
+    expect(output).toContain("info");
+    expect(output).toContain("hint");
+    expect(output).toContain("diagnostic");
+  });
+
+  it("honors an explicit document version", () => {
+    expect(buildDidOpenParams({
+      path: "/repo/a.ts",
+      languageId: "typescript",
+      content: "",
+      version: 7,
+    }).textDocument.version).toBe(7);
   });
 });
