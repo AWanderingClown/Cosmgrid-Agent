@@ -34,4 +34,8 @@ keyring = "4.1.2"
 tokio = { version = "1", features = ["time", "sync", "process", "io-util"] }
 # 2026-07-05 新增：web_fetch 工具改走后端发请求（不经过 webview 的 fetch），绕开 CORS——
 # 见 fetch_url_backend 注释。
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "gzip"] }
+# 2026-07-08 新增 "system-proxy"：default-features=false 关掉了 reqwest 默认带的 system-proxy，
+# 导致 Tier 1 只认 HTTP_PROXY/HTTPS_PROXY 环境变量，读不到 macOS「系统设置→网络→代理」面板
+# 里的代理（Clash/Surge 系统代理模式往那写）。GUI 进程又不继承 shell 里 export 的代理变量，
+# 结果 fetch_url_backend 裸连被墙、等满超时。加回这个特性后 reqwest 会读系统代理配置。
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "gzip", "system-proxy"] }
