@@ -62,12 +62,14 @@ export class TauriRpcTransport implements JsonRpcTransport {
       }
     });
     await invoke("spawn_rpc_process", {
-      sessionId: this.options.sessionId,
-      program: this.options.program,
-      args: this.options.args ?? [],
-      extraEnv: this.options.env ?? {},
-      workingDirectory: this.options.cwd ?? null,
-      framing: this.options.framing,
+      params: {
+        sessionId: this.options.sessionId,
+        program: this.options.program,
+        args: this.options.args ?? [],
+        extraEnv: this.options.env ?? {},
+        workingDirectory: this.options.cwd ?? null,
+        framing: this.options.framing,
+      },
     });
   }
 

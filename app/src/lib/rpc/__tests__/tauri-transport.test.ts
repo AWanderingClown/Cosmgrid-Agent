@@ -41,11 +41,13 @@ describe("TauriRpcTransport", () => {
     instance.onMessage(onMessage);
     await instance.start();
 
-    expect(mocks.invoke).toHaveBeenCalledWith("spawn_rpc_process", expect.objectContaining({
-      sessionId: "session-1",
-      program: "node",
-      framing: "newline",
-    }));
+    expect(mocks.invoke).toHaveBeenCalledWith("spawn_rpc_process", {
+      params: expect.objectContaining({
+        sessionId: "session-1",
+        program: "node",
+        framing: "newline",
+      }),
+    });
     mocks.eventHandler?.({ payload: { type: "message", sessionId: "other", message: "{}" } });
     mocks.eventHandler?.({ payload: { type: "message", sessionId: "session-1", message: '{"ok":true}' } });
     expect(onMessage).toHaveBeenCalledWith({ ok: true });

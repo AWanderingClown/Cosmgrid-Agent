@@ -222,11 +222,13 @@ export async function streamViaCli(
     });
 
     invoke("spawn_cli_stream", {
-      sessionId,
-      program,
-      args,
-      extraEnv: {},
-      workingDirectory: endpoint.workingDirectory ?? null,
+      params: {
+        sessionId,
+        program,
+        args,
+        extraEnv: {},
+        workingDirectory: endpoint.workingDirectory ?? null,
+      },
       onEvent: channel,
     }).catch((err: unknown) => {
       if (settled) return;

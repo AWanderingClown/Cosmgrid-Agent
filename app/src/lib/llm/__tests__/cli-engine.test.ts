@@ -46,9 +46,9 @@ const endpoint = { providerType: "claude-cli" as const, modelName: "claude-sonne
 function captureSpawnChannel(): FakeChannel<unknown> {
   const spawnCall = invokeMock.mock.calls.find((c) => c[0] === "spawn_cli_stream");
   if (!spawnCall) throw new Error("spawn_cli_stream 未被 invoke");
-  const params = spawnCall[1] as { onEvent?: FakeChannel<unknown> } | undefined;
-  if (!params?.onEvent) throw new Error("onEvent channel 未传");
-  return params.onEvent;
+  const call = spawnCall[1] as { onEvent?: FakeChannel<unknown> } | undefined;
+  if (!call?.onEvent) throw new Error("onEvent channel 未传");
+  return call.onEvent;
 }
 
 describe("streamViaCli 正常流式", () => {
@@ -349,8 +349,8 @@ describe("CLI 程序路径选择", () => {
 
     const spawnCall = invokeMock.mock.calls.find((c) => c[0] === "spawn_cli_stream");
     expect(spawnCall).toBeDefined();
-    const params = spawnCall?.[1] as { program?: string } | undefined;
-    expect(params?.program).toBe(CLI_DEFAULT_PROGRAM["claude-cli"]);
+    const call = spawnCall?.[1] as { params?: { program?: string } } | undefined;
+    expect(call?.params?.program).toBe(CLI_DEFAULT_PROGRAM["claude-cli"]);
 
     const ch = captureSpawnChannel();
     ch.send({ type: "terminated", code: 0 });
@@ -366,8 +366,8 @@ describe("CLI 程序路径选择", () => {
     await Promise.resolve();
 
     const spawnCall = invokeMock.mock.calls.find((c) => c[0] === "spawn_cli_stream");
-    const params = spawnCall?.[1] as { program?: string } | undefined;
-    expect(params?.program).toBe("/opt/homebrew/bin/claude");
+    const call = spawnCall?.[1] as { params?: { program?: string } } | undefined;
+    expect(call?.params?.program).toBe("/opt/homebrew/bin/claude");
 
     const ch = captureSpawnChannel();
     ch.send({ type: "terminated", code: 0 });
@@ -383,8 +383,8 @@ describe("CLI 程序路径选择", () => {
     await Promise.resolve();
 
     const spawnCall = invokeMock.mock.calls.find((c) => c[0] === "spawn_cli_stream");
-    const params = spawnCall?.[1] as { workingDirectory?: string | null } | undefined;
-    expect(params?.workingDirectory).toBe("/Users/me/project-a");
+    const call = spawnCall?.[1] as { params?: { workingDirectory?: string | null } } | undefined;
+    expect(call?.params?.workingDirectory).toBe("/Users/me/project-a");
 
     const ch = captureSpawnChannel();
     ch.send({ type: "terminated", code: 0 });
@@ -400,8 +400,8 @@ describe("CLI 程序路径选择", () => {
     await Promise.resolve();
 
     const spawnCall = invokeMock.mock.calls.find((c) => c[0] === "spawn_cli_stream");
-    const params = spawnCall?.[1] as { program?: string } | undefined;
-    expect(params?.program).toBe(CLI_DEFAULT_PROGRAM["claude-cli"]);
+    const call = spawnCall?.[1] as { params?: { program?: string } } | undefined;
+    expect(call?.params?.program).toBe(CLI_DEFAULT_PROGRAM["claude-cli"]);
 
     const ch = captureSpawnChannel();
     ch.send({ type: "terminated", code: 0 });
@@ -418,9 +418,9 @@ describe("CLI 程序路径选择", () => {
     await Promise.resolve();
 
     const spawnCall = invokeMock.mock.calls.find((c) => c[0] === "spawn_cli_stream");
-    const params = spawnCall?.[1] as { args?: string[] } | undefined;
-    expect(params?.args).toContain("--resume");
-    expect(params?.args).toContain("sess-1");
+    const call = spawnCall?.[1] as { params?: { args?: string[] } } | undefined;
+    expect(call?.params?.args).toContain("--resume");
+    expect(call?.params?.args).toContain("sess-1");
 
     const ch = captureSpawnChannel();
     ch.send({ type: "terminated", code: 0 });
