@@ -1,0 +1,246 @@
+// chat-fallback 的单模型单次调用逻辑（CLI/API 双路径），从 chat-fallback.ts 的
+// streamWithFallback 内部嵌套函数 runAttempt 拆出（2026-07-09）。这是原文件里最大、
+// 也最自成一体的一块——它只负责"对着一个 ModelEndpoint 跑一次"，完全不碰外层 fallback
+// 循环的聚合状态（models 数组遍历、usedIndex、aggregateUsage 等），提出来对行为零影响，
+// 只是把闭包捕获的 callbacks/options 改成显式参数。
+
+import { streamText, stepCountIs, type ModelMessage } from "ai";
+import { cliSessions } from "../db";
+import { getLanguageModel } from "./provider-factory";
+import { classifyLlmError } from "./error-classifier";
+import { isCliProviderType, type CliMessage } from "./cli-protocol";
+import { streamViaCli } from "./cli-engine";
+import { detectDoomLoop, type StepToolCall } from "./harness/doom-loop";
+import { resolveMaxOutputTokens } from "./model-limits";
+import { isNormalFinishReason, isRecoverableTruncation } from "./finish-reason";
+import type { ChatMsg } from "./context-compressor";
+import type { ModelEndpoint, StreamCallbacks, StreamUsage, StreamWithFallbackOptions } from "./chat-fallback-types";
+
+/** 单次模型调用需要用到的回调子集——onSwitched/onUsage/onFinalToolCalls/onInvocationAudit
+ *  属于外层 fallback 循环的编排结果，不该也不会被单次 attempt 触发。 */
+type AttemptCallbacks = Pick<StreamCallbacks, "onDelta" | "onStatus" | "onResolvedModel" | "onRecovered">;
+
+export interface ModelAttemptResult {
+  streamUsage: StreamUsage;
+  finishReason: string;
+  wasAborted: boolean;
+  partialText: string;
+  toolCalls: StepToolCall[];
+}
+
+/**
+ * 对着一个 ModelEndpoint 跑一次调用（CLI 或 API，按 target.providerType 分流）。
+ * - CLI 路径：spawn 本机 claude/codex，遇到可恢复截断会原生 resume 一次
+ * - API 路径：Vercel AI SDK streamText，多步 agentic 工具调用 + doom-loop 检测
+ */
+export async function runModelAttempt(
+  target: ModelEndpoint,
+  attemptMessages: ChatMsg[],
+  callbacks: AttemptCallbacks,
+  options: StreamWithFallbackOptions,
+): Promise<ModelAttemptResult> {
+  let partialText = "";
+
+  if (isCliProviderType(target.providerType)) {
+    // CLI 引擎路径：spawn 本机 claude/codex 吃订阅额度（baseUrl 复用为可执行文件路径）
+    // CLI 不支持图片——带图消息的 chain 已在 ChatPage 过滤掉 CLI 端点；这里防御性把数组 content 折叠成纯文本
+    const cliMessages: CliMessage[] = attemptMessages.map((m) => ({
+      role: m.role as "user" | "assistant" | "system",
+      content:
+        typeof m.content === "string"
+          ? m.content
+          : m.content.filter((p) => p.type === "text").map((p) => ("text" in p ? p.text : "")).join(""),
+    }));
+    let officialSessionId: string | null = null;
+    const persistCliSession = (sessionId: string, status: "active" | "completed" | "failed") => {
+      void cliSessions.upsert({
+        providerType: target.providerType as "claude-cli" | "codex-cli",
+        conversationId: options.conversationId ?? null,
+        projectId: options.projectId ?? null,
+        officialSessionId: sessionId,
+        modelName: target.modelName,
+        program: target.baseUrl ?? null,
+        status,
+      }).catch(() => {});
+    };
+    const runCli = async (
+      resumeSessionId?: string | null,
+    ): Promise<{
+      finishReason: string;
+      wasAborted: boolean;
+      inputTokens: number;
+      outputTokens: number;
+      officialSessionId: string | null;
+      actualModelName: string | null;
+    }> => {
+      const cliResult = await streamViaCli(
+        {
+          providerType: target.providerType as "claude-cli" | "codex-cli",
+          modelName: target.modelName,
+          ...(target.baseUrl ? { program: target.baseUrl } : {}),
+          ...(target.workingDirectory ? { workingDirectory: target.workingDirectory } : {}),
+        },
+        cliMessages,
+        {
+          onDelta: (delta) => {
+            partialText += delta;
+            callbacks.onDelta(delta);
+          },
+          onSession: (sessionId) => {
+            officialSessionId = sessionId;
+            persistCliSession(sessionId, "active");
+          },
+          onStatus: callbacks.onStatus,
+          onModel: (modelName) => callbacks.onResolvedModel?.(modelName, target),
+        },
+        {
+          ...(options.signal ? { signal: options.signal } : {}),
+          ...(options.cliAccess ? { access: options.cliAccess } : {}),
+          ...(resumeSessionId
+            ? {
+                resumeSessionId,
+                resumePrompt: "Continue from where you stopped. Do not repeat completed content.",
+              }
+            : {}),
+        },
+      );
+      if (cliResult.officialSessionId) {
+        officialSessionId = cliResult.officialSessionId;
+      }
+      return {
+        finishReason: cliResult.finishReason,
+        wasAborted: cliResult.finishReason === "abort" || (options.signal?.aborted ?? false),
+        inputTokens: cliResult.inputTokens,
+        outputTokens: cliResult.outputTokens,
+        officialSessionId,
+        actualModelName: cliResult.actualModelName,
+      };
+    };
+    try {
+      const cliResult = await runCli();
+      let totalInputTokens = cliResult.inputTokens;
+      let totalOutputTokens = cliResult.outputTokens;
+      let finishReason = cliResult.finishReason;
+      let wasAborted = cliResult.wasAborted;
+      if (
+        !wasAborted &&
+        officialSessionId &&
+        isRecoverableTruncation(finishReason)
+      ) {
+        callbacks.onRecovered?.("native_resume");
+        const resumed = await runCli(officialSessionId);
+        totalInputTokens += resumed.inputTokens;
+        totalOutputTokens += resumed.outputTokens;
+        finishReason = resumed.finishReason;
+        wasAborted = resumed.wasAborted;
+      }
+      if (officialSessionId) {
+        persistCliSession(officialSessionId, isNormalFinishReason(finishReason) ? "completed" : "failed");
+      }
+      return {
+        finishReason,
+        wasAborted,
+        partialText,
+        toolCalls: [],
+        streamUsage: {
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+          toolCallCount: 0,
+        },
+      };
+    } catch (error) {
+      // 修复（2026-07-07，用户实测发现）：原来这个 error 只用来取 sessionId，从没打印过就
+      // 直接丢了——如果紧接着的 resume 重试成功，原始失败原因永远无法追溯；如果 resume
+      // 也失败，resume 自己的失败原因还会在下面的空 catch 里被再丢一次，最终往上抛的是
+      // 第一次的 error，两次真实失败原因全部沉默消失，devtools 里连个痕迹都没有。
+      console.error("[cli-engine] 首次调用失败，尝试 native resume", error);
+      const firstErrorDetail = classifyLlmError(error).technicalMessage || undefined;
+      const sessionId =
+        (error as { officialSessionId?: string | null })?.officialSessionId ?? officialSessionId;
+      if (sessionId && !(options.signal?.aborted ?? false)) {
+        try {
+          callbacks.onRecovered?.("native_resume", firstErrorDetail);
+          const resumed = await runCli(sessionId);
+          persistCliSession(sessionId, isNormalFinishReason(resumed.finishReason) ? "completed" : "failed");
+          return {
+            finishReason: resumed.finishReason,
+            wasAborted: resumed.wasAborted,
+            partialText,
+            toolCalls: [],
+            streamUsage: {
+              inputTokens: resumed.inputTokens,
+              outputTokens: resumed.outputTokens,
+              toolCallCount: 0,
+            },
+          };
+        } catch (resumeError) {
+          console.error("[cli-engine] native resume 重试也失败", resumeError);
+          persistCliSession(sessionId, "failed");
+        }
+      }
+      if (typeof error === "object" && error !== null) {
+        (error as { __partialText?: string }).__partialText = partialText;
+      }
+      throw error;
+    }
+  }
+
+  // API 直连路径：Vercel AI SDK streamText
+  const lm = getLanguageModel(target.providerType, target.modelName, target.apiKey, target.baseUrl);
+  const localAbort = new AbortController();
+  const onParentAbort = () => localAbort.abort();
+  options.signal?.addEventListener("abort", onParentAbort);
+  const stepToolCalls: StepToolCall[] = [];
+
+  try {
+    const result = streamText({
+      model: lm,
+      messages: attemptMessages as unknown as ModelMessage[],
+      maxOutputTokens: options.maxOutputTokens ?? resolveMaxOutputTokens(target.modelName),
+      maxRetries: 3,
+      ...(options.tools ? {
+        tools: options.tools,
+        toolChoice: options.toolChoice ?? "auto",
+        stopWhen: stepCountIs(options.maxToolSteps ?? 8),
+        onStepFinish: (event) => {
+          const calls = (event.toolCalls ?? []) as { toolName: string; input: unknown }[];
+          for (const tc of calls) {
+            stepToolCalls.push({ toolName: tc.toolName, input: tc.input });
+          }
+          if (detectDoomLoop(stepToolCalls)) localAbort.abort();
+        },
+      } : {}),
+      abortSignal: localAbort.signal,
+    });
+
+    for await (const delta of result.textStream) {
+      partialText += delta;
+      callbacks.onDelta(delta);
+    }
+
+    const usage = await result.usage;
+    const finishReason = (await result.finishReason) ?? "stop";
+    return {
+      finishReason,
+      wasAborted: localAbort.signal.aborted || (options.signal?.aborted ?? false),
+      partialText,
+      toolCalls: stepToolCalls,
+      streamUsage: {
+        inputTokens: usage?.inputTokens ?? 0,
+        outputTokens: usage?.outputTokens ?? 0,
+        cacheReadInputTokens:
+          usage?.inputTokenDetails?.cacheReadTokens ?? usage?.cachedInputTokens ?? 0,
+        cacheWriteInputTokens:
+          usage?.inputTokenDetails?.cacheWriteTokens ?? 0,
+        toolCallCount: stepToolCalls.length,
+      },
+    };
+  } catch (error) {
+    if (typeof error === "object" && error !== null) {
+      (error as { __partialText?: string }).__partialText = partialText;
+    }
+    throw error;
+  } finally {
+    options.signal?.removeEventListener("abort", onParentAbort);
+  }
+}

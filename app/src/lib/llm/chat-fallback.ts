@@ -6,6 +6,14 @@
 // 内置 recordUsageEvent 避免调用方写错 modelName/providerId、抽 toModelEndpoint
 // builder 消除 4 处 provider.type guard。
 //
+// 2026-07-09 二次重构（拆热点文件，719→约300行）：原来堆在一个文件里的类型定义
+// （ModelEndpoint/StreamUsage/SwitchReason/StreamCallbacks/toModelEndpoint）拆到
+// chat-fallback-types.ts；单模型单次调用的 CLI/API 双路径逻辑（原 runAttempt 嵌套
+// 函数）拆到 chat-fallback-attempt.ts；纯辅助函数拆到 chat-fallback-recovery.ts。
+// 本文件只保留 streamWithFallback 的 fallback 链编排主循环。所有类型/函数继续从本
+// 文件 re-export，7 个既有消费者（chain-runner.ts/useChatStream.ts 等）的 import
+// 路径和符号完全不变，零改动。
+//
 // 设计决策：
 // 1. 保留流式体验：主模型失败时自动切 fallback；如果已经流出部分内容，
 //    会把已输出片段放回上下文，要求下一个模型从中断处继续、不要重复。
@@ -17,171 +25,29 @@
 //    不再混用 LlmErrorCategory。
 // 5. 链式调用：models 数组按顺序尝试，跳过 cooldown 的，遇到非 shouldFallback 的错就终止。
 
-import { streamText, stepCountIs, type ToolSet, type ModelMessage } from "ai";
-import { cliSessions } from "../db";
-import { getLanguageModel } from "./provider-factory";
-import { classifyLlmError, type LlmErrorCategory } from "./error-classifier";
+import { classifyLlmError } from "./error-classifier";
 import { hydrateModelCooldowns, isInCooldown, markModelFailed, markModelSucceeded, getCooldownRemainingMs } from "./model-cooldown";
 import { recordUsageEvent, type RecordUsageParams } from "./usage-tracker";
-import { isCliProviderType, type CliMessage, type CliAccessOptions } from "./cli-protocol";
-import { streamViaCli } from "./cli-engine";
-import { classifyMessageComplexity } from "./message-router";
-import { detectDoomLoop, type StepToolCall } from "./harness/doom-loop";
-import { buildLlmInvocationAuditEvent, type LlmInvocationAuditEvent } from "./invocation-audit";
-import { resolveMaxOutputTokens, ensureModelLimitsLoaded } from "./model-limits";
+import { runModelAttempt } from "./chat-fallback-attempt";
+import { buildRecoveryMessages, getPartialTextFromError, inferRole } from "./chat-fallback-recovery";
+import { buildLlmInvocationAuditEvent } from "./invocation-audit";
+import { ensureModelLimitsLoaded } from "./model-limits";
 import { isNormalFinishReason, isRecoverableTruncation } from "./finish-reason";
+import type { StepToolCall } from "./harness/doom-loop";
 import type { ChatMsg } from "./context-compressor";
+import {
+  toModelEndpoint,
+  type ModelEndpoint,
+  type StreamCallbacks,
+  type StreamUsage,
+  type StreamWithFallbackOptions,
+  type SwitchReason,
+} from "./chat-fallback-types";
+
+export { toModelEndpoint };
+export type { ModelEndpoint, StreamCallbacks, StreamUsage, StreamWithFallbackOptions, SwitchReason };
 
 const MAX_AUTO_CONTINUATIONS = 2;
-
-function buildRecoveryMessages(messages: ChatMsg[], partialText: string, reason: string): ChatMsg[] {
-  const trimmed = partialText.trim();
-  const recovered: ChatMsg[] = [...messages];
-  if (trimmed) {
-    recovered.push({ role: "assistant", content: trimmed });
-  }
-  recovered.push({
-    role: "user",
-    content:
-      `上一次模型调用因为「${reason}」没有正常完成。请从刚才中断处继续，不要重复已经完成的内容，` +
-      "继续完成用户原始任务。如果前文已经给出部分答案，只补剩余部分。",
-  });
-  return recovered;
-}
-
-function getPartialTextFromError(error: unknown): string {
-  if (typeof error === "object" && error !== null && "__partialText" in error) {
-    const partial = (error as { __partialText?: unknown }).__partialText;
-    return typeof partial === "string" ? partial : "";
-  }
-  return "";
-}
-
-/** 从对话里取最后一条 user 消息推断难度桶（role 默认值）。兼容多模态 content（数组取 text part）。 */
-function inferRole(messages: ChatMsg[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]!;
-    if (m.role === "user") {
-      const c = m.content;
-      const text =
-        typeof c === "string"
-          ? c
-          : c.filter((p) => p.type === "text").map((p) => ("text" in p ? p.text : "")).join("");
-      return classifyMessageComplexity(text);
-    }
-  }
-  return "main_chat";
-}
-
-/** 一个可调用的模型端点：模型 + 凭证 + baseUrl */
-export interface ModelEndpoint {
-  /** DB 里 Model 表的 id（用于 cooldown 跟踪 + UsageEvent 关联） */
-  modelId: string;
-  /** 给 LLM 用的模型名（如 "claude-opus-4-8"） */
-  modelName: string;
-  /** "anthropic" / "openai" / "google" / "openai-compatible" */
-  providerType: string;
-  apiKey: string;
-  baseUrl?: string;
-  /** CLI provider 的工作目录：绑定工作文件夹时传入，避免 CLI 读到应用开发目录 */
-  workingDirectory?: string | null;
-  /** 给 UI 显示的标签（如 "Opus 4.8"），仅做展示 */
-  displayLabel?: string;
-  /** 对应 ApiCredential 的 id（用于 recordUsageEvent 落库关联） */
-  apiCredentialId: string;
-  /** 对应 Provider 的 id（用于 recordUsageEvent 落库关联） */
-  providerId: string;
-}
-
-/** 给 UI 流的文本增量 */
-export interface StreamUsage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadInputTokens?: number;
-  cacheWriteInputTokens?: number;
-  /** 阶段 H：本轮真实工具调用次数（来自 stepToolCalls.length）。
-   *  - 0 + finishReason="stop" + 输出含动手意图 → Harness nudge 重答触发条件之一
-   *  - 加这个字段让 ChatPage 在 onUsage 回调里直接拿到，不用额外暴露 streamText 内部状态 */
-  toolCallCount: number;
-}
-
-/**
- * 切模型的原因（discriminated union）
- * - kind="error"：主模型真出错（带 LlmErrorCategory 分类）
- * - kind="cooldown"：主模型在 cooldown 中熔断，UI 提示"X 秒后可重试"
- * 不再用 LlmErrorCategory 一把抓，避免 cooldown 被假报成 rate_limit。
- */
-export type SwitchReason =
-  | { kind: "error"; category: LlmErrorCategory }
-  | { kind: "cooldown" }
-  | { kind: "recovery"; reason: string };
-
-/** 流式过程的回调钩子 */
-export interface StreamCallbacks {
-  /** 每收到一段文本增量时触发（流式输出靠这个） */
-  onDelta: (delta: string) => void;
-  /**
-   * 切换到下一个模型时触发（仅切的时候调一次，不切不调）。
-   * 第一次进入时也会调：如果 models[0] 在 cooldown 中直接跳到 models[1]，会先调一次。
-   */
-  onSwitched?: (from: ModelEndpoint, to: ModelEndpoint, reason: SwitchReason) => void;
-  /**
-   * 整段对话成功结束时触发，UI 拿这个落 UsageEvent（chat-fallback 已自动调过 recordUsageEvent，
-   * 这里给 UI 用于刷新"上次调用消耗"显示 + 自定义逻辑）。
-   * interrupted=true 表示用户主动 abort（不写 usage，标记 interrupted）。
-   */
-  onUsage?: (usage: StreamUsage, model: ModelEndpoint, finishReason: string, interrupted: boolean) => void;
-  /**
-   * 系统自动恢复的方式：原生续跑 / 上下文重放 / fallback 接力
-   * detail：修复（2026-07-07，用户实测发现）——native_resume 之前只在 UI 上显示一句
-   * 静态"系统已用 CLI 官方会话原生续跑"，触发它的真实原因（首次调用失败的错误文本）
-   * 只打进 devtools 控制台，不懂开发者工具的用户完全看不到、只能来回问。这里把原始
-   * 失败原因带出来，UI 直接拼进同一条提示里，不需要用户会用任何调试工具。
-   */
-  onRecovered?: (mode: "native_resume" | "context_replay" | "fallback_handoff", detail?: string) => void;
-  /** CLI/agent 中间状态，不计入最终回答正文 */
-  onStatus?: (status: string) => void;
-  /** CLI 官方输出的实际模型名，例如 sonnet 别名会解析成 claude-sonnet-4-6 */
-  onResolvedModel?: (modelName: string, target: ModelEndpoint) => void;
-  /**
-   * streamText 全部 step 跑完后，把累积的所有 toolCalls 一次交给 caller。
-   * 不传=noop，零侵入。Abort 中断时不调。
-   */
-  onFinalToolCalls?: (toolCalls: { toolName: string; input?: unknown }[]) => void;
-  /** L1 接入层审计事实：每次模型调用成功/失败/冷却/中断都以统一形态吐出。 */
-  onInvocationAudit?: (event: LlmInvocationAuditEvent) => void;
-}
-
-/**
- * 从 DB 形态 + 凭证 + apiKey 构造 ModelEndpoint。
- * 把"模型缺 provider 类型"的检查集中到一处——原来 4 个调用点都重复做这个 guard。
- */
-export function toModelEndpoint(
-  model: {
-    id: string;
-    name: string;
-    displayName: string | null;
-    providerId: string;
-    provider?: { type: string } | null;
-  },
-  credential: { id: string; baseUrl: string },
-  apiKey: string,
-): ModelEndpoint {
-  const providerType = model.provider?.type;
-  if (!providerType) {
-    throw new Error("Model missing provider type — re-add the provider");
-  }
-  return {
-    modelId: model.id,
-    modelName: model.name,
-    providerType,
-    providerId: model.providerId,
-    apiCredentialId: credential.id,
-    apiKey,
-    baseUrl: credential.baseUrl,
-    displayLabel: model.displayName ?? model.name,
-  };
-}
 
 /**
  * 流式对话，按顺序尝试 models 中的每一个端点。
@@ -197,47 +63,7 @@ export async function streamWithFallback(
   models: ModelEndpoint[],
   messages: ChatMsg[],
   callbacks: StreamCallbacks,
-  options: {
-    signal?: AbortSignal;
-    /** 关联 projectId（用于 UsageEvent 落库），自由对话不传 */
-    projectId?: string;
-    /** 关联 conversationId（目前未使用，预留给未来按 conversation 聚合统计） */
-    conversationId?: string;
-    /** 消息难度桶（simple/standard/hard），落 UsageEvent 供 v0.9 SmartRouter 滚动统计。
-     *  不传则内部按最后一条 user 消息推断（调用方无需各自重复算）。 */
-    role?: string;
-    /** 阶段 F1：actor 维度（leader/architect/frontend/.../stage）。
-     *  - 跟 role（workRole 难度桶）配对清晰，不撞名
-     *  - 不传 → NULL（review F1-1：leader 占比 80%+，NULL 是真实数据，聚合不过滤）
-     *  - 调用方责任：必须显式传（ChatPage 主对话 → 'leader'，ProjectDetailPage → 'stage'，runChain 每跳 → role: RoleId） */
-    actorRole?: string | null;
-    /** v0.7 阶段4：工具集（read/glob/grep 等）。传了才开启工具调用 + 多步 agentic 循环 */
-    tools?: ToolSet;
-    /** 工具调用最大步数（防死循环），默认 8 */
-    maxToolSteps?: number;
-    /** 强制本轮必须真调用工具（"required"）。用于 harness nudge 重答——模型上一次
-     *  嘴上说了要做却 0 工具调用，文字提醒不够硬，直接在 API 层锁死它这次必须调用，
-     *  不给它继续嘴炮的选项。不传 = "auto"（照常自行判断）。 */
-    toolChoice?: "auto" | "required";
-    /** CLI 引擎（claude/codex）的权限档位 + 放行目录。只在 primaryIsCli 时有意义——
-     *  翻译成 --sandbox/--permission-mode/--add-dir，让 app 的"只读/确认写/自动"真正管到
-     *  CLI 子进程（否则 CLI 只能写工作区内，用户"保存到桌面"被 CLI 自己的沙箱拒绝）。 */
-    cliAccess?: CliAccessOptions;
-    /** 单次回答的最大输出 token。不传则用 DEFAULT_MAX_OUTPUT_TOKENS。
-     *  关键：很多 OpenAI 兼容端点（MiniMax 等）不传 max_tokens 时默认值很小，
-     *  推理型模型会把预算花在 <think> 上、正文没写完就被截断 → 必须显式给足。 */
-    maxOutputTokens?: number;
-    routingDecision?: {
-      baselineModelId: string;
-      baselineModelName: string;
-      baselineProviderType?: string | null;
-      actualModelId: string;
-    } | null;
-    compressionStats?: {
-      beforeTokens: number;
-      afterTokens: number;
-    } | null;
-  } = {},
+  options: StreamWithFallbackOptions = {},
 ): Promise<{ usedModelId: string; switched: boolean }> {
   if (models.length === 0) {
     throw new Error("streamWithFallback: models array cannot be empty");
@@ -277,222 +103,6 @@ export async function streamWithFallback(
       })
       .join("、");
     throw new Error(`All models are cooling down: ${detail}`);
-  }
-
-  async function runAttempt(
-    target: ModelEndpoint,
-    attemptMessages: ChatMsg[],
-  ): Promise<{
-    streamUsage: StreamUsage;
-    finishReason: string;
-    wasAborted: boolean;
-    partialText: string;
-    toolCalls: StepToolCall[];
-  }> {
-    let partialText = "";
-
-    if (isCliProviderType(target.providerType)) {
-      // CLI 引擎路径：spawn 本机 claude/codex 吃订阅额度（baseUrl 复用为可执行文件路径）
-      // CLI 不支持图片——带图消息的 chain 已在 ChatPage 过滤掉 CLI 端点；这里防御性把数组 content 折叠成纯文本
-      const cliMessages: CliMessage[] = attemptMessages.map((m) => ({
-        role: m.role as "user" | "assistant" | "system",
-        content:
-          typeof m.content === "string"
-            ? m.content
-            : m.content.filter((p) => p.type === "text").map((p) => ("text" in p ? p.text : "")).join(""),
-      }));
-      let officialSessionId: string | null = null;
-      const persistCliSession = (sessionId: string, status: "active" | "completed" | "failed") => {
-        void cliSessions.upsert({
-          providerType: target.providerType as "claude-cli" | "codex-cli",
-          conversationId: options.conversationId ?? null,
-          projectId: options.projectId ?? null,
-          officialSessionId: sessionId,
-          modelName: target.modelName,
-          program: target.baseUrl ?? null,
-          status,
-        }).catch(() => {});
-      };
-      const runCli = async (
-        resumeSessionId?: string | null,
-      ): Promise<{
-        finishReason: string;
-        wasAborted: boolean;
-        inputTokens: number;
-        outputTokens: number;
-        officialSessionId: string | null;
-        actualModelName: string | null;
-      }> => {
-        const cliResult = await streamViaCli(
-          {
-            providerType: target.providerType as "claude-cli" | "codex-cli",
-            modelName: target.modelName,
-            ...(target.baseUrl ? { program: target.baseUrl } : {}),
-            ...(target.workingDirectory ? { workingDirectory: target.workingDirectory } : {}),
-          },
-          cliMessages,
-          {
-            onDelta: (delta) => {
-              partialText += delta;
-              callbacks.onDelta(delta);
-            },
-            onSession: (sessionId) => {
-              officialSessionId = sessionId;
-              persistCliSession(sessionId, "active");
-            },
-            onStatus: callbacks.onStatus,
-            onModel: (modelName) => callbacks.onResolvedModel?.(modelName, target),
-          },
-          {
-            ...(options.signal ? { signal: options.signal } : {}),
-            ...(options.cliAccess ? { access: options.cliAccess } : {}),
-            ...(resumeSessionId
-              ? {
-                  resumeSessionId,
-                  resumePrompt: "Continue from where you stopped. Do not repeat completed content.",
-                }
-              : {}),
-          },
-        );
-        if (cliResult.officialSessionId) {
-          officialSessionId = cliResult.officialSessionId;
-        }
-        return {
-          finishReason: cliResult.finishReason,
-          wasAborted: cliResult.finishReason === "abort" || (options.signal?.aborted ?? false),
-          inputTokens: cliResult.inputTokens,
-          outputTokens: cliResult.outputTokens,
-          officialSessionId,
-          actualModelName: cliResult.actualModelName,
-        };
-      };
-      try {
-        const cliResult = await runCli();
-        let totalInputTokens = cliResult.inputTokens;
-        let totalOutputTokens = cliResult.outputTokens;
-        let finishReason = cliResult.finishReason;
-        let wasAborted = cliResult.wasAborted;
-        if (
-          !wasAborted &&
-          officialSessionId &&
-          isRecoverableTruncation(finishReason)
-        ) {
-          callbacks.onRecovered?.("native_resume");
-          const resumed = await runCli(officialSessionId);
-          totalInputTokens += resumed.inputTokens;
-          totalOutputTokens += resumed.outputTokens;
-          finishReason = resumed.finishReason;
-          wasAborted = resumed.wasAborted;
-        }
-        if (officialSessionId) {
-          persistCliSession(officialSessionId, isNormalFinishReason(finishReason) ? "completed" : "failed");
-        }
-        return {
-          finishReason,
-          wasAborted,
-          partialText,
-          toolCalls: [],
-          streamUsage: {
-            inputTokens: totalInputTokens,
-            outputTokens: totalOutputTokens,
-            toolCallCount: 0,
-          },
-        };
-      } catch (error) {
-        // 修复（2026-07-07，用户实测发现）：原来这个 error 只用来取 sessionId，从没打印过就
-        // 直接丢了——如果紧接着的 resume 重试成功，原始失败原因永远无法追溯；如果 resume
-        // 也失败，resume 自己的失败原因还会在下面的空 catch 里被再丢一次，最终往上抛的是
-        // 第一次的 error，两次真实失败原因全部沉默消失，devtools 里连个痕迹都没有。
-        console.error("[cli-engine] 首次调用失败，尝试 native resume", error);
-        const firstErrorDetail = classifyLlmError(error).technicalMessage || undefined;
-        const sessionId =
-          (error as { officialSessionId?: string | null })?.officialSessionId ?? officialSessionId;
-        if (sessionId && !(options.signal?.aborted ?? false)) {
-          try {
-            callbacks.onRecovered?.("native_resume", firstErrorDetail);
-            const resumed = await runCli(sessionId);
-            persistCliSession(sessionId, isNormalFinishReason(resumed.finishReason) ? "completed" : "failed");
-            return {
-              finishReason: resumed.finishReason,
-              wasAborted: resumed.wasAborted,
-              partialText,
-              toolCalls: [],
-              streamUsage: {
-                inputTokens: resumed.inputTokens,
-                outputTokens: resumed.outputTokens,
-                toolCallCount: 0,
-              },
-            };
-          } catch (resumeError) {
-            console.error("[cli-engine] native resume 重试也失败", resumeError);
-            persistCliSession(sessionId, "failed");
-          }
-        }
-        if (typeof error === "object" && error !== null) {
-          (error as { __partialText?: string }).__partialText = partialText;
-        }
-        throw error;
-      }
-    }
-
-    // API 直连路径：Vercel AI SDK streamText
-    const lm = getLanguageModel(target.providerType, target.modelName, target.apiKey, target.baseUrl);
-    const localAbort = new AbortController();
-    const onParentAbort = () => localAbort.abort();
-    options.signal?.addEventListener("abort", onParentAbort);
-    const stepToolCalls: StepToolCall[] = [];
-
-    try {
-      const result = streamText({
-        model: lm,
-        messages: attemptMessages as unknown as ModelMessage[],
-        maxOutputTokens: options.maxOutputTokens ?? resolveMaxOutputTokens(target.modelName),
-        maxRetries: 3,
-        ...(options.tools ? {
-          tools: options.tools,
-          toolChoice: options.toolChoice ?? "auto",
-          stopWhen: stepCountIs(options.maxToolSteps ?? 8),
-          onStepFinish: (event) => {
-            const calls = (event.toolCalls ?? []) as { toolName: string; input: unknown }[];
-            for (const tc of calls) {
-              stepToolCalls.push({ toolName: tc.toolName, input: tc.input });
-            }
-            if (detectDoomLoop(stepToolCalls)) localAbort.abort();
-          },
-        } : {}),
-        abortSignal: localAbort.signal,
-      });
-
-      for await (const delta of result.textStream) {
-        partialText += delta;
-        callbacks.onDelta(delta);
-      }
-
-      const usage = await result.usage;
-      const finishReason = (await result.finishReason) ?? "stop";
-      return {
-        finishReason,
-        wasAborted: localAbort.signal.aborted || (options.signal?.aborted ?? false),
-        partialText,
-        toolCalls: stepToolCalls,
-        streamUsage: {
-          inputTokens: usage?.inputTokens ?? 0,
-          outputTokens: usage?.outputTokens ?? 0,
-          cacheReadInputTokens:
-            usage?.inputTokenDetails?.cacheReadTokens ?? usage?.cachedInputTokens ?? 0,
-          cacheWriteInputTokens:
-            usage?.inputTokenDetails?.cacheWriteTokens ?? 0,
-          toolCallCount: stepToolCalls.length,
-        },
-      };
-    } catch (error) {
-      if (typeof error === "object" && error !== null) {
-        (error as { __partialText?: string }).__partialText = partialText;
-      }
-      throw error;
-    } finally {
-      options.signal?.removeEventListener("abort", onParentAbort);
-    }
   }
 
   function recordUsageEventOnly(args: {
@@ -558,7 +168,7 @@ export async function streamWithFallback(
     let continuationsForThisModel = 0;
     while (true) {
       try {
-        const attempt = await runAttempt(target, activeMessages);
+        const attempt = await runModelAttempt(target, activeMessages, callbacks, options);
         aggregateUsage.inputTokens += attempt.streamUsage.inputTokens;
         aggregateUsage.outputTokens += attempt.streamUsage.outputTokens;
         aggregateUsage.cacheReadInputTokens =

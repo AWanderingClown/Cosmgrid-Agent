@@ -1,6 +1,6 @@
 import { isCliProviderType } from "./cli-protocol";
 import type { LlmErrorCategory } from "./error-classifier";
-import type { ModelEndpoint, StreamUsage } from "./chat-fallback";
+import type { ModelEndpoint, StreamUsage } from "./chat-fallback-types";
 
 export type LlmInvocationStatus = "success" | "error" | "cooldown" | "aborted";
 export type LlmProviderKind = "api" | "cli";
