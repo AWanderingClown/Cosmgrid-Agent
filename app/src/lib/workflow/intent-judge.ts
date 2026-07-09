@@ -222,7 +222,7 @@ export async function classifyTurnIntentWithJudge(args: {
       text: args.text,
     })
     : null;
-  if (!args.model) return { ...(semanticDecision ?? fallback), complexity };
+  if (!args.model) return { ...(semanticDecision ?? fallback), complexity, semanticRoute };
 
   try {
     const judged = await judgeTurnIntent({
@@ -232,7 +232,7 @@ export async function classifyTurnIntentWithJudge(args: {
       recentTurnIds: args.recentTurnIds,
       semanticRoute,
     });
-    if (judged.confidence < 0.65) return { ...(semanticDecision ?? fallback), complexity };
+    if (judged.confidence < 0.65) return { ...(semanticDecision ?? fallback), complexity, semanticRoute };
     return {
       ...toDecision({
         judged,
@@ -242,8 +242,9 @@ export async function classifyTurnIntentWithJudge(args: {
         text: args.text,
       }),
       complexity,
+      semanticRoute,
     };
   } catch {
-    return { ...fallback, complexity };
+    return { ...fallback, complexity, semanticRoute };
   }
 }

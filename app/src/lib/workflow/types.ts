@@ -1,4 +1,5 @@
 import type { RoleId } from "@/lib/roles";
+import type { SemanticIntentRoute } from "./semantic-intent-router";
 
 export type TurnAction =
   | "start_run"
@@ -43,6 +44,13 @@ export interface TurnIntentDecision {
    * 调用方（如 message-router.ts）可以用此字段而不再独立跑一次 classifyMessageComplexity。
    */
   complexity?: "simple" | "standard" | "hard";
+  /**
+   * M1 修复（2026-07-09）：classifyTurnIntentWithJudge 内部已经跑过一次语义路由，
+   * 顺手把结果挂在这里——调用方（如意图诊断面板）不用为了拿同一份 route 再调一次
+   * routeTurnIntentSemantically（省一次 keywordEmbed + 逐样例余弦相似度）。
+   * cancel_run/pause_run 走 L0 硬规则短路时不会算语义路由，此时为 undefined。
+   */
+  semanticRoute?: SemanticIntentRoute;
 }
 
 export type WorkflowPhase =

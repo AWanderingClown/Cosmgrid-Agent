@@ -202,4 +202,55 @@ describe("classifyTurnIntentWithJudge", () => {
     });
     expect(noModel.complexity).toBe("simple");
   });
+
+  // ============ M1 修复：semanticRoute 挂到返回值上，调用方不用再算一次 ============
+  // （intent 诊断面板原来会为了拿同一份 route 再单独调一次 routeTurnIntentSemantically，
+  //  重复一遍 keywordEmbed + 逐样例余弦相似度；现在直接读 decision.semanticRoute）
+
+  it("有 judge model 时返回 decision 带 semanticRoute（内部算过的那一份，不是占位符）", async () => {
+    mocks.generateObject.mockResolvedValue({
+      object: { action: "answer_only", confidence: 0.9, reason: "简单问题。" },
+    });
+    const decision = await classifyTurnIntentWithJudge({
+      text: "帮我看看这个方案",
+      activeRun: null,
+      model,
+    });
+    expect(decision.semanticRoute).toBeDefined();
+    expect(decision.semanticRoute?.candidates).toBeInstanceOf(Array);
+  });
+
+  it("裁判失败 catch 路径也带 semanticRoute（语义路由在 try 之前已经算好，不能丢）", async () => {
+    mocks.generateObject.mockRejectedValue(new Error("judge failed"));
+    const fallback = await classifyTurnIntentWithJudge({
+      text: "帮我设计一个架构方案",
+      activeRun: null,
+      model,
+    });
+    expect(fallback.semanticRoute).toBeDefined();
+  });
+
+  it("无 judge model 走纯语义路由路径也带 semanticRoute", async () => {
+    const noModel = await classifyTurnIntentWithJudge({
+      text: "翻译一下",
+      activeRun: null,
+      model: null,
+    });
+    expect(noModel.semanticRoute).toBeDefined();
+  });
+
+  it("cancel_run/pause_run 走 L0 硬规则短路时 semanticRoute 为 undefined（没算过，不能伪造）", async () => {
+    const cancelled = await classifyTurnIntentWithJudge({
+      text: "算了，取消这个任务",
+      activeRun: createCodeTaskWorkflowSnapshot({
+        runId: "run-cancel",
+        conversationId: "conv-1",
+        objective: "做一份推广方案",
+        workspacePath: "/tmp/project",
+      }),
+      model,
+    });
+    expect(cancelled.action).toBe("cancel_run");
+    expect(cancelled.semanticRoute).toBeUndefined();
+  });
 });

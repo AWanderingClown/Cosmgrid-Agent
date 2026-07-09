@@ -55,7 +55,7 @@ import {
 } from "@/lib/llm/orchestrator";
 import { buildRolePerformanceScoresFromUsageRows } from "@/lib/llm/model-performance-scoring";
 import { getLanguageModel } from "@/lib/llm/provider-factory";
-import { isPureSingleModelModeEnabled, isSmartRoutingEnabled } from "@/lib/app-settings";
+import { isDeveloperDiagnosticsEnabled, isPureSingleModelModeEnabled, isSmartRoutingEnabled } from "@/lib/app-settings";
 import { shouldExposeWriteTools, impliesWriteIntent } from "@/lib/llm/tool-permission-policy";
 import { lookupCache, writeCache } from "@/lib/llm/semantic-cache";
 import { buildProjectMemoryPreamble } from "@/lib/llm/context-preamble";
@@ -569,22 +569,32 @@ export function useChatStream(opts: UseChatStreamOptions) {
           turnIntentDecision = decision;
           intentJudgeCalledThisTurn = true;
 
-          // L9 意图识别细节面板（开发者模式可见）：记录本轮决策 + 自跑一遍 router 拿真实命中层。
+          // L9 意图识别细节面板（开发者模式可见）：记录本轮决策 + 复用 judge 内部已算好的 semanticRoute。
+          // M1 修复（2026-07-09）：decision.semanticRoute 是 classifyTurnIntentWithJudge 内部算过的
+          // 同一份路由结果，直接读取，不再重复调 routeTurnIntentSemantically（省一次
+          // keywordEmbed + 逐样例余弦相似度）；只有 cancel_run/pause_run 走 L0 硬规则短路时
+          // decision.semanticRoute 才是 undefined，这种情况仍需现算一次（罕见路径，可接受）。
+          // L4 修复（2026-07-09）：写入也挂 developerDiagnosticsEnabled 开关，跟组件渲染保持
+          // 一致——普通用户没打开过开发者诊断，就不该悄悄攒着这份调试数据。
           // try/catch 隔离，诊断失败绝不阻断主对话（参考 v3.4 §0.3 产物纪律 + "别把代码堆回大文件"）。
           try {
-            const diagnosticRoute = routeTurnIntentSemantically(
-              text,
-              learnedExamples.length
-                ? [...BUILTIN_INTENT_EXAMPLES, ...learnedExamples]
-                : BUILTIN_INTENT_EXAMPLES,
-            );
-            appendIntentDiagnostics({
-              id: crypto.randomUUID(),
-              capturedAt: new Date().toISOString(),
-              userTextExcerpt: text.length > 80 ? `${text.slice(0, 80)}…` : text,
-              decision,
-              route: diagnosticRoute,
-            });
+            if (isDeveloperDiagnosticsEnabled()) {
+              const diagnosticRoute =
+                decision.semanticRoute ??
+                routeTurnIntentSemantically(
+                  text,
+                  learnedExamples.length
+                    ? [...BUILTIN_INTENT_EXAMPLES, ...learnedExamples]
+                    : BUILTIN_INTENT_EXAMPLES,
+                );
+              appendIntentDiagnostics({
+                id: crypto.randomUUID(),
+                capturedAt: new Date().toISOString(),
+                userTextExcerpt: text.length > 80 ? `${text.slice(0, 80)}…` : text,
+                decision,
+                route: diagnosticRoute,
+              });
+            }
           } catch {
             // ignore
           }
