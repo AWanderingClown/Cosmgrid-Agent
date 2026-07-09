@@ -6,6 +6,7 @@ import { ResizeHandle } from "@/components/ui/resize-handle";
 import { ChainNodeGraph } from "@/components/work-panel/ChainNodeGraph";
 import type { ChainNodeView } from "@/components/work-panel/derive-chain-node-graph";
 import { WorkflowDiagnostics } from "@/components/work-panel/WorkflowDiagnostics";
+import { IntentDiagnostics } from "@/components/work-panel/IntentDiagnostics";
 import { WorkArtifacts } from "@/components/work-panel/WorkArtifacts";
 import { DebateHistory } from "@/components/work-panel/DebateHistory";
 import type { ModelListItem } from "@/lib/api";
@@ -183,7 +184,10 @@ export function ChatWorkPanel({
             onNodeModelChange={onNodeModelChange}
           />
           {developerDiagnosticsEnabled && (
-            <WorkflowDiagnostics workflowEvents={workflowEvents} workflowSnapshot={workflowSnapshot} toolCalls={toolCalls} messages={messages} />
+            <>
+              <WorkflowDiagnostics workflowEvents={workflowEvents} workflowSnapshot={workflowSnapshot} toolCalls={toolCalls} messages={messages} />
+              <IntentDiagnostics />
+            </>
           )}
           <Suspense
             fallback={

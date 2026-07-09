@@ -14,6 +14,10 @@ import { verifyFileClaims, verifyUrlClaims, verifyCommandClaims, unverifiedClaim
 import { detectPseudoToolCalls } from "./detect-pseudo-tools";
 import { detectFabricatedUsageCount } from "./detect-usage-narration";
 import type { ReadRecord, FetchRecord, ExecRecord } from "./verify-claims";
+import type { FabricationSuspicion } from "./fabrication-constants";
+
+// 重新导出 FabricationSuspicion 给外部用
+export type { FabricationSuspicion };
 
 export interface HarnessVerdict {
   /** 模型声称读过、但 tool_executions 无对应 read 记录的文件路径 */
@@ -26,6 +30,8 @@ export interface HarnessVerdict {
   pseudoToolNames: string[];
   /** 模型声称的工具/命令使用次数超过本轮真实 toolCallCount——数字化的编造信号，无此类声称则为 null */
   fabricatedUsageCount?: number | null;
+  /** 语义裁判（fabrication-judge 命中后由接线方写入）。null=未裁判/未命中；非 null=verdict 不干净 */
+  fabricationSuspected?: FabricationSuspicion | null;
 }
 
 /**
@@ -33,6 +39,9 @@ export interface HarnessVerdict {
  * 纯函数——readRecords/fetchRecords/execRecords 由调用方从 tool_executions 查好传进来；actualToolCallCount
  * 默认 0（不传时按"本轮没有真实工具调用"的最严格口径判定，向后兼容旧调用点）。fetchRecords/execRecords
  * 不传则不校验对应类型的 claim。
+ *
+ * fabricationSuspected 不在此函数内设置——它是 LLM 语义裁判的产物，由 useChatStream 接线方在阶段A
+ * verdict 干净后调用 fabrication-judge，命中阈值时回填。
  */
 export function evaluateHarness(
   content: string,
@@ -58,6 +67,7 @@ export function evaluateHarness(
 
 /** verdict 是否干净（没检测到任何违规）。干净 = 不需要标黄、不需要重答。 */
 export function isClean(v: HarnessVerdict): boolean {
+  if (v.fabricationSuspected) return false;
   return (
     v.unverifiedPaths.length === 0 &&
     (v.unverifiedUrls?.length ?? 0) === 0 &&
@@ -67,6 +77,68 @@ export function isClean(v: HarnessVerdict): boolean {
   );
 }
 
+// ============ 纠正话术拼装：每个违规类型独立成函数，主函数只做 dispatch ============
+
+function correctionForUnverifiedPaths(v: HarnessVerdict, hasTools: boolean): string[] {
+  if (v.unverifiedPaths.length === 0) return [];
+  return [
+    `- 你声称读取过这些文件，但本次对话没有任何真实的 read 工具执行记录：${v.unverifiedPaths.join("、")}。`,
+    hasTools
+      ? "  你有可用的 read 工具——请**真正调用 read 读取这些文件后**，根据真实内容重新回答；如果不需要读，就别声称读过。"
+      : "  本次你没有可用的文件工具，无法真读文件。请**不要再编造文件内容**——直说你读不了，请用户把文件内容贴过来，或基于已知信息谨慎回答。",
+  ];
+}
+
+function correctionForUnverifiedUrls(v: HarnessVerdict, hasTools: boolean): string[] {
+  if (!(v.unverifiedUrls && v.unverifiedUrls.length > 0)) return [];
+  return [
+    `- 你声称抓取过这些网页，但本次对话没有任何真实的 web_fetch 成功记录：${v.unverifiedUrls.join("、")}。`,
+    hasTools
+      ? "  你有可用的 web_fetch 工具——请**真正调用 web_fetch 抓取这些网页后**，根据真实内容重新回答；如果不需要抓，就别声称看过。"
+      : "  本次你没有可用的网页抓取工具，无法真读网页内容。请**不要再编造网页内容**——直说你读不了，请用户把正文贴过来或截图，不要假装已经看过。",
+  ];
+}
+
+function correctionForUnverifiedCommands(v: HarnessVerdict, hasTools: boolean): string[] {
+  if (!(v.unverifiedCommands && v.unverifiedCommands.length > 0)) return [];
+  return [
+    `- 你声称运行/搜索过这些内容，但本次对话没有任何真实的 bash/grep/web_search 成功记录：${v.unverifiedCommands.join("、")}。`,
+    hasTools
+      ? "  你有可用的 bash/grep/web_search 工具——请**真正调用对应工具执行后**，根据真实结果重新回答；如果不需要执行，就别声称跑过。"
+      : "  本次你没有可用的命令/搜索工具，无法真跑这些内容。请**不要再编造执行结果**——直说你做不到，请用户把结果贴过来，或基于已知信息谨慎回答。",
+  ];
+}
+
+function correctionForPseudoTools(v: HarnessVerdict, hasTools: boolean): string[] {
+  if (v.pseudoToolNames.length === 0) return [];
+  return [
+    `- 你在正文里输出了伪工具调用文本（${v.pseudoToolNames.join("、")}），这些不是本应用的真工具，系统不会执行、其"返回结果"全是你脑补的。`,
+    hasTools
+      ? "  请改用系统提供的标准工具调用（结构化 tool_call），不要在正文里写工具调用格式的文本。"
+      : "  本次你没有任何可用工具。请**不要再输出任何工具调用格式的文本**，用纯文字回答，或直说这件事你做不了。",
+  ];
+}
+
+function correctionForFabricatedUsageCount(v: HarnessVerdict): string[] {
+  if (!v.fabricatedUsageCount) return [];
+  return [
+    `- 你在正文里声称跑了/用了 ${v.fabricatedUsageCount} 次工具或命令，但本轮真实的工具调用次数没有这么多——这段"执行过程"是编造的。`,
+    "  请如实说明本轮实际做了什么：没有真实执行就不要报具体次数、编号、结果；如果这件事本来就做不到，直接说做不到。",
+  ];
+}
+
+function correctionForFabricationSuspected(v: HarnessVerdict, hasTools: boolean): string[] {
+  if (!v.fabricationSuspected) return [];
+  const fs = v.fabricationSuspected;
+  const actions = fs.claimedActions.join("、");
+  return [
+    `- 你的回答里给出了只有真实执行才能得到的结果（${actions || "具体执行结果"}），但本轮工具审计无法对账——裁判判定理由：${fs.reason}`,
+    hasTools
+      ? "  你有可用的工具——请**真正调用对应工具**（不要凭记忆补数字/命中/文件内容/测试结果/百分比），等真实输出回来后再基于证据重新回答。如果之前确实调用过工具但输出里没有你需要的信息，明确说出来，不要伪造数字。"
+      : "  本次你没有可用的工具，无法获取任何新的执行证据。请**不要再编造具体结果**——直接承认无法验证，告诉用户你需要他提供哪些信息（例如文件路径、命令、测试日志）才能给出有依据的回答。不要夹在事实里陈述未经核实的推测。",
+  ];
+}
+
 /**
  * 把违规组织成一条回填给模型的纠正指令（user 角色，作为下一轮输入）。
  * @param hasTools 本次对话模型是否挂了真工具——决定纠正方向（去用真工具 vs 纯文字/承认做不到）。
@@ -74,61 +146,16 @@ export function isClean(v: HarnessVerdict): boolean {
  */
 export function buildCorrectionPrompt(v: HarnessVerdict, opts: { hasTools: boolean }): string {
   if (isClean(v)) return "";
+  const hasTools = opts.hasTools;
   const lines: string[] = ["⚠️ 系统自查发现你上一条回答可能在编造，未真实执行就声称做了。请纠正后重答："];
-
-  if (v.unverifiedPaths.length > 0) {
-    lines.push(
-      `- 你声称读取过这些文件，但本次对话没有任何真实的 read 工具执行记录：${v.unverifiedPaths.join("、")}。`,
-    );
-    lines.push(
-      opts.hasTools
-        ? "  你有可用的 read 工具——请**真正调用 read 读取这些文件后**，根据真实内容重新回答；如果不需要读，就别声称读过。"
-        : "  本次你没有可用的文件工具，无法真读文件。请**不要再编造文件内容**——直说你读不了，请用户把文件内容贴过来，或基于已知信息谨慎回答。",
-    );
-  }
-
-  if (v.unverifiedUrls && v.unverifiedUrls.length > 0) {
-    lines.push(
-      `- 你声称抓取过这些网页，但本次对话没有任何真实的 web_fetch 成功记录：${v.unverifiedUrls.join("、")}。`,
-    );
-    lines.push(
-      opts.hasTools
-        ? "  你有可用的 web_fetch 工具——请**真正调用 web_fetch 抓取这些网页后**，根据真实内容重新回答；如果不需要抓，就别声称看过。"
-        : "  本次你没有可用的网页抓取工具，无法真读网页内容。请**不要再编造网页内容**——直说你读不了，请用户把正文贴过来或截图，不要假装已经看过。",
-    );
-  }
-
-  if (v.unverifiedCommands && v.unverifiedCommands.length > 0) {
-    lines.push(
-      `- 你声称运行/搜索过这些内容，但本次对话没有任何真实的 bash/grep/web_search 成功记录：${v.unverifiedCommands.join("、")}。`,
-    );
-    lines.push(
-      opts.hasTools
-        ? "  你有可用的 bash/grep/web_search 工具——请**真正调用对应工具执行后**，根据真实结果重新回答；如果不需要执行，就别声称跑过。"
-        : "  本次你没有可用的命令/搜索工具，无法真跑这些内容。请**不要再编造执行结果**——直说你做不到，请用户把结果贴过来，或基于已知信息谨慎回答。",
-    );
-  }
-
-  if (v.pseudoToolNames.length > 0) {
-    lines.push(
-      `- 你在正文里输出了伪工具调用文本（${v.pseudoToolNames.join("、")}），这些不是本应用的真工具，系统不会执行、其"返回结果"全是你脑补的。`,
-    );
-    lines.push(
-      opts.hasTools
-        ? "  请改用系统提供的标准工具调用（结构化 tool_call），不要在正文里写工具调用格式的文本。"
-        : "  本次你没有任何可用工具。请**不要再输出任何工具调用格式的文本**，用纯文字回答，或直说这件事你做不了。",
-    );
-  }
-
-  if (v.fabricatedUsageCount) {
-    lines.push(
-      `- 你在正文里声称跑了/用了 ${v.fabricatedUsageCount} 次工具或命令，但本轮真实的工具调用次数没有这么多——这段"执行过程"是编造的。`,
-    );
-    lines.push(
-      "  请如实说明本轮实际做了什么：没有真实执行就不要报具体次数、编号、结果；如果这件事本来就做不到，直接说做不到。",
-    );
-  }
-
+  lines.push(
+    ...correctionForUnverifiedPaths(v, hasTools),
+    ...correctionForUnverifiedUrls(v, hasTools),
+    ...correctionForUnverifiedCommands(v, hasTools),
+    ...correctionForPseudoTools(v, hasTools),
+    ...correctionForFabricatedUsageCount(v),
+    ...correctionForFabricationSuspected(v, hasTools),
+  );
   lines.push("现在请重新回答用户最初的问题，遵守以上要求。");
   return lines.join("\n");
 }

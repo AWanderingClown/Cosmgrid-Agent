@@ -272,6 +272,11 @@
         "fallbackStats": "{{total}} fallbacks",
         "noFallback": "No model fallback",
         "degradedPlanWarning": "The current execution basis is a degraded plan, not a complete multi-model debate result."
+      },
+      "intentDiagnostics": {
+        "title": "Intent Recognition Detail",
+        "empty": "No records in this session yet. Send a message to trigger intent recognition.",
+        "clear": "Clear records"
       }
     },
     "workflow": {

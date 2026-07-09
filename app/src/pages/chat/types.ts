@@ -2,6 +2,7 @@ import type { Attachment } from "@/lib/llm/attachments";
 import type { RoleId } from "@/lib/llm/orchestrator";
 import type { SwitchReason } from "@/lib/llm/chat-fallback";
 import type { LlmInvocationAuditEvent } from "@/lib/llm/invocation-audit";
+import type { FabricationSuspicion } from "@/lib/llm/harness/fabrication-constants";
 
 export interface HarnessWarning {
   unverifiedPaths: string[];
@@ -9,6 +10,13 @@ export interface HarnessWarning {
   unverifiedCommands?: string[];
   pseudoToolNames: string[];
   fabricatedUsageCount?: number | null;
+  /**
+   * 语义裁判（fabrication-judge）命中——本轮回答里的具体执行结果无法被工具证据对账。
+   * UI 据此显示「未经核实的推测」之类的提示；纯前端展示，不影响重试链路（重试由
+   * useChatStream 的 stream-retry 闭环处理，verdict 上的 fabricationSuspected 字段）。
+   * 类型与后端 HarnessVerdict.fabricationSuspected 共用 FabricationSuspicion，避免两处定义漂移。
+   */
+  fabricationSuspected?: FabricationSuspicion | null;
 }
 
 export interface ReceiptContent {

@@ -32,6 +32,7 @@ import {
   isClean,
   type HarnessVerdict,
 } from "./harness/feedback";
+import type { LanguageModel } from "./provider-factory";
 import type { ChatMsg } from "./context-compressor";
 
 /** ChainContext — 接力上下文，纯函数派生。E2a 内部用，E2b 也可能用 */
@@ -212,6 +213,17 @@ export interface ChainHarnessCheckArgs {
   startedAt: string;
   finishReason: string;
   toolCallCount: number;
+  /**
+   * 当前跳的 assistant message id（可选）。useChatStream 在 onRoleStart 时为每跳造 id，
+   * 透传给 harnessCheck 让 fabrication judge 按 messageId 优先归属工具证据。
+   * 未传 → fallback 到 sinceIso 时间窗口（兜底，不污染已有真实归属的新行）。
+   */
+  assistantMessageId?: string | null;
+  /**
+   * fabrication 语义裁判用的辅助模型（可选）。复用 useChatStream 的 intentJudgeModel；
+   * 未传 → 跳过语义裁判，只走现有硬校验路径（不阻断正常回答，只是少了第二层防护）。
+   */
+  judgeModel?: LanguageModel | null;
 }
 
 export interface ChainArgs {
@@ -231,6 +243,17 @@ export interface ChainArgs {
   conversationId: string | null;
   /** 当前 project ID（可选，UsageEvent / tool_executions 关联） */
   projectId?: string | null;
+  /**
+   * 当前跳的 assistant message id（每跳 onRoleStart 时刷新，由 runChainImpl 内部维护并
+   * 透传给 harnessCheck）。让 fabrication judge 能按 messageId 优先归属工具证据。
+   * 留作可选——外部 harnessCheck 也可以走 closure 自取（兼容旧调用点）。
+   */
+  getCurrentMessageId?: () => string | null;
+  /**
+   * fabrication 语义裁判用的辅助模型——与主对话 evalHarnessForConversation 共用同一入口。
+   * 命名由调用方负责转换（useChatStream 把 prep.intentJudgeModel 映射到 judgeModel）。
+   */
+  judgeModel?: LanguageModel | null;
   /** E2a DI：测试时注入 fake streamWithFallback，避开 vi.fn() 异步 mock 拿 callbacks 的坑 */
   _deps?: { streamWithFallback?: typeof streamWithFallback };
   /** 阶段 S2：每跳回答完成后的 Harness 校验（按该跳开始时间做证据窗口过滤）。 */
@@ -386,6 +409,8 @@ export async function runChain(args: ChainArgs): Promise<ChainResult> {
             startedAt: roleStartedAt,
             finishReason: lastFinishReason,
             toolCallCount,
+            assistantMessageId: args.getCurrentMessageId?.() ?? null,
+            judgeModel: args.judgeModel ?? null,
           })
         : null;
       const needsCorrection = !!(finalHarnessVerdict && !isClean(finalHarnessVerdict));

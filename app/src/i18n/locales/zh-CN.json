@@ -272,6 +272,11 @@
         "fallbackStats": "共 {{total}} 次 fallback",
         "noFallback": "没有模型切换",
         "degradedPlanWarning": "当前执行依据来自降级方案，不是完整多模型博弈结果。"
+      },
+      "intentDiagnostics": {
+        "title": "意图识别细节",
+        "empty": "本会话还没有记录。先发一条消息让意图识别跑一轮。",
+        "clear": "清空记录"
       }
     },
     "workflow": {

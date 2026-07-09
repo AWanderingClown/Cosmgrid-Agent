@@ -229,3 +229,83 @@ describe("buildIntentNudgePrompt（阶段 H：nudge 重答话术）", () => {
     expect(correction).toContain("编造"); // correction 说编造
   });
 });
+
+// ===== 防编造（fabrication-judge）字段 =====
+describe("fabricationSuspected 字段（防编造阶段 B 闭环）", () => {
+  it("fabricationSuspected 非空 → isClean 返回 false", () => {
+    const v = {
+      unverifiedPaths: [],
+      pseudoToolNames: [],
+      fabricationSuspected: { claimedActions: ["查询了 example.db"], reason: "无工具来源的具体命中" },
+    };
+    expect(isClean(v)).toBe(false);
+  });
+
+  it("fabricationSuspected 为 null/undefined → 不影响 isClean（其他字段干净时仍 true）", () => {
+    expect(isClean({ unverifiedPaths: [], pseudoToolNames: [], fabricationSuspected: null })).toBe(true);
+    expect(isClean({ unverifiedPaths: [], pseudoToolNames: [] })).toBe(true);
+  });
+
+  it("fabricationSuspected 与 unverifiedPaths 同存 → isClean 仍返 false（多源不互相抵消）", () => {
+    expect(
+      isClean({
+        unverifiedPaths: ["x.ts"],
+        pseudoToolNames: [],
+        fabricationSuspected: { claimedActions: [], reason: "x" },
+      }),
+    ).toBe(false);
+  });
+
+  it("有工具 + fabricationSuspected → 纠正话术要求真正调用工具重答（不要凭记忆补数字/命中）", () => {
+    const p = buildCorrectionPrompt(
+      {
+        unverifiedPaths: [],
+        pseudoToolNames: [],
+        fabricationSuspected: {
+          claimedActions: ["查询了 example.db", "person 表 3 条记录"],
+          reason: "无工具来源的具体命中",
+        },
+      },
+      { hasTools: true },
+    );
+    expect(p).toContain("真正调用对应工具");
+    expect(p).toContain("不要凭记忆补数字");
+    expect(p).toContain("查询了 example.db");
+    expect(p).toContain("person 表 3 条记录");
+    expect(p).toContain("无工具来源的具体命中");
+  });
+
+  it("无工具 + fabricationSuspected → 纠正话术承认无法验证、不再编造具体结果", () => {
+    const p = buildCorrectionPrompt(
+      {
+        unverifiedPaths: [],
+        pseudoToolNames: [],
+        fabricationSuspected: { claimedActions: ["x"], reason: "y" },
+      },
+      { hasTools: false },
+    );
+    expect(p).toContain("无法验证");
+    expect(p).not.toContain("真正调用对应工具"); // 无工具时不该要求调用
+    expect(p).not.toContain("不要凭记忆补数字"); // 这条是有工具时的口径
+  });
+
+  it("fabricationSuspected 单独存在（其他字段干净）→ buildCorrectionPrompt 仍返回非空串（不漏 fabrication 分支）", () => {
+    const p = buildCorrectionPrompt(
+      {
+        unverifiedPaths: [],
+        pseudoToolNames: [],
+        fabricationSuspected: { claimedActions: ["x"], reason: "y" },
+      },
+      { hasTools: true },
+    );
+    expect(p.length).toBeGreaterThan(0);
+    expect(p).toContain("⚠️"); // 跟其他分支一致的开头
+  });
+
+  it("fabricationSuspected 字段为可空（向后兼容旧调用点）", () => {
+    // evaluateHarness 返回值不含 fabricationSuspected，旧调用点也不会传
+    const oldVerdict = evaluateHarness("纯闲聊", []);
+    expect(oldVerdict.fabricationSuspected).toBeUndefined();
+    expect(isClean(oldVerdict)).toBe(true);
+  });
+});

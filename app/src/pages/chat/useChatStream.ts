@@ -70,11 +70,22 @@ import { classifyTurnIntentWithJudge } from "@/lib/workflow/intent-judge";
 import { isExplicitDebateRequest } from "@/lib/workflow/intent-classifier";
 import { detectIntentCorrection, intentActionLabel } from "@/lib/workflow/intent-feedback";
 import { downweightMisjudgedExampleInDb } from "@/lib/workflow/intent-decay";
+import { appendIntentDiagnostics } from "@/lib/workflow/intent-diagnostics-buffer";
+import { routeTurnIntentSemantically } from "@/lib/workflow/semantic-intent-router";
 import { buildSkillPreamble } from "@/lib/skills/preamble";
 import { selectSkillForTurn } from "@/lib/skills/selector";
 import { applyTurnIntentDecision, attachActiveSkillToWorkflow, attachPlanSourceToWorkflow, completeCurrentWorkflowNode } from "@/lib/workflow/reducer";
 import { buildWorkflowContextPreamble, readDesktopPlanForExecution } from "@/lib/workflow/execution-context";
 import { evaluateHarness, isClean, detectIntentNoToolCall } from "@/lib/llm/harness/feedback";
+import {
+  classifyFabricationGate,
+  judgeFabrication,
+  FABRICATION_CONFIDENCE_THRESHOLD,
+} from "@/lib/llm/harness/fabrication-judge";
+import {
+  buildFabricationEvidenceSummary,
+  selectRowsForMessage,
+} from "@/lib/llm/harness/fabrication-evidence";
 import { runChain as runChainImpl } from "@/lib/llm/chain-runner";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
 import { formatLocalMcpLaunch } from "@/lib/mcp/session-scope";
@@ -244,11 +255,25 @@ export function useChatStream(opts: UseChatStreamOptions) {
   }, [messages, scrollRef, stickToBottomRef]);
 
   // evalHarnessForConversation：当前会话的本轮工具审计 + harness 判定
+  //
+  // 两阶段（2026-07-09 加 fabrication 第二阶段）：
+  //   阶段 A：现有硬校验（extract-claims / verify-claims / detect-pseudo-tools /
+  //           detect-usage-narration），由 evaluateHarness 输出 verdict
+  //   阶段 B：verdict 干净时调 fabrication-judge（按 messageId 优先 + sinceIso 兜底
+  //           的证据摘要），命中阈值后回写 fabricationSuspected
+  //
+  // 两阶段共用同一份 tool_executions 查询，避免重复 IO。返回的 verdict 由调用方
+  // （主对话 / 团队负责人链路）走同一个 isClean / buildCorrectionPrompt 闭环。
   async function evalHarnessForConversation(
     convId: string | null,
     content: string,
     sinceIso: string | null,
     actualToolCallCount = 0,
+    opts: {
+      assistantMessageId?: string | null;
+      finishReason?: string | null;
+      judgeModel?: import("@/lib/llm/provider-factory").LanguageModel | null;
+    } = {},
   ) {
     if (!convId || !content.trim()) return null;
     try {
@@ -258,10 +283,72 @@ export function useChatStream(opts: UseChatStreamOptions) {
       const readRecords = filterReadRecordsSince(all, sinceIso);
       const fetchRecords = filterFetchRecordsSince(all, sinceIso);
       const execRecords = filterExecRecordsSince(all, sinceIso);
-      return evaluateHarness(content, readRecords, actualToolCallCount, fetchRecords, execRecords);
+      const verdict = evaluateHarness(
+        content,
+        readRecords,
+        actualToolCallCount,
+        fetchRecords,
+        execRecords,
+      );
+
+      // 阶段 A 已命中（regex 已抓到）→ 不再调语义裁判（避免双重处罚 + 节省成本）
+      if (!isClean(verdict)) return verdict;
+
+      // 阶段 B：交给辅助函数（避免本函数超 50 行）
+      return await runFabricationJudgeStage(all, verdict, {
+        content,
+        sinceIso,
+        actualToolCallCount,
+        finishReason: opts.finishReason ?? "stop",
+        assistantMessageId: opts.assistantMessageId ?? null,
+        judgeModel: opts.judgeModel ?? null,
+      });
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 阶段 B：fabrication 语义裁判（独立辅助函数）。
+   * 两档门控命中 + judgeModel 可用 → 构造证据摘要 → judgeFabrication → 命中阈值回写 fabricationSuspected。
+   */
+  async function runFabricationJudgeStage(
+    all: ToolExecutionRow[],
+    verdict: ReturnType<typeof evaluateHarness>,
+    args: {
+      content: string;
+      sinceIso: string | null;
+      actualToolCallCount: number;
+      finishReason: string;
+      assistantMessageId: string | null;
+      judgeModel: import("@/lib/llm/provider-factory").LanguageModel | null;
+    },
+  ) {
+    const gate = classifyFabricationGate({
+      regexClean: true,
+      finishReason: args.finishReason,
+      toolCallCount: args.actualToolCallCount,
+      content: args.content,
+    });
+    if (gate === false) return verdict;
+    if (!args.judgeModel) return verdict;
+
+    const rowsForMessage = selectRowsForMessage(all, {
+      assistantMessageId: args.assistantMessageId,
+      sinceIso: args.sinceIso,
+    });
+    const summary = buildFabricationEvidenceSummary(rowsForMessage);
+    const judgement = await judgeFabrication(args.content, args.judgeModel, summary);
+    if (judgement.fabricated && judgement.confidence >= FABRICATION_CONFIDENCE_THRESHOLD) {
+      return {
+        ...verdict,
+        fabricationSuspected: {
+          claimedActions: judgement.claimedActions,
+          reason: judgement.reason,
+        },
+      };
+    }
+    return verdict;
   }
 
   // handleSend 整体（含 5 段 helper）
@@ -481,6 +568,26 @@ export function useChatStream(opts: UseChatStreamOptions) {
           });
           turnIntentDecision = decision;
           intentJudgeCalledThisTurn = true;
+
+          // L9 意图识别细节面板（开发者模式可见）：记录本轮决策 + 自跑一遍 router 拿真实命中层。
+          // try/catch 隔离，诊断失败绝不阻断主对话（参考 v3.4 §0.3 产物纪律 + "别把代码堆回大文件"）。
+          try {
+            const diagnosticRoute = routeTurnIntentSemantically(
+              text,
+              learnedExamples.length
+                ? [...BUILTIN_INTENT_EXAMPLES, ...learnedExamples]
+                : BUILTIN_INTENT_EXAMPLES,
+            );
+            appendIntentDiagnostics({
+              id: crypto.randomUUID(),
+              capturedAt: new Date().toISOString(),
+              userTextExcerpt: text.length > 80 ? `${text.slice(0, 80)}…` : text,
+              decision,
+              route: diagnosticRoute,
+            });
+          } catch {
+            // ignore
+          }
 
           if (decision.action === "start_run") {
             const currentConversation = conversationList.find((c) => c.id === convId) ?? null;
@@ -1103,6 +1210,11 @@ export function useChatStream(opts: UseChatStreamOptions) {
             streamingState.fullContent,
             turnStartedAt,
             streamingState.lastToolCallCount,
+            {
+              assistantMessageId: assistantId,
+              finishReason: streamingState.lastFinishReason,
+              judgeModel: intentJudgeModel,
+            },
           );
           const harnessDirty = !!(verdict && !isClean(verdict));
           const nudgeNeeded =
@@ -1144,6 +1256,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
                         unverifiedCommands: verdict!.unverifiedCommands,
                         pseudoToolNames: verdict!.pseudoToolNames,
                         fabricatedUsageCount: verdict!.fabricatedUsageCount ?? null,
+                        fabricationSuspected: verdict!.fabricationSuspected ?? null,
                       },
                     }
                   : m,
@@ -1239,7 +1352,10 @@ export function useChatStream(opts: UseChatStreamOptions) {
         convId,
         effectiveWorkspace,
         turnIntentDecision,
-      } = prep;
+        intentJudgeModel,
+      } = prep as Awaited<ReturnType<typeof prepareTurn>> & {
+        intentJudgeModel: import("@/lib/llm/provider-factory").LanguageModel | null;
+      };
       const taskRole = (prep as any).taskRole;
       const cacheIntent = (prep as any).cacheIntent as TurnIntentDecision;
       if (
@@ -1266,6 +1382,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
               conversationId: convId,
               userTask: text,
               messages: newMessages,
+              judgeModel: intentJudgeModel,
             });
           },
         });
@@ -1355,6 +1472,8 @@ export function useChatStream(opts: UseChatStreamOptions) {
       conversationId: string;
       userTask: string;
       messages: ChatMessage[];
+      /** fabrication 语义裁判用的辅助模型（与主对话 evalHarnessForConversation 共用同一入口） */
+      judgeModel: import("@/lib/llm/provider-factory").LanguageModel | null;
     }) {
       if (args.controller.signal.aborted || args.chain.length === 0) return;
       try {
@@ -1377,6 +1496,9 @@ export function useChatStream(opts: UseChatStreamOptions) {
 
         const roleMsgIds: Partial<Record<RoleId, string>> = {};
         const roleMsgContents: Partial<Record<RoleId, string>> = {};
+        // 当前跳的 message id（每次 onRoleStart 刷新）——给 harnessCheck 用，让 fabrication judge
+        // 能按 messageId 优先归属工具证据，避免时间窗口误借到其他跳/其他对话的记录
+        const chainCurrentMessageIdRef: { current: string | null } = { current: null };
         const chainPath = buildChainPath({ chain: args.chain, t });
 
         chainAbortRef.current = args.controller;
@@ -1388,8 +1510,14 @@ export function useChatStream(opts: UseChatStreamOptions) {
           models: endpoints,
           tools: args.tools,
           conversationId: args.conversationId,
-          harnessCheck: async ({ content, startedAt, toolCallCount }) => {
-            return evalHarnessForConversation(args.conversationId, content, startedAt, toolCallCount);
+          getCurrentMessageId: () => chainCurrentMessageIdRef.current,
+          harnessCheck: async ({ content, startedAt, toolCallCount, finishReason, assistantMessageId }) => {
+            // 团队负责人链路：等价于主对话（防编造 §5.3）——assemble 两档门控 + 证据摘要
+            return evalHarnessForConversation(args.conversationId, content, startedAt, toolCallCount, {
+              assistantMessageId: assistantMessageId ?? null,
+              finishReason,
+              judgeModel: args.judgeModel,
+            });
           },
           callbacks: {
             onChainStart: (total) => {
@@ -1402,6 +1530,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
             onRoleStart: (role, idx, total) => {
               const id = crypto.randomUUID();
               roleMsgIds[role] = id;
+              chainCurrentMessageIdRef.current = id; // 刷新当前跳的 messageId 给 harnessCheck 用
               roleMsgContents[role] = "";
               setMessages((prev) => [
                 ...prev,
