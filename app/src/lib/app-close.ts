@@ -1,5 +1,5 @@
-import { disposeLspSessions } from "@/lib/lsp/lsp-session";
-import { disposeAllMcpSessions } from "@/lib/mcp/client";
+import { disposeLspSessions, hasLspSessions } from "@/lib/lsp/lsp-session";
+import { disposeAllMcpSessions, hasKnownMcpSessions } from "@/lib/mcp/client";
 
 export const CLOSE_CLEANUP_TIMEOUT_MS = 1_500;
 
@@ -10,6 +10,10 @@ interface CloseCleanupOptions {
 }
 
 export type CloseCleanupResult = "completed" | "timed_out";
+
+export function hasBackgroundSessionsForClose(): boolean {
+  return hasLspSessions() || hasKnownMcpSessions();
+}
 
 export async function disposeBackgroundSessionsForClose(
   options: CloseCleanupOptions = {},

@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 import { OnboardingModal } from "@/pages/OnboardingModal";
-import { disposeBackgroundSessionsForClose } from "@/lib/app-close";
+import { disposeBackgroundSessionsForClose, hasBackgroundSessionsForClose } from "@/lib/app-close";
 import { migrateLegacyMcpServerSecrets } from "@/lib/mcp/secret-store";
 
 const ChatPage = lazy(() => import("@/pages/ChatPage").then((m) => ({ default: m.ChatPage })));
@@ -123,6 +123,7 @@ function App() {
     const appWindow = getCurrentWindow();
     const unlisten = appWindow.onCloseRequested(async (event) => {
       if (closing) return;
+      if (!hasBackgroundSessionsForClose()) return;
       event.preventDefault();
       closing = true;
       await disposeBackgroundSessionsForClose();

@@ -14,8 +14,20 @@ interface LocalMcpSession {
   transport: TauriRpcTransport;
 }
 
+type RemoteClientModule = typeof import("./remote-client");
+
 const localSessions = new Map<string, Promise<LocalMcpSession>>();
 const MCP_PROTOCOL_VERSION = "2025-11-25";
+let remoteClientModulePromise: Promise<RemoteClientModule> | null = null;
+
+function loadRemoteClient(): Promise<RemoteClientModule> {
+  remoteClientModulePromise ??= import("./remote-client");
+  return remoteClientModulePromise;
+}
+
+export function hasKnownMcpSessions(): boolean {
+  return localSessions.size > 0 || remoteClientModulePromise !== null;
+}
 
 async function getLocalSession(server: McpServerRow, workspacePath?: string): Promise<LocalMcpSession> {
   const scope = buildLocalMcpSessionScope(server, workspacePath);
@@ -66,11 +78,11 @@ async function disposeStaleLocalConfigSessions(serverId: string, configFingerpri
 
 export async function listMcpTools(server: McpServerRow, workspacePath?: string): Promise<McpToolLike[]> {
   if (server.transport === "remote_http") {
-    const { listRemoteMcpTools } = await import("./remote-client");
+    const { listRemoteMcpTools } = await loadRemoteClient();
     return listRemoteMcpTools(server);
   }
   const session = await getLocalSession(server, workspacePath);
-  const { listAllRemoteTools } = await import("./remote-client");
+  const { listAllRemoteTools } = await loadRemoteClient();
   return listAllRemoteTools({
     listTools: (params) => session.client.call<McpToolListResult>("tools/list", params),
   });
@@ -84,7 +96,7 @@ export async function callMcpTool(
 ): Promise<McpToolCallResult> {
   const params = { name: toolName, arguments: input };
   if (server.transport === "remote_http") {
-    const { callRemoteMcpTool } = await import("./remote-client");
+    const { callRemoteMcpTool } = await loadRemoteClient();
     return callRemoteMcpTool(server, toolName, input);
   }
   const session = await getLocalSession(server, workspacePath);
@@ -102,10 +114,10 @@ export async function disposeLocalMcpSessions(): Promise<void> {
 }
 
 export async function disposeAllMcpSessions(): Promise<void> {
-  const { disposeRemoteMcpSessions } = await import("./remote-client");
+  const remoteClient = remoteClientModulePromise ? await remoteClientModulePromise : null;
   await Promise.all([
     disposeLocalMcpSessions(),
-    disposeRemoteMcpSessions(),
+    remoteClient ? remoteClient.disposeRemoteMcpSessions() : Promise.resolve(),
   ]);
 }
 
@@ -118,6 +130,6 @@ export async function disposeMcpServerSessions(serverId: string): Promise<void> 
     entry.value.client.dispose();
     return entry.value.transport.dispose();
   }));
-  const { disposeRemoteMcpServerSessions } = await import("./remote-client");
-  await disposeRemoteMcpServerSessions(serverId);
+  const remoteClient = remoteClientModulePromise ? await remoteClientModulePromise : null;
+  await remoteClient?.disposeRemoteMcpServerSessions(serverId);
 }

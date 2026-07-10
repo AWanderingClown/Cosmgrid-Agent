@@ -19,6 +19,10 @@ interface RemoteMcpSession {
 
 const remoteSessions = new Map<string, Promise<RemoteMcpSession>>();
 
+export function hasRemoteMcpSessions(): boolean {
+  return remoteSessions.size > 0;
+}
+
 function stableHash(value: string): string {
   let hash = 2166136261;
   for (let index = 0; index < value.length; index++) {

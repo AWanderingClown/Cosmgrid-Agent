@@ -1,5 +1,15 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { disposeBackgroundSessionsForClose } from "../app-close";
+import { disposeBackgroundSessionsForClose, hasBackgroundSessionsForClose } from "../app-close";
+
+vi.mock("../lsp/lsp-session", () => ({
+  disposeLspSessions: vi.fn(async () => undefined),
+  hasLspSessions: vi.fn(() => false),
+}));
+
+vi.mock("../mcp/client", () => ({
+  disposeAllMcpSessions: vi.fn(async () => undefined),
+  hasKnownMcpSessions: vi.fn(() => false),
+}));
 
 describe("disposeBackgroundSessionsForClose", () => {
   afterEach(() => {
@@ -26,5 +36,9 @@ describe("disposeBackgroundSessionsForClose", () => {
 
     await vi.advanceTimersByTimeAsync(100);
     await expect(result).resolves.toBe("timed_out");
+  });
+
+  it("reports no background sessions for a plain chat-only window", () => {
+    expect(hasBackgroundSessionsForClose()).toBe(false);
   });
 });

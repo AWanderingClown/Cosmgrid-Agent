@@ -34,6 +34,10 @@ interface LspHover {
 
 const sessions = new Map<string, Promise<SessionEntry>>();
 
+export function hasLspSessions(): boolean {
+  return sessions.size > 0;
+}
+
 function sessionKey(workspacePath: string, server: LspServerConfig): string {
   return `${workspacePath}::${server.program}::${server.args.join(" ")}`;
 }
