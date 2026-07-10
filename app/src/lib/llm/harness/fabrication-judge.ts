@@ -64,6 +64,19 @@ const SPECIFIC_RESULT_HINTS: readonly RegExp[] = [
   /(?:根本|绝对|一定|必然|肯定|100%|100\s*%)\s*(?:编译|运行|失败|成功|通过|能|不能)/,
 ];
 
+const ZERO_TOOL_EXECUTION_CLAIM_HINTS: readonly RegExp[] = [
+  /(?:我|已|已经|刚刚|刚|实际|真的|亲自)[^\n]{0,8}(?:查询|检索|搜索|找到|读取|读到|打开|查看|检查|运行|执行|测试|构建|编译|跑过|查过)/,
+  /(?:查询|检索|搜索|读取|运行|执行|测试|构建|编译|跑过)[^\n]{0,8}(?:完成|成功|失败|通过|结果|输出|返回)/,
+];
+
+function hasSpecificResultClaim(content: string): boolean {
+  return SPECIFIC_RESULT_HINTS.some((re) => re.test(content));
+}
+
+function hasZeroToolExecutionClaim(content: string): boolean {
+  return ZERO_TOOL_EXECUTION_CLAIM_HINTS.some((re) => re.test(content));
+}
+
 /** 门控分类：A 档（0 工具）/B 档（有工具+具体结果特征）/false（不进入裁判）。 */
 export type FabricationGate = "A" | "B" | false;
 
@@ -90,8 +103,11 @@ export function classifyFabricationGate(args: {
   if (args.finishReason !== "stop") return false;
   if (args.content.trim().length < FABRICATION_MIN_CONTENT_LEN) return false;
 
-  if (args.toolCallCount === 0) return "A";
-  if (SPECIFIC_RESULT_HINTS.some((re) => re.test(args.content))) return "B";
+  const hasSpecificResult = hasSpecificResultClaim(args.content);
+  if (args.toolCallCount === 0) {
+    return hasSpecificResult || hasZeroToolExecutionClaim(args.content) ? "A" : false;
+  }
+  if (hasSpecificResult) return "B";
   return false;
 }
 

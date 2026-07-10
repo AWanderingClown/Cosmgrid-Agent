@@ -25,12 +25,23 @@ const ABSOLUTE_CLAIM =
   "项目根本编译不过，所有源文件都没法通过类型检查，100% 失败，连最简单的导入语句都跑不动，应该立刻停下来排查。";
 const SUBJECTIVE_PERCENT =
   "整体完成度大约 85%，地基比基线好很多，质量提升明显，比预期要快一些，但仍有少量模块需要打磨优化。";
+const NORMAL_KNOWLEDGE_LIMIT_ANSWER =
+  "我的知识截止于 2025 年 5 月。但当前时间是你本地的 2026 年 7 月 10 日，所以遇到需要最新信息的问题，直接告诉我，我可以去查。";
 
 describe("shouldJudgeFabrication 门控", () => {
   const base = { regexClean: true, finishReason: "stop", toolCallCount: 0, content: LONG_FABRICATED };
 
   it("正则全 clean + stop + 0 工具 + 正文够长 → 进裁判", () => {
     expect(shouldJudgeFabrication(base)).toBe(true);
+  });
+
+  it("0 工具 + 普通长回答（未声称已查/已执行）→ 不进裁判，避免正常对话收尾卡住", () => {
+    expect(
+      shouldJudgeFabrication({
+        ...base,
+        content: NORMAL_KNOWLEDGE_LIMIT_ANSWER,
+      }),
+    ).toBe(false);
   });
 
   it("正则已命中（regexClean=false）→ 走原路，不重复判", () => {
@@ -76,6 +87,15 @@ describe("classifyFabricationGate 档位分流", () => {
 
   it("0 工具调用 → A 档", () => {
     expect(classifyFabricationGate(base)).toBe("A");
+  });
+
+  it("0 工具 + 普通解释 → false（A 档也必须有执行/结果声明）", () => {
+    expect(
+      classifyFabricationGate({
+        ...base,
+        content: NORMAL_KNOWLEDGE_LIMIT_ANSWER,
+      }),
+    ).toBe(false);
   });
 
   it("有工具 + 具体数字 → B 档", () => {
