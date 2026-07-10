@@ -1,7 +1,9 @@
+import type { Dispatch, SetStateAction } from "react";
 import type { TFunction } from "i18next";
+import { messages as dbMessages } from "@/lib/db";
 import type { ModelListItem } from "@/lib/api";
 import type { OrchestrationChange, OrchestrationState } from "@/lib/llm/orchestrator";
-import type { ReceiptContent } from "./types";
+import type { ChatMessage, ReceiptContent } from "./types";
 
 export function buildOrchestrationReceipt(args: {
   change: OrchestrationChange;
@@ -44,4 +46,25 @@ export function buildOrchestrationReceipt(args: {
     .join("\n");
   const detail = `${t("chat.orchestrator.receiptReason", { reason })}\n\n${t("chat.orchestrator.detailNodes")}：\n${nodesList}`;
   return { summary, detail };
+}
+
+export async function appendOrchestrationReceiptMessage(args: {
+  conversationId: string;
+  receipt: ReceiptContent;
+  setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
+}) {
+  let noteId: string = crypto.randomUUID();
+  try {
+    noteId = (await dbMessages.create({
+      conversationId: args.conversationId,
+      role: "note",
+      content: JSON.stringify(args.receipt),
+    })).id;
+  } catch {
+    // 回执落库失败仍在内存里展示
+  }
+  args.setMessages((prev) => [
+    ...prev,
+    { id: noteId, role: "assistant", content: "", kind: "receipt", receipt: args.receipt },
+  ]);
 }

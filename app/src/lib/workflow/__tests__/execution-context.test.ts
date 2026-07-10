@@ -11,6 +11,7 @@ function fakeFs(files: Record<string, string>): FsAdapter {
       if (path in files) return files[path]!;
       throw new Error(`ENOENT: ${path}`);
     },
+    readBytes: async () => new Uint8Array(0),
     readDir: async () => [],
     writeTextFile: async () => {},
     mkdirp: async () => {},
