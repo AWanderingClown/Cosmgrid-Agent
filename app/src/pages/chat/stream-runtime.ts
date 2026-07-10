@@ -18,6 +18,7 @@ import {
   type StreamingTurnState,
 } from "@/pages/chat/streaming-callbacks";
 import type { ChatMessage } from "@/pages/chat/types";
+import type { StreamActivityPhase } from "@/pages/chat/streaming-status";
 
 export interface RunChatStreamRuntimeArgs {
   chain: ModelEndpoint[];
@@ -49,6 +50,7 @@ export interface RunChatStreamRuntimeArgs {
   setSwitchNotice: Dispatch<SetStateAction<string | null>>;
   setLastUsage: Dispatch<SetStateAction<StreamUsage | null>>;
   setHarnessNotice: Dispatch<SetStateAction<string | null>>;
+  setStreamActivityPhase?: Dispatch<SetStateAction<StreamActivityPhase>>;
 }
 
 export interface RunChatStreamRuntimeResult extends StreamingTurnState {
@@ -65,6 +67,7 @@ export async function runChatStreamRuntime(
   let forceToolChoiceRequired = false;
 
   for (let attempt = 0; ; attempt++) {
+    args.setStreamActivityPhase?.("streaming");
     streamingState.fullContent = "";
     if (attempt > 0) {
       args.setMessages((prev) =>
@@ -111,12 +114,17 @@ export async function runChatStreamRuntime(
       return { ...streamingState, aborted: true };
     }
 
-    const verdict = await args.evalHarness({
-      content: streamingState.fullContent,
-      actualToolCallCount: streamingState.lastToolCallCount,
-      assistantMessageId: args.assistantId,
-      finishReason: streamingState.lastFinishReason,
-    });
+    const verdict = args.pureMode
+      ? null
+      : await (async () => {
+        args.setStreamActivityPhase?.("checking");
+        return args.evalHarness({
+          content: streamingState.fullContent,
+          actualToolCallCount: streamingState.lastToolCallCount,
+          assistantMessageId: args.assistantId,
+          finishReason: streamingState.lastFinishReason,
+        });
+      })();
     const harnessDirty = !!(verdict && !isClean(verdict));
     const nudgeNeeded =
       !harnessDirty &&

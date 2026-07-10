@@ -15,7 +15,7 @@ import type { ToolCallView } from "@/lib/work-artifact-views";
 import type { WorkArtifact } from "@/lib/work-artifacts";
 import type { WorkflowEvent } from "@/lib/db";
 import type { WorkflowSnapshot } from "@/lib/workflow/types";
-import { formatElapsed } from "./streaming-status";
+import { formatElapsed, type StreamActivityPhase } from "./streaming-status";
 import type { ChatMessage } from "./types";
 
 const WorkPanelIde = lazy(() => import("@/components/work-panel/WorkPanelIde").then((m) => ({ default: m.WorkPanelIde })));
@@ -47,6 +47,7 @@ interface ChatWorkPanelProps {
   artifacts: WorkArtifact[];
   toolCalls: ToolCallView[];
   running: boolean;
+  streamActivityPhase: StreamActivityPhase;
   streamElapsedMs: number;
   activeModelLabel: string;
   messages: ChatMessage[];
@@ -68,6 +69,7 @@ export function ChatWorkPanel({
   artifacts,
   toolCalls,
   running,
+  streamActivityPhase,
   streamElapsedMs,
   activeModelLabel,
   messages,
@@ -203,7 +205,7 @@ export function ChatWorkPanel({
               running={running}
               activeLabel={
                 running
-                  ? `${t("chat.replying")} · ${formatElapsed(streamElapsedMs)} · ${activeModelLabel}`
+                  ? `${streamActivityPhase === "checking" ? t("chat.checking") : t("chat.replying")} · ${formatElapsed(streamElapsedMs)} · ${activeModelLabel}`
                   : t("chat.workPanel.idle")
               }
             />

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import type { ToolCallView } from "@/lib/work-artifact-views";
 import { MessageItem, ReceiptItem } from "./ChatMessageItem";
 import { QueuedMessageItem } from "./QueuedMessageItem";
-import { formatElapsed } from "./streaming-status";
+import { formatElapsed, type StreamActivityPhase } from "./streaming-status";
 import type { ChatMessage, PendingSend } from "./types";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 
@@ -13,6 +13,7 @@ export function ChatTranscript({
   availableModelCount,
   messages,
   isStreaming,
+  streamActivityPhase,
   pendingQueue,
   inputAreaH,
   streamElapsedMs,
@@ -23,6 +24,7 @@ export function ChatTranscript({
   availableModelCount: number;
   messages: ChatMessage[];
   isStreaming: boolean;
+  streamActivityPhase: StreamActivityPhase;
   pendingQueue: PendingSend[];
   inputAreaH: number;
   streamElapsedMs: number;
@@ -73,6 +75,7 @@ export function ChatTranscript({
                 role={m.role}
                 text={m.content}
                 isStreaming={streamingThis}
+                streamActivityPhase={streamingThis ? streamActivityPhase : "idle"}
                 elapsedLabel={streamingThis ? formatElapsed(streamElapsedMs) : undefined}
                 attachments={m.attachments}
                 harness={m.harness}

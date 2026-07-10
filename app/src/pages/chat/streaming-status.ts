@@ -4,6 +4,8 @@ export interface AssistantModelMessage {
   modelLabel?: string;
 }
 
+export type StreamActivityPhase = "idle" | "streaming" | "checking";
+
 export function getActiveAssistantModelLabel(
   messages: readonly AssistantModelMessage[],
   selectedModelLabel: string,
@@ -22,4 +24,12 @@ export function formatElapsed(ms: number): string {
   const totalSec = Math.floor(ms / 1000);
   if (totalSec < 60) return `${totalSec}s`;
   return `${Math.floor(totalSec / 60)}m ${totalSec % 60}s`;
+}
+
+export function getAssistantActivityLabel(
+  phase: StreamActivityPhase,
+  replyingLabel: string,
+  checkingLabel: string,
+): string {
+  return phase === "checking" ? checkingLabel : replyingLabel;
 }

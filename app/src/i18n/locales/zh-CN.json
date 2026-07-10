@@ -107,6 +107,7 @@
       "idle": "空闲，等你发话",
       "working": "正在工作",
       "replying": "模型正在回复",
+      "checking": "正在自检",
       "done": "执行完毕",
       "awaitingApproval": "等待你确认"
     },
@@ -325,6 +326,7 @@
     "toolCallDone": "工具调用片段",
     "jumpToBottom": "回到底部",
     "replying": "回复中",
+    "checking": "正在自检",
     "stopped": "已停止",
     "queued": "排队中",
     "inputDraftHint": "模型回复中… 可以继续发，会排队依次处理",

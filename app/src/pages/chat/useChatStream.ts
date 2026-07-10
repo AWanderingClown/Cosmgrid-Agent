@@ -50,6 +50,7 @@ import { prepareTurnModels } from "@/pages/chat/turn-model-preparation";
 import { prepareTurnPersistence } from "@/pages/chat/turn-persistence";
 import { resolveWriteGuardRuntime } from "@/pages/chat/write-guard-runtime";
 import { prepareChatWorkspaceRuntime } from "@/pages/chat/workspace-runtime";
+import type { StreamActivityPhase } from "@/pages/chat/streaming-status";
 import type { ChatMessage, PendingRoutingDecision, PendingSend } from "@/pages/chat/types";
 
 type ChatUsage = StreamUsage;
@@ -138,6 +139,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
   // 流式 state（isStreaming 提到 ChatPage 顶层共享，避免 hook C/E 循环依赖）
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamElapsedMs, setStreamElapsedMs] = useState(0);
+  const [streamActivityPhase, setStreamActivityPhase] = useState<StreamActivityPhase>("idle");
   const [pendingQueue, setPendingQueue] = useState<PendingSend[]>([]);
   const drainingRef = useRef(false);
   const [streamError, setStreamError] = useState<string | null>(null);
@@ -208,6 +210,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
     abortRef.current = controller;
     const cleanupStoppedTurn = () => {
       setIsStreaming(false);
+      setStreamActivityPhase("idle");
       if (abortRef.current === controller) abortRef.current = null;
     };
     const stopIfAborted = () => {
@@ -638,6 +641,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
           setSwitchNotice,
           setLastUsage,
           setHarnessNotice,
+          setStreamActivityPhase,
         });
         if (streamingResult.aborted) return;
         const finalized = await finalizeStreamedChatTurn({
@@ -686,6 +690,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         setMessages((prev) => prev.filter((m) => m.id !== assistantId || m.content !== ""));
       } finally {
         setIsStreaming(false);
+        setStreamActivityPhase("idle");
         abortRef.current = null;
         if (convId) {
           void toolExecutions.listByConversation(convId).then(applyToolExecutionRows).catch(() => {});
@@ -755,6 +760,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
     chainAbortRef.current = null;
     setPendingQueue([]);
     setIsStreaming(false);
+    setStreamActivityPhase("idle");
     setChainRunning(false);
   }
 
@@ -795,6 +801,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
     setCacheNotice,
     setPersistNotice,
     streamElapsedMs,
+    streamActivityPhase,
     streamError,
     switchNotice,
   };

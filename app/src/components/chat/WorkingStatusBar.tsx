@@ -1,8 +1,17 @@
 import { CheckCircle2, Clock, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ToolCallView } from "@/lib/work-artifact-views";
+import type { StreamActivityPhase } from "@/pages/chat/streaming-status";
 
-export function WorkingStatusBar({ activeCall, running }: { activeCall?: ToolCallView; running: boolean }) {
+export function WorkingStatusBar({
+  activeCall,
+  running,
+  phase = "streaming",
+}: {
+  activeCall?: ToolCallView;
+  running: boolean;
+  phase?: StreamActivityPhase;
+}) {
   const { t } = useTranslation();
   const activeSummary = activeCall
     ? t(`chat.toolSteps.${activeCall.summaryKey}`, { ...activeCall.summaryVars, defaultValue: activeCall.shortSummary })
@@ -36,7 +45,7 @@ export function WorkingStatusBar({ activeCall, running }: { activeCall?: ToolCal
     return (
       <div className="flex min-w-0 items-center gap-2 text-[11px] text-primary">
         <Loader2 className="h-3 w-3 animate-spin" />
-        <span className="font-semibold">{t("chat.working.replying")}</span>
+        <span className="font-semibold">{phase === "checking" ? t("chat.working.checking") : t("chat.working.replying")}</span>
       </div>
     );
   }

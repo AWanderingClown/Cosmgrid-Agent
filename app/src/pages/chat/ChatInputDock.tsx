@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import type { Attachment } from "@/lib/llm/attachments";
 import type { ToolCallView } from "@/lib/work-artifact-views";
 import type { ToolConfirmRequest, AskUserRequest } from "@/lib/llm/tools";
+import type { StreamActivityPhase } from "@/pages/chat/streaming-status";
 
 type PermissionMode = "read" | "confirm" | "auto";
 
@@ -19,6 +20,7 @@ interface ChatInputDockProps {
   onPaste: (event: ClipboardEvent) => void;
   activeToolCall: ToolCallView | undefined;
   isStreaming: boolean;
+  streamActivityPhase: StreamActivityPhase;
   workspacePath: string | null;
   onClearWorkspace: () => void;
   onChooseWorkspace: () => void;
@@ -43,6 +45,7 @@ export function ChatInputDock({
   onPaste,
   activeToolCall,
   isStreaming,
+  streamActivityPhase,
   workspacePath,
   onClearWorkspace,
   onChooseWorkspace,
@@ -75,7 +78,7 @@ export function ChatInputDock({
             ) : pendingConfirm ? (
               <ToolConfirmCard request={pendingConfirm} onResolve={onResolveConfirm} />
             ) : (
-              <WorkingStatusBar activeCall={activeToolCall} running={isStreaming} />
+              <WorkingStatusBar activeCall={activeToolCall} running={isStreaming} phase={streamActivityPhase} />
             )}
           </div>
           {workspacePath ? (

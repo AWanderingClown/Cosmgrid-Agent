@@ -9,6 +9,7 @@ import type { ToolCallView } from "@/lib/work-artifact-views";
 import type { Attachment } from "@/lib/llm/attachments";
 import type { RoleId } from "@/lib/llm/orchestrator";
 import type { HarnessWarning, ReceiptContent } from "./types";
+import { getAssistantActivityLabel, type StreamActivityPhase } from "./streaming-status";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 
 const MarkdownText = lazy(() => import("@/components/chat/MarkdownText").then((m) => ({ default: m.MarkdownText })));
@@ -58,6 +59,7 @@ export const MessageItem = memo(function MessageItem({
   role,
   text,
   isStreaming,
+  streamActivityPhase = "streaming",
   elapsedLabel,
   attachments,
   harness,
@@ -71,6 +73,7 @@ export const MessageItem = memo(function MessageItem({
   role: "user" | "assistant";
   text: string;
   isStreaming: boolean;
+  streamActivityPhase?: StreamActivityPhase;
   elapsedLabel?: string;
   attachments?: Attachment[];
   harness?: HarnessWarning;
@@ -217,7 +220,9 @@ export const MessageItem = memo(function MessageItem({
               <div className="flex items-center gap-2 mt-1.5 text-xs font-medium text-primary/70">
                 <ThinkingLogo className="w-4 h-4 shrink-0" />
                 <span>
-                  {visibleText.trim() === "" ? t("chat.thinking") : t("chat.replying")}
+                  {visibleText.trim() === ""
+                    ? t("chat.thinking")
+                    : getAssistantActivityLabel(streamActivityPhase, t("chat.replying"), t("chat.checking"))}
                   {elapsedLabel ? ` · ${elapsedLabel}` : ""}
                 </span>
               </div>

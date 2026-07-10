@@ -182,6 +182,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     messages,
     setMessages,
     streamElapsedMs,
+    streamActivityPhase,
     pendingQueue,
     setPendingQueue,
     streamError,
@@ -567,6 +568,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           availableModelCount={availableModels.length}
           messages={messages}
           isStreaming={isStreaming}
+          streamActivityPhase={streamActivityPhase}
           pendingQueue={pendingQueue}
           inputAreaH={inputAreaH}
           streamElapsedMs={streamElapsedMs}
@@ -602,6 +604,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         onPaste={handlePaste}
         activeToolCall={activeToolCall}
         isStreaming={isStreaming}
+        streamActivityPhase={streamActivityPhase}
         workspacePath={workspacePath}
         onClearWorkspace={() => void clearWorkspace()}
         onChooseWorkspace={() => void chooseWorkspace()}
@@ -635,6 +638,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           artifacts={artifacts}
           toolCalls={toolCallViews}
           running={isStreaming}
+          streamActivityPhase={streamActivityPhase}
           streamElapsedMs={streamElapsedMs}
           activeModelLabel={activeModelLabel}
           messages={messages}

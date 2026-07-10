@@ -107,6 +107,7 @@
       "idle": "Idle — your turn",
       "working": "Working",
       "replying": "Model is replying",
+      "checking": "Self-checking",
       "done": "Done",
       "awaitingApproval": "Waiting for your approval"
     },
@@ -325,6 +326,7 @@
     "toolCallDone": "Tool call",
     "jumpToBottom": "Jump to bottom",
     "replying": "Replying",
+    "checking": "Verifying",
     "stopped": "Stopped",
     "queued": "Queued",
     "inputDraftHint": "Model is replying… keep typing, messages are queued and handled in order",
