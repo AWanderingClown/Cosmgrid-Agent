@@ -54,7 +54,10 @@ describe("formatDiagnostics", () => {
 
 function deps(over: Partial<DiagnosticsDeps> = {}): DiagnosticsDeps {
   return {
-    shell: { run: vi.fn().mockResolvedValue({ stdout: "", stderr: "", code: 0 }) },
+    shell: {
+      run: vi.fn().mockResolvedValue({ stdout: "", stderr: "", code: 0 }),
+      runArgs: vi.fn().mockResolvedValue({ stdout: "", stderr: "", code: 0 }),
+    },
     hasTsconfig: vi.fn().mockResolvedValue(true),
     ...over,
   };
@@ -75,7 +78,10 @@ describe("runDiagnostics — 适用性与结果", () => {
 
   it("TS 文件 + 有错 → 返回诊断文本", async () => {
     const d = deps({
-      shell: { run: vi.fn().mockResolvedValue({ stdout: "src/a.ts(1,1): error TS2304: Cannot find name 'x'.", stderr: "", code: 1 }) },
+      shell: {
+        run: vi.fn().mockResolvedValue({ stdout: "src/a.ts(1,1): error TS2304: Cannot find name 'x'.", stderr: "", code: 1 }),
+        runArgs: vi.fn().mockResolvedValue({ stdout: "", stderr: "", code: 0 }),
+      },
     });
     const res = await runDiagnostics("/ws", "/ws/src/a.ts", d);
     expect(res).toContain("1 处类型错误");
@@ -88,7 +94,12 @@ describe("runDiagnostics — 适用性与结果", () => {
   });
 
   it("shell 抛错 → null（诊断失败不影响主流程）", async () => {
-    const d = deps({ shell: { run: vi.fn().mockRejectedValue(new Error("no npx")) } });
+    const d = deps({
+      shell: {
+        run: vi.fn().mockRejectedValue(new Error("no npx")),
+        runArgs: vi.fn().mockResolvedValue({ stdout: "", stderr: "", code: 0 }),
+      },
+    });
     expect(await runDiagnostics("/ws", "/ws/src/a.ts", d)).toBeNull();
   });
 });

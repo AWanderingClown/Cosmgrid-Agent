@@ -40,6 +40,28 @@ pub async fn run_shell_command(
     run_with_idle_timeout(rx, child, SHELL_IDLE_TIMEOUT_SECS).await
 }
 
+/// 走参数数组的"非 sh"执行——`program + args` 直接传给 tauri-plugin-shell，不经过
+/// `sh -c` 解释。这样绝对路径里含 `;` / `&&` / `|` 等 shell 元字符时不会被注入。
+/// L6 写后自动格式化（`post-write-format.ts`）走这一条，避免把代码文件名拼回
+/// sh -c 的字符串；用户对模型说的"跑这条命令"（bash 工具）仍走 `run_shell_command`，
+/// 因为用户输入的合法 shell 语法（管道、重定向）需要 sh 解释。
+#[tauri::command]
+pub async fn run_shell_args(
+    app: tauri::AppHandle,
+    program: String,
+    args: Vec<String>,
+    cwd: String,
+) -> Result<ShellOutput, String> {
+    let (rx, child) = app
+        .shell()
+        .command(&program)
+        .args(args)
+        .current_dir(cwd)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    run_with_idle_timeout(rx, child, SHELL_IDLE_TIMEOUT_SECS).await
+}
+
 /// git_commit_file / init_shadow_git_repo / git_read 共用的 git 子进程执行——同样套
 /// run_with_idle_timeout，用 GIT_IDLE_TIMEOUT_SECS（这几个都是轻量本地操作，不该长时间沉默）。
 async fn run_git(

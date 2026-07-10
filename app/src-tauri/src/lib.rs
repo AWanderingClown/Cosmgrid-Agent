@@ -20,7 +20,7 @@ use commands::fetch::{
 use commands::keychain::{delete_api_key, get_api_key, save_api_key};
 use commands::menu::set_menu_language;
 use commands::rpc::{kill_rpc_process, spawn_rpc_process, write_rpc_stdin, RpcChildren};
-use commands::shell::{git_commit_file, git_read, init_shadow_git_repo, run_shell_command};
+use commands::shell::{git_commit_file, git_read, init_shadow_git_repo, run_shell_args, run_shell_command};
 use security::resolve_realpath;
 
 use tauri::Emitter;
@@ -72,6 +72,7 @@ pub fn run() {
             kill_rpc_process,
             resolve_cli_program,
             run_shell_command,
+            run_shell_args,
             fetch_url_backend,
             fetch_url_rendered,
             report_rendered_page,

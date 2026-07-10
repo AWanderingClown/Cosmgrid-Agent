@@ -1,11 +1,20 @@
 // write/edit/diff 工具单测（v0.7 阶段4b：写操作 + 确认门）
+//
+// L6 安全网收拢（2026-07-09）：checkWritePath + git 快照现在都由 executor 按 tool.security
+// 声明统一跑，工具自己不再调用——测试改走 executeTool（跟生产路径一致）。
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setFsAdapter, type FsAdapter } from "../fs-adapter";
 import { setGitSnapshot } from "../git-snapshot";
+import { setShellAdapter, type ShellAdapter } from "../shell-adapter";
 import { writeTool } from "../write-tool";
 import { editTool } from "../edit-tool";
+import { executeTool } from "../executor";
 import { computeDiff } from "../diff-util";
 import type { ToolContext } from "../types";
+
+vi.mock("../../../db", () => ({
+  toolExecutions: { create: vi.fn().mockResolvedValue("id") },
+}));
 
 const WS = "/ws";
 
@@ -17,6 +26,7 @@ function makeMutableFs(initial: Record<string, string>): { fs: FsAdapter; files:
       if (p in files) return files[p]!;
       throw new Error(`ENOENT: ${p}`);
     },
+    readBytes: async () => new Uint8Array(0),
     readDir: async () => [],
     exists: async (p) => p in files,
     writeTextFile: async (p, c) => { files[p] = c; },
@@ -36,6 +46,10 @@ beforeEach(() => {
   setFsAdapter(m.fs);
   // 默认 git 快照成功（可回滚）；个别用例可覆盖
   setGitSnapshot({ commitFile: async () => true, initShadowRepo: async () => {} });
+  setShellAdapter({
+    run: async () => ({ stdout: "", stderr: "", code: 0 }),
+    runArgs: async () => ({ stdout: "", stderr: "", code: 0 }),
+  } as ShellAdapter);
 });
 
 describe("computeDiff", () => {
@@ -56,28 +70,28 @@ describe("computeDiff", () => {
 describe("write 工具", () => {
   it("用户确认后写入新文件", async () => {
     const confirm = vi.fn().mockResolvedValue(true);
-    const r = await writeTool.execute({ file_path: "src/new.ts", content: "hello" }, ctxWith(confirm));
+    const r = await executeTool(writeTool, { file_path: "src/new.ts", content: "hello" }, ctxWith(confirm));
     expect(r.status).toBe("success");
     expect(files["/ws/src/new.ts"]).toBe("hello");
     expect(confirm).toHaveBeenCalledTimes(1);
   });
 
   it("没有 confirm 通道 → denied，不写盘", async () => {
-    const r = await writeTool.execute({ file_path: "src/new.ts", content: "x" }, ctxWith());
+    const r = await executeTool(writeTool, { file_path: "src/new.ts", content: "x" }, ctxWith());
     expect(r.status).toBe("denied");
     expect(files["/ws/src/new.ts"]).toBeUndefined();
   });
 
   it("用户拒绝 → denied，不写盘", async () => {
     const confirm = vi.fn().mockResolvedValue(false);
-    const r = await writeTool.execute({ file_path: "src/new.ts", content: "x" }, ctxWith(confirm));
+    const r = await executeTool(writeTool, { file_path: "src/new.ts", content: "x" }, ctxWith(confirm));
     expect(r.status).toBe("denied");
     expect(files["/ws/src/new.ts"]).toBeUndefined();
   });
 
   it("工作区外的路径不再直接拒绝——会弹确认，摘要文案标出'工作区之外'，用户批准后照样能写（对齐 opencode 的 external_directory 询问）", async () => {
     const confirm = vi.fn().mockResolvedValue(true);
-    const r = await writeTool.execute({ file_path: "/Users/me/Desktop/plan.md", content: "x" }, ctxWith(confirm));
+    const r = await executeTool(writeTool, { file_path: "/Users/me/Desktop/plan.md", content: "x" }, ctxWith(confirm));
     expect(r.status).toBe("success");
     expect(confirm).toHaveBeenCalledTimes(1);
     const arg = confirm.mock.calls[0]![0];
@@ -87,34 +101,35 @@ describe("write 工具", () => {
 
   it("工作区外的路径，用户拒绝确认 → denied，不写盘", async () => {
     const confirm = vi.fn().mockResolvedValue(false);
-    const r = await writeTool.execute({ file_path: "/Users/me/Desktop/plan.md", content: "x" }, ctxWith(confirm));
+    const r = await executeTool(writeTool, { file_path: "/Users/me/Desktop/plan.md", content: "x" }, ctxWith(confirm));
     expect(r.status).toBe("denied");
     expect(files["/Users/me/Desktop/plan.md"]).toBeUndefined();
   });
 
   it("敏感路径直接拒绝", async () => {
     const confirm = vi.fn().mockResolvedValue(true);
-    const r = await writeTool.execute({ file_path: ".env", content: "SECRET=1" }, ctxWith(confirm));
+    const r = await executeTool(writeTool, { file_path: ".env", content: "SECRET=1" }, ctxWith(confirm));
     expect(r.status).toBe("denied");
     expect(confirm).not.toHaveBeenCalled();
   });
 
   it("写成功后做 git 快照，标记 reversible", async () => {
-    const r = await writeTool.execute({ file_path: "src/new.ts", content: "x" }, ctxWith(vi.fn().mockResolvedValue(true)));
+    // L6 收拢后 git 快照移到 executor 后置执行，只用结构化 reversible 字段承载（UI 有专门
+    // 徽标读这个字段，见 ToolCallCard.tsx），不再在 output 文本里拼"已 git 快照可回滚"。
+    const r = await executeTool(writeTool, { file_path: "src/new.ts", content: "x" }, ctxWith(vi.fn().mockResolvedValue(true)));
     expect(r.reversible).toBe(true);
-    expect(r.output).toMatch(/可回滚/);
   });
 
   it("非 git 仓库（快照失败）仍写盘成功，reversible=false", async () => {
     setGitSnapshot({ commitFile: async () => false, initShadowRepo: async () => {} });
-    const r = await writeTool.execute({ file_path: "src/new.ts", content: "x" }, ctxWith(vi.fn().mockResolvedValue(true)));
+    const r = await executeTool(writeTool, { file_path: "src/new.ts", content: "x" }, ctxWith(vi.fn().mockResolvedValue(true)));
     expect(r.status).toBe("success");
     expect(r.reversible).toBe(false);
   });
 
   it("覆盖已有文件时 diff 体现旧内容", async () => {
     const confirm = vi.fn().mockResolvedValue(true);
-    await writeTool.execute({ file_path: "src/a.ts", content: "const x = 99;\n" }, ctxWith(confirm));
+    await executeTool(writeTool, { file_path: "src/a.ts", content: "const x = 99;\n" }, ctxWith(confirm));
     const arg = confirm.mock.calls[0]![0];
     expect(arg.diff).toContain("const x = 1;");
     expect(arg.diff).toContain("+const x = 99;");
@@ -124,7 +139,8 @@ describe("write 工具", () => {
 describe("edit 工具", () => {
   it("唯一匹配 + 确认 → 替换成功", async () => {
     const confirm = vi.fn().mockResolvedValue(true);
-    const r = await editTool.execute(
+    const r = await executeTool(
+      editTool,
       { file_path: "src/a.ts", old_string: "const x = 1;", new_string: "const x = 42;" },
       ctxWith(confirm),
     );
@@ -134,7 +150,8 @@ describe("edit 工具", () => {
 
   it("old_string 找不到 → error", async () => {
     const confirm = vi.fn().mockResolvedValue(true);
-    const r = await editTool.execute(
+    const r = await executeTool(
+      editTool,
       { file_path: "src/a.ts", old_string: "不存在的内容", new_string: "x" },
       ctxWith(confirm),
     );
@@ -147,7 +164,8 @@ describe("edit 工具", () => {
     files = m.files;
     setFsAdapter(m.fs);
     const confirm = vi.fn().mockResolvedValue(true);
-    const r = await editTool.execute(
+    const r = await executeTool(
+      editTool,
       { file_path: "dup.ts", old_string: "foo", new_string: "bar" },
       ctxWith(confirm),
     );
@@ -156,7 +174,8 @@ describe("edit 工具", () => {
   });
 
   it("old==new → error", async () => {
-    const r = await editTool.execute(
+    const r = await executeTool(
+      editTool,
       { file_path: "src/a.ts", old_string: "x", new_string: "x" },
       ctxWith(vi.fn().mockResolvedValue(true)),
     );
@@ -166,7 +185,8 @@ describe("edit 工具", () => {
   it("用户拒绝 → 不写盘", async () => {
     const confirm = vi.fn().mockResolvedValue(false);
     const before = files["/ws/src/a.ts"];
-    const r = await editTool.execute(
+    const r = await executeTool(
+      editTool,
       { file_path: "src/a.ts", old_string: "const x = 1;", new_string: "const x = 0;" },
       ctxWith(confirm),
     );
@@ -179,7 +199,8 @@ describe("edit 工具", () => {
     files = m.files;
     setFsAdapter(m.fs);
     const confirm = vi.fn().mockResolvedValue(true);
-    const r = await editTool.execute(
+    const r = await executeTool(
+      editTool,
       { file_path: "/Users/me/Desktop/plan.md", old_string: "old line", new_string: "new line" },
       ctxWith(confirm),
     );
