@@ -1,5 +1,5 @@
-import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble, buildDomesticModelReminder } from "@/lib/llm/context-preamble";
-import { buildCorePreamble } from "@/lib/llm/cosmgrid-rules";
+import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble, buildDomesticModelReminder } from "@/lib/llm/prompts/context-preamble";
+import { buildCorePreamble } from "@/lib/llm/prompts/cosmgrid-rules";
 import { toUserCoreMessage } from "@/lib/llm/attachments";
 import { detectIntentNoToolCall } from "@/lib/llm/harness/feedback";
 import type { ChatMsg } from "@/lib/llm/context-compressor";

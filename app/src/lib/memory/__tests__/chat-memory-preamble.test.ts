@@ -19,7 +19,7 @@ vi.mock("@/lib/memory/retrieval", () => ({
   retrieveProjectMemoriesForPrompt: mocks.retrieveProjectMemoriesForPrompt,
 }));
 
-vi.mock("@/lib/llm/context-preamble", () => ({
+vi.mock("@/lib/llm/prompts/context-preamble", () => ({
   buildProjectMemoryPreamble: mocks.buildProjectMemoryPreamble,
 }));
 

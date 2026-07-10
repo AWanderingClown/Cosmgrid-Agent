@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   prepareWorkspaceToolRuntime: vi.fn(),
 }));
 
-vi.mock("@/lib/llm/workspace-context", () => ({
+vi.mock("@/lib/llm/prompts/workspace-context", () => ({
   buildWorkspacePreamble: mocks.buildWorkspacePreamble,
 }));
 

@@ -1,5 +1,5 @@
 import { projects } from "@/lib/db";
-import { buildProjectMemoryPreamble } from "@/lib/llm/context-preamble";
+import { buildProjectMemoryPreamble } from "@/lib/llm/prompts/context-preamble";
 import {
   retrieveCrossProjectMemoriesForPrompt,
   retrieveProjectMemoriesForPrompt,

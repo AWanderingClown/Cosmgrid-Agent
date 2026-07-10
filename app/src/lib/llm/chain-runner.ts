@@ -22,7 +22,7 @@
 //  - E2a 范围：纯逻辑 + ChatPage 集成层；UI 整理（进度条 + 中止按钮 + i18n）留 E2b
 
 import { streamWithFallback, type ModelEndpoint, type StreamUsage, type SwitchReason } from "./chat-fallback";
-import { COSMGRID_TONE_RULES } from "./cosmgrid-rules";
+import { COSMGRID_TONE_RULES } from "./prompts/cosmgrid-rules";
 import { pickBestModelWithPerformance } from "./model-performance-scoring";
 import { ROLE_IDS, ROLE_LABELS, ROLE_TO_WORK_ROLE, type RoleId } from "./orchestrator";
 import {

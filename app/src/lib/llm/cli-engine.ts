@@ -15,7 +15,7 @@ import {
   type CliMessage,
   type CliAccessOptions,
 } from "./cli-protocol";
-import { COSMGRID_RULES, buildIdentityLine } from "./cosmgrid-rules";
+import { COSMGRID_RULES, buildIdentityLine } from "./prompts/cosmgrid-rules";
 
 const CLI_PROVIDER_DISPLAY_NAME: Record<CliProviderType, string> = {
   "claude-cli": "Claude",

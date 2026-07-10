@@ -3,7 +3,7 @@ import {
   projectMemoryVectors,
   type ProjectMemory,
 } from "@/lib/db";
-import { buildCrossProjectMemoryPreamble } from "@/lib/llm/context-preamble";
+import { buildCrossProjectMemoryPreamble } from "@/lib/llm/prompts/context-preamble";
 import type { EmbeddingProvider } from "@/lib/llm/embedding";
 import { cosineSimilarity } from "@/lib/llm/similarity";
 import { getProjectMemoryEmbeddingProvider } from "./embedding-provider";

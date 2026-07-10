@@ -4,8 +4,8 @@
 //
 // 只读、可注入（走 getFsAdapter），单测无需真实文件系统 / Tauri 运行时。
 
-import { getFsAdapter } from "./tools/fs-adapter";
-import { listShallowTree } from "./tools/walk";
+import { getFsAdapter } from "../tools/fs-adapter";
+import { listShallowTree } from "../tools/walk";
 
 // 优先级从高到低：约定文件（CLAUDE.md/AGENTS.md）是"灵魂"，README 作补充说明。
 const CONTEXT_FILES = ["CLAUDE.md", "AGENTS.md", "README.md"] as const;

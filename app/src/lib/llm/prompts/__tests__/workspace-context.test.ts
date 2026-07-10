@@ -1,6 +1,6 @@
 // workspace-context 单测：开场读项目自述文件拼 system 小抄（用内存假 fs）
 import { describe, it, expect, afterEach } from "vitest";
-import { setFsAdapter, tauriFs, type FsAdapter, type FsDirEntry } from "../tools/fs-adapter";
+import { setFsAdapter, tauriFs, type FsAdapter, type FsDirEntry } from "../../tools/fs-adapter";
 import { buildWorkspacePreamble } from "../workspace-context";
 
 const WS = "/ws";
