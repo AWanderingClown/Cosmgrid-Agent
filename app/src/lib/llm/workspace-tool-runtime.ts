@@ -3,9 +3,10 @@ import { buildAiSdkTools, createDefaultToolRegistry, ToolRegistry, type ToolConf
 import { webFetchTool } from "./tools/web-fetch-tool";
 import { rememberTool } from "./tools/memory-tool";
 import { askUserTool } from "./tools/ask-user-tool";
-import { buildWorkspacePreamble } from "./workspace-context";
+import { buildWorkspacePreamble } from "./prompts/workspace-context";
 import { registerEnabledMcpTools } from "@/lib/mcp/register-tools";
 import type { McpServerRow } from "@/lib/db/mcp";
+import { getModelToolCallSupport } from "./model-limits"; // 2026-07-10 OMO-7 capability guardrail
 
 export interface WorkspaceToolRuntimeOptions {
   workspacePath?: string | null;
@@ -24,6 +25,9 @@ export interface WorkspaceToolRuntimeOptions {
   includePreamble?: boolean;
   /** 桌面绝对路径——让模型知道"保存/导出到桌面"该写哪（见 workspace-context.ts 的 desktopPath）。 */
   desktopPath?: string | null;
+  /** 2026-07-10 OMO-7 capability guardrail：当前选中模型的人类可读名，传了才能查 models.dev
+   *  的 tool_call/vision 能力位；不传就按"支持"处理（不确定不拦截）。 */
+  modelName?: string;
 }
 
 export interface WorkspaceToolRuntime {
@@ -38,9 +42,15 @@ export interface WorkspaceToolRuntime {
 export async function prepareWorkspaceToolRuntime(
   options: WorkspaceToolRuntimeOptions,
 ): Promise<WorkspaceToolRuntime> {
+  // 2026-07-10 OMO-7 capability guardrail：models.dev 明确说这个模型不支持工具调用
+  // （不是查不到的 undefined）→ 不管有没有工作区，整个工具集都不给，直接返回空。
+  // 给了也是白给——provider 大概率会因为带了 tools 参数直接 400，不如干脆不传。
+  const toolCallDisabled = options.modelName !== undefined && getModelToolCallSupport(options.modelName) === false;
+
   // 没绑工作区：文件/命令类工具没有根目录可用，但 web_fetch（联网）和 remember（记忆）
   // 不依赖 workspacePath，不该被连坐一起消失——纯聊天模式下也该给这两个。
   if (!options.workspacePath) {
+    if (toolCallDisabled) return { tools: undefined, workspacePreamble: null };
     let tools: Record<string, Tool> | undefined;
     try {
       const registry = new ToolRegistry();
@@ -67,23 +77,25 @@ export async function prepareWorkspaceToolRuntime(
   let tools: Record<string, Tool> | undefined;
   let workspacePreamble: string | null = null;
 
-  try {
-    const registry = createDefaultToolRegistry({ includeWrite: options.includeWrite });
-    await registerEnabledMcpTools(registry, {
-      workspacePath: options.workspacePath,
-      approveLocalLaunch: options.approveMcpLaunch,
-    });
-    tools = buildAiSdkTools(registry, {
-      workspacePath: options.workspacePath,
-      projectId: options.projectId,
-      conversationId: options.conversationId,
-      messageId: options.messageId,
-      confirm: options.confirm,
-      askUser: options.askUser,
-      blockedCommands: options.blockedCommands,
-    });
-  } catch (err) {
-    console.error("[tools] 构建工具失败:", err);
+  if (!toolCallDisabled) {
+    try {
+      const registry = createDefaultToolRegistry({ includeWrite: options.includeWrite, modelName: options.modelName });
+      await registerEnabledMcpTools(registry, {
+        workspacePath: options.workspacePath,
+        approveLocalLaunch: options.approveMcpLaunch,
+      });
+      tools = buildAiSdkTools(registry, {
+        workspacePath: options.workspacePath,
+        projectId: options.projectId,
+        conversationId: options.conversationId,
+        messageId: options.messageId,
+        confirm: options.confirm,
+        askUser: options.askUser,
+        blockedCommands: options.blockedCommands,
+      });
+    } catch (err) {
+      console.error("[tools] 构建工具失败:", err);
+    }
   }
 
   if (options.includePreamble) {

@@ -53,7 +53,7 @@ import { streamWithFallback, toModelEndpoint } from "@/lib/llm/chat-fallback";
 import { type ToolConfirmRequest } from "@/lib/llm/tools";
 import { prepareWorkspaceToolRuntime, type WorkspaceToolRuntime } from "@/lib/llm/workspace-tool-runtime";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
-import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble, buildProjectMemoryPreamble } from "@/lib/llm/context-preamble";
+import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble, buildProjectMemoryPreamble } from "@/lib/llm/prompts/context-preamble";
 import { retrieveCrossProjectMemoriesForPrompt, searchAcrossProjectsHybrid } from "@/lib/memory/retrieval";
 import {
   projectMemories as dbMemories,
@@ -246,6 +246,7 @@ function StageChat({ stage, model, credential, apiKey, conversationId, fallback 
           }),
           blockedCommands,
           includePreamble: true,
+          modelName: model.name,
         });
         tools = runtime.tools;
         workspacePreamble = runtime.workspacePreamble;

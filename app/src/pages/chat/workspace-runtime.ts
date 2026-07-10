@@ -1,6 +1,6 @@
 import { desktopDir } from "@tauri-apps/api/path";
 import type { ToolConfirmRequest, AskUserRequest } from "@/lib/llm/tools";
-import { buildWorkspacePreamble } from "@/lib/llm/workspace-context";
+import { buildWorkspacePreamble } from "@/lib/llm/prompts/workspace-context";
 import {
   prepareWorkspaceToolRuntime,
   type WorkspaceToolRuntime,
@@ -18,6 +18,9 @@ export interface PrepareChatWorkspaceRuntimeArgs {
   requestAskUser: (req: AskUserRequest) => Promise<string>;
   getDesktopPath?: () => Promise<string | null>;
   stopIfAborted: () => boolean;
+  /** 2026-07-10 OMO-7 capability guardrail：当前选中模型的人类可读名，透传给
+   *  prepareWorkspaceToolRuntime 查 models.dev 的 tool_call/vision 能力位。 */
+  modelName?: string;
 }
 
 export interface PreparedChatWorkspaceRuntime {
@@ -59,6 +62,7 @@ export async function prepareChatWorkspaceRuntime(
       askUser: args.requestAskUser,
       includePreamble: true,
       desktopPath: writableDesktopPath,
+      modelName: args.modelName,
     });
     return {
       aborted: args.stopIfAborted(),
@@ -79,6 +83,7 @@ export async function prepareChatWorkspaceRuntime(
         summary: `允许启动本地 MCP server？\n${formatLocalMcpLaunch(server, workspacePath)}`,
       }),
       askUser: args.requestAskUser,
+      modelName: args.modelName,
     });
     return {
       aborted: args.stopIfAborted(),

@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __setLimitMapForTest } from "../model-limits";
 
 vi.mock("../../db", () => ({
   toolExecutions: { create: vi.fn().mockResolvedValue("id") },
@@ -23,7 +24,7 @@ vi.mock("../tools", async (importOriginal) => {
   };
 });
 
-vi.mock("../workspace-context", () => ({
+vi.mock("../prompts/workspace-context", () => ({
   buildWorkspacePreamble: mocks.buildWorkspacePreamble,
 }));
 
@@ -156,6 +157,43 @@ describe("prepareWorkspaceToolRuntime", () => {
     expect(mocks.buildWorkspacePreamble).toHaveBeenCalledWith("/ws", {
       includeWrite: true,
       desktopPath: "/Users/me/Desktop",
+    });
+  });
+
+  describe("OMO-7 capability guardrail：modelName 明确不支持工具调用", () => {
+    afterEach(() => __setLimitMapForTest(null));
+
+    it("绑了工作区 + modelName 明确不支持工具调用 → 不构建注册表，tools 为 undefined", async () => {
+      __setLimitMapForTest(null, null, new Map([["no-tool-model", false]]));
+      const runtime = await prepareWorkspaceToolRuntime({
+        workspacePath: "/ws",
+        includeWrite: true,
+        modelName: "no-tool-model",
+      });
+      expect(runtime.tools).toBeUndefined();
+      expect(mocks.createDefaultToolRegistry).not.toHaveBeenCalled();
+      expect(mocks.buildAiSdkTools).not.toHaveBeenCalled();
+    });
+
+    it("没绑工作区 + modelName 明确不支持工具调用 → tools 为 undefined", async () => {
+      __setLimitMapForTest(null, null, new Map([["no-tool-model", false]]));
+      const runtime = await prepareWorkspaceToolRuntime({
+        workspacePath: null,
+        includeWrite: true,
+        modelName: "no-tool-model",
+      });
+      expect(runtime.tools).toBeUndefined();
+    });
+
+    it("modelName 未收录（不确定）→ 不拦截，照常构建工具", async () => {
+      __setLimitMapForTest(null, null, new Map());
+      const runtime = await prepareWorkspaceToolRuntime({
+        workspacePath: "/ws",
+        includeWrite: true,
+        modelName: "unknown-model",
+      });
+      expect(runtime.tools).toEqual({ read: { description: "read" } });
+      expect(mocks.createDefaultToolRegistry).toHaveBeenCalledWith({ includeWrite: true, modelName: "unknown-model" });
     });
   });
 });

@@ -1,5 +1,5 @@
 // tools/index 单测（v0.7 阶段4：默认注册表 + AI SDK 转换）
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 vi.mock("../../../db", () => ({
   toolExecutions: { create: vi.fn().mockResolvedValue("id") },
@@ -7,6 +7,7 @@ vi.mock("../../../db", () => ({
 
 import { createDefaultToolRegistry, buildAiSdkTools } from "../index";
 import { setFsAdapter, type FsAdapter } from "../fs-adapter";
+import { __setLimitMapForTest } from "../../model-limits";
 import type { ToolContext } from "../types";
 
 const ctx: ToolContext = { workspacePath: "/ws" };
@@ -38,6 +39,39 @@ describe("createDefaultToolRegistry", () => {
     expect(r.has("lsp_definition")).toBe(true);
     expect(r.has("lsp_hover")).toBe(true);
     // 2026-07-09 加 view_image 工具后总数从 11 → 12（仅只读集合；写工具仍按 includeWrite 控）
+    expect(r.has("view_image")).toBe(true);
+    expect(r.listReadOnly()).toHaveLength(12);
+  });
+});
+
+describe("createDefaultToolRegistry — OMO-7 capability guardrail", () => {
+  afterEach(() => __setLimitMapForTest(null));
+
+  it("modelName 明确不支持工具调用（tool_call===false）→ 整个注册表为空", () => {
+    __setLimitMapForTest(null, null, new Map([["no-tool-model", false]]));
+    const r = createDefaultToolRegistry({ modelName: "no-tool-model" });
+    expect(r.listReadOnly()).toHaveLength(0);
+    expect(r.has("read")).toBe(false);
+  });
+
+  it("modelName 未被 models.dev 收录（不确定）→ 按支持处理，正常全量注册", () => {
+    __setLimitMapForTest(null, null, new Map());
+    const r = createDefaultToolRegistry({ modelName: "unknown-model" });
+    expect(r.has("read")).toBe(true);
+    expect(r.listReadOnly()).toHaveLength(12);
+  });
+
+  it("modelName 明确不支持视觉（vision===false）→ 只不注册 view_image，其余工具正常", () => {
+    __setLimitMapForTest(null, null, new Map(), new Map([["no-vision-model", false]]));
+    const r = createDefaultToolRegistry({ modelName: "no-vision-model" });
+    expect(r.has("view_image")).toBe(false);
+    expect(r.has("read")).toBe(true);
+    expect(r.listReadOnly()).toHaveLength(11);
+  });
+
+  it("没传 modelName → 不受能力表影响，照常全量注册", () => {
+    __setLimitMapForTest(null, null, new Map([["some-model", false]]), new Map([["some-model", false]]));
+    const r = createDefaultToolRegistry();
     expect(r.has("view_image")).toBe(true);
     expect(r.listReadOnly()).toHaveLength(12);
   });

@@ -22,6 +22,7 @@ import { todoWriteTool } from "./todo-tool"; // 2026-07-05 新增：结构化待
 import { askUserTool } from "./ask-user-tool"; // 2026-07-05 新增：结构化追问用户，对齐 gemini-cli/opencode/Claude Code
 import { lspDefinitionTool, lspDiagnosticsTool, lspHoverTool } from "./lsp-tools";
 import { viewImageTool } from "./view-image-tool"; // 2026-07-09 新增：模型自主读取工作区图片
+import { getModelToolCallSupport, getModelVisionSupport } from "../model-limits"; // 2026-07-10 OMO-7 capability guardrail
 
 export * from "./types";
 export { ToolRegistry } from "./registry";
@@ -48,8 +49,16 @@ export { ToolRegistry } from "./registry";
  * 后续如果某个 provider 拒收 parts 时表现得过于激进（abort 整轮调用），再补 model-capabilities
  * 矩阵在 buildAiSdkTools 灰度分支里跳过 content 字段。
  */
-export function createDefaultToolRegistry(opts: { includeWrite?: boolean } = {}): ToolRegistry {
+export function createDefaultToolRegistry(opts: { includeWrite?: boolean; modelName?: string } = {}): ToolRegistry {
   const registry = new ToolRegistry();
+
+  // 2026-07-10 OMO-7 capability guardrail：models.dev 明确说这个模型不支持工具调用
+  // （getModelToolCallSupport === false，不是"查不到"的 undefined）→ 整个工具集不给，
+  // 不确定时仍按"支持"处理——只拦截"明确说不支持"这一种情况，避免误伤覆盖不全的模型。
+  if (opts.modelName && getModelToolCallSupport(opts.modelName) === false) {
+    return registry;
+  }
+
   registry.registerAll([
     readTool,
     globTool,
@@ -63,8 +72,11 @@ export function createDefaultToolRegistry(opts: { includeWrite?: boolean } = {})
     lspDiagnosticsTool,
     lspDefinitionTool,
     lspHoverTool,
-    viewImageTool,
   ]);
+  // view_image 单独按视觉能力判断：明确不支持视觉的模型不注册，省一次必然被 provider 拒收的调用
+  if (!opts.modelName || getModelVisionSupport(opts.modelName) !== false) {
+    registry.register(viewImageTool);
+  }
   if (opts.includeWrite) registry.registerAll([writeTool, editTool, hashlineEditTool, bashTool]);
   return registry;
 }

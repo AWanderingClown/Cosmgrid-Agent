@@ -510,6 +510,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         requestConfirm,
         requestAskUser,
         stopIfAborted,
+        modelName: model.name,
       });
       if (workspaceRuntime.aborted) return;
       tools = workspaceRuntime.tools;
