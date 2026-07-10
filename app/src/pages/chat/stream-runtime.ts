@@ -176,6 +176,9 @@ export async function runChatStreamRuntime(
         ),
       );
     }
+    // Harness 工程实施计划阶段1：重试耗尽后仍脏，才把最终结论交给节点验收门控——
+    // 重试循环内部的中间态不算数，只有这里（真正 return 前）才是这一轮的最终判定。
+    streamingState.harnessDirty = harnessDirty;
     return { ...streamingState, aborted: false };
   }
 }

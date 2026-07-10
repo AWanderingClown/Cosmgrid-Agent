@@ -12,6 +12,9 @@ export interface StreamingTurnState {
   lastToolCallCount: number;
   lastFinishReason: string;
   invocationAudits: LlmInvocationAuditEvent[];
+  /** Harness 工程实施计划阶段1：本轮最终（重试耗尽后）Harness 是否仍判定编造，
+   *  供 stream-finalization.ts 的节点验收门控消费。纯聊天模式（pureMode）恒为 false。 */
+  harnessDirty: boolean;
 }
 
 export function createStreamingTurnState(initialModelId: string | null): StreamingTurnState {
@@ -21,6 +24,7 @@ export function createStreamingTurnState(initialModelId: string | null): Streami
     lastToolCallCount: 0,
     lastFinishReason: "stop",
     invocationAudits: [],
+    harnessDirty: false,
   };
 }
 

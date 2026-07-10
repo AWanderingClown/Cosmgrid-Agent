@@ -1,4 +1,5 @@
 import { defaultNextActionsForPhase } from "./code-task-template";
+import type { NodeOutcome } from "./node-outcome";
 import type { TurnIntentDecision, WorkflowActiveSkill, WorkflowNode, WorkflowPhase, WorkflowPlanSource, WorkflowSnapshot } from "./types";
 
 function updateNode(snapshot: WorkflowSnapshot, nodeId: string, patch: Partial<WorkflowNode>): WorkflowSnapshot {
@@ -85,6 +86,39 @@ export function completeCurrentWorkflowNode(args: {
           choices: defaultNextActionsForPhase(node.phase).map((action) => action.id),
         }
       : undefined,
+  };
+}
+
+/**
+ * Harness 工程实施计划阶段1 —— 节点验收未通过时的落库路径。
+ * 跟 completeCurrentWorkflowNode 对称，但节点状态标 "failed" 而不是 "done"，
+ * 不推进 nextActions/pendingDecision（不能让用户以为可以选"下一步"）。
+ * 调用方（stream-finalization.ts）先跑 verifyNodeOutcome，只有 outcome.status !== "passed"
+ * 时才走这条路径；needs_user（用户拒绝权限/主动取消）不应该调这个函数——那种情况节点
+ * 保持原状即可，不是"验收失败"。
+ */
+export function failCurrentWorkflowNode(args: {
+  snapshot: WorkflowSnapshot;
+  outcome: NodeOutcome;
+}): WorkflowSnapshot {
+  const node = args.snapshot.nodes.find((n) => n.id === args.snapshot.currentNodeId);
+  if (!node) return args.snapshot;
+
+  const next = updateNode(args.snapshot, node.id, {
+    status: "failed",
+    outputs: {
+      ...(node.outputs ?? {}),
+      summary: args.outcome.summary,
+      ...(args.outcome.artifactIds.length > 0 ? { artifactIds: args.outcome.artifactIds } : {}),
+      ...(args.outcome.toolExecutionIds.length > 0 ? { toolExecutionIds: args.outcome.toolExecutionIds } : {}),
+    },
+  });
+
+  return {
+    ...next,
+    status: "waiting_user",
+    nextActions: [],
+    pendingDecision: undefined,
   };
 }
 
