@@ -2,11 +2,15 @@ import { describe, it, expect, afterEach } from "vitest";
 import {
   parseModelsDev,
   parseModelsDevContext,
+  parseModelsDevToolCall,
+  parseModelsDevVision,
   resolveMaxOutputTokens,
   resolveContextBudget,
   resolveSseFirstByteTimeoutMs,
   getModelOutputLimit,
   getModelContextWindow,
+  getModelToolCallSupport,
+  getModelVisionSupport,
   __setLimitMapForTest,
   MAX_OUTPUT_TOKENS_CEILING,
   DEFAULT_COMPRESSION_BUDGET,
@@ -143,6 +147,47 @@ describe("resolveContextBudget", () => {
   it("上下文窗口小到扣完预留就 <= 0 → 退回 DEFAULT_COMPRESSION_BUDGET，不返回负数/零", () => {
     __setLimitMapForTest(new Map([["tiny-model", 8_000]]), new Map([["tiny-model", 4_000]]));
     expect(resolveContextBudget("tiny-model")).toBe(DEFAULT_COMPRESSION_BUDGET);
+  });
+});
+
+describe("parseModelsDevToolCall / parseModelsDevVision", () => {
+  const json = {
+    anthropic: {
+      models: {
+        "claude-opus-4-8": { tool_call: true, modalities: { input: ["text", "image"] } },
+      },
+    },
+    minimax: {
+      models: {
+        "minimax-m3": { id: "MiniMax-M3", tool_call: false, modalities: { input: ["text"] } },
+      },
+    },
+  };
+
+  it("抽出 tool_call 布尔位（双索引：完整 id + meta.id）", () => {
+    const map = parseModelsDevToolCall(json);
+    expect(map.get("claude-opus-4-8")).toBe(true);
+    expect(map.get("minimax-m3")).toBe(false);
+  });
+
+  it("抽出 modalities.input 是否含 image", () => {
+    const map = parseModelsDevVision(json);
+    expect(map.get("claude-opus-4-8")).toBe(true);
+    expect(map.get("minimax-m3")).toBe(false);
+  });
+
+  it("缺字段/非法输入 → 跳过，不抛错", () => {
+    expect(parseModelsDevToolCall(null).size).toBe(0);
+    expect(parseModelsDevToolCall({ p: { models: { m: {} } } }).size).toBe(0);
+    expect(parseModelsDevVision({ p: { models: { m: { modalities: { input: "not-an-array" } } } } }).size).toBe(0);
+  });
+
+  it("getModelToolCallSupport/getModelVisionSupport：查不到时返回 undefined（不确定，不是 false）", () => {
+    __setLimitMapForTest(null, null, new Map([["known-model", true]]), new Map([["known-model", false]]));
+    expect(getModelToolCallSupport("known-model")).toBe(true);
+    expect(getModelVisionSupport("known-model")).toBe(false);
+    expect(getModelToolCallSupport("unknown-model")).toBeUndefined();
+    expect(getModelVisionSupport("unknown-model")).toBeUndefined();
   });
 });
 

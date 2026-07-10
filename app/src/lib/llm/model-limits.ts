@@ -28,6 +28,8 @@ export const REASONING_FIRST_BYTE_TIMEOUT_MS = 180_000;
 const MODELS_DEV_URL = "https://models.dev/api.json";
 const STORAGE_KEY = "cosmgrid:model-output-limits:v1";
 const CONTEXT_STORAGE_KEY = "cosmgrid:model-context-limits:v1";
+const TOOL_CALL_STORAGE_KEY = "cosmgrid:model-toolcall-support:v1";
+const VISION_STORAGE_KEY = "cosmgrid:model-vision-support:v1";
 
 /** 归一化模型名：小写 + 去首尾空白，做宽松匹配（用户填的名字大小写不一） */
 function normalize(id: string): string {
@@ -37,21 +39,52 @@ function normalize(id: string): string {
 // 模块级缓存：normalize(modelId) → 输出上限 / 上下文窗口。null 表示还没加载过。
 let limitMap: Map<string, number> | null = null;
 let contextLimitMap: Map<string, number> | null = null;
+// 2026-07-10 移植 OMO model-core 的 capability 读取思路（简化版）：不搬它整套
+// alias/snapshot/heuristic 子系统，只从同一份已经在拉的 models.dev 数据里顺手多抽两个
+// 布尔能力位——是否支持 tool call、是否支持视觉输入。目前只暴露读取函数供调用方按需
+// 判断，不在工具注册/图片工具这类热路径上强制拦截：现有 buildAiSdkTools 的 view_image
+// 已经靠 Vercel AI SDK 的优雅降级兜住了 provider 拒收的情况（见 tools/index.ts 注释），
+// models.dev 数据也可能不完整/滞后，贸然按它强制关闭某模型的工具注册，风险比现状的
+// "SDK 兜底报错、不阻断对话" 更大。
+let toolCallSupportMap: Map<string, boolean> | null = null;
+let visionSupportMap: Map<string, boolean> | null = null;
 let loadPromise: Promise<void> | null = null;
 
-function loadFromStorage(key: string): Map<string, number> | null {
+/**
+ * 2026-07-10 收拢重复：四张表（output/context/toolCall/vision）原本各自在
+ * ensureModelLimitsLoaded 里重复一遍"读缓存 → fetch 后解析 → 存缓存 → 兜底空表"，
+ * 每加一张表就多复制一份。改成注册表驱动：新增能力位只需要在 CAPABILITY_DESCRIPTORS
+ * 里加一条，不用再碰 ensureModelLimitsLoaded 的循环体本身。
+ * 对外的具名读取函数（getModelOutputLimit 等）签名和行为完全不变。
+ */
+interface CapabilityDescriptor<T> {
+  storageKey: string;
+  parse: (json: unknown) => Map<string, T>;
+  get: () => Map<string, T> | null;
+  set: (map: Map<string, T> | null) => void;
+}
+// 存进同一个数组时类型擦除（跟 executor.ts 的 AnyToolDefinition = ToolDefinition<any> 同一套写法）：
+// 每个 makeDescriptor<T>() 调用点本身仍是强类型的，擦除只发生在"放进共享数组"这一步。
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyCapabilityDescriptor = CapabilityDescriptor<any>;
+
+function makeDescriptor<T>(descriptor: CapabilityDescriptor<T>): AnyCapabilityDescriptor {
+  return descriptor;
+}
+
+function loadFromStorage<T>(key: string): Map<string, T> | null {
   try {
     if (typeof localStorage === "undefined") return null;
     const raw = localStorage.getItem(key);
     if (!raw) return null;
-    const obj = JSON.parse(raw) as Record<string, number>;
+    const obj = JSON.parse(raw) as Record<string, T>;
     return new Map(Object.entries(obj));
   } catch {
     return null;
   }
 }
 
-function saveToStorage(key: string, map: Map<string, number>): void {
+function saveToStorage<T>(key: string, map: Map<string, T>): void {
   try {
     if (typeof localStorage === "undefined") return;
     localStorage.setItem(key, JSON.stringify(Object.fromEntries(map)));
@@ -100,6 +133,90 @@ export function parseModelsDevContext(json: unknown): Map<string, number> {
   return extractLimitField(json, "context");
 }
 
+/** 跟 extractLimitField 共用同一套「完整 id + 去 provider 前缀基名」双索引逻辑，
+ *  只是取值方式换成任意布尔提取器（tool_call / modalities 两种取法不一样，不能像
+ *  limit.output/limit.context 那样简单按同一个字段路径取）。 */
+function extractBooleanCapabilityField(
+  json: unknown,
+  readValue: (meta: Record<string, unknown>) => boolean | undefined,
+): Map<string, boolean> {
+  const map = new Map<string, boolean>();
+  if (!json || typeof json !== "object") return map;
+  for (const provider of Object.values(json as Record<string, unknown>)) {
+    const models = (provider as { models?: unknown })?.models;
+    if (!models || typeof models !== "object") continue;
+    for (const [modelId, meta] of Object.entries(models as Record<string, unknown>)) {
+      if (!meta || typeof meta !== "object") continue;
+      const value = readValue(meta as Record<string, unknown>);
+      if (value === undefined) continue;
+      const keys = new Set<string>([modelId]);
+      const altId = (meta as { id?: unknown }).id;
+      if (typeof altId === "string") keys.add(altId);
+      for (const k of [...keys]) {
+        const slash = k.lastIndexOf("/");
+        if (slash >= 0) keys.add(k.slice(slash + 1));
+      }
+      for (const k of keys) {
+        const nk = normalize(k);
+        if (!map.has(nk)) map.set(nk, value);
+      }
+    }
+  }
+  return map;
+}
+
+/** 解析 models.dev 的 `tool_call: boolean`（模型是否支持工具调用）。 */
+export function parseModelsDevToolCall(json: unknown): Map<string, boolean> {
+  return extractBooleanCapabilityField(json, (meta) =>
+    typeof meta.tool_call === "boolean" ? meta.tool_call : undefined,
+  );
+}
+
+/** 解析 models.dev 的 `modalities.input` 数组是否含 "image"（模型是否支持视觉输入）。 */
+export function parseModelsDevVision(json: unknown): Map<string, boolean> {
+  return extractBooleanCapabilityField(json, (meta) => {
+    const input = (meta.modalities as { input?: unknown } | undefined)?.input;
+    if (!Array.isArray(input)) return undefined;
+    return input.includes("image");
+  });
+}
+
+/** 四张能力表的注册表：新增一张表只需要在这里加一条，不用再碰 ensureModelLimitsLoaded 本身。 */
+const CAPABILITY_DESCRIPTORS: readonly AnyCapabilityDescriptor[] = [
+  makeDescriptor<number>({
+    storageKey: STORAGE_KEY,
+    parse: parseModelsDev,
+    get: () => limitMap,
+    set: (m) => {
+      limitMap = m;
+    },
+  }),
+  makeDescriptor<number>({
+    storageKey: CONTEXT_STORAGE_KEY,
+    parse: parseModelsDevContext,
+    get: () => contextLimitMap,
+    set: (m) => {
+      contextLimitMap = m;
+    },
+  }),
+  makeDescriptor<boolean>({
+    storageKey: TOOL_CALL_STORAGE_KEY,
+    parse: parseModelsDevToolCall,
+    get: () => toolCallSupportMap,
+    set: (m) => {
+      toolCallSupportMap = m;
+    },
+  }),
+  makeDescriptor<boolean>({
+    storageKey: VISION_STORAGE_KEY,
+    parse: parseModelsDevVision,
+    get: () => visionSupportMap,
+    set: (m) => {
+      visionSupportMap = m;
+    },
+  }),
+];
+
 /** 拉取并缓存 models.dev 限制表。幂等：并发只发一次；离线时退回本地缓存。
  *  app 启动时 fire-and-forget 调一次即可，后续 resolve 同步读缓存。 */
 export async function ensureModelLimitsLoaded(): Promise<void> {
@@ -107,10 +224,10 @@ export async function ensureModelLimitsLoaded(): Promise<void> {
   if (loadPromise) return loadPromise;
   loadPromise = (async () => {
     // 先用上次持久化的缓存兜底，离线也能 clamp
-    const cached = loadFromStorage(STORAGE_KEY);
-    if (cached && cached.size > 0) limitMap = cached;
-    const cachedContext = loadFromStorage(CONTEXT_STORAGE_KEY);
-    if (cachedContext && cachedContext.size > 0) contextLimitMap = cachedContext;
+    for (const d of CAPABILITY_DESCRIPTORS) {
+      const cached = loadFromStorage(d.storageKey);
+      if (cached && cached.size > 0) d.set(cached);
+    }
     try {
       const res = await fetch(MODELS_DEV_URL, {
         method: "GET",
@@ -119,22 +236,20 @@ export async function ensureModelLimitsLoaded(): Promise<void> {
       });
       if (res.ok) {
         const json = await res.json();
-        const parsed = parseModelsDev(json);
-        if (parsed.size > 0) {
-          limitMap = parsed;
-          saveToStorage(STORAGE_KEY, parsed);
-        }
-        const parsedContext = parseModelsDevContext(json);
-        if (parsedContext.size > 0) {
-          contextLimitMap = parsedContext;
-          saveToStorage(CONTEXT_STORAGE_KEY, parsedContext);
+        for (const d of CAPABILITY_DESCRIPTORS) {
+          const parsed = d.parse(json);
+          if (parsed.size > 0) {
+            d.set(parsed);
+            saveToStorage(d.storageKey, parsed);
+          }
         }
       }
     } catch {
       // 网络失败：保留 cached（或留空，由 resolve 用 CEILING/DEFAULT 兜底）
     } finally {
-      if (!limitMap) limitMap = new Map();
-      if (!contextLimitMap) contextLimitMap = new Map();
+      for (const d of CAPABILITY_DESCRIPTORS) {
+        if (!d.get()) d.set(new Map());
+      }
     }
   })();
   return loadPromise;
@@ -150,6 +265,21 @@ export function getModelOutputLimit(modelName: string): number | undefined {
 export function getModelContextWindow(modelName: string): number | undefined {
   if (!contextLimitMap) return undefined;
   return contextLimitMap.get(normalize(modelName));
+}
+
+/** 查模型是否支持工具调用（models.dev `tool_call` 字段）。未加载/查不到 → undefined
+ *  （表示"不确定"，调用方应按"默认支持"处理，而不是当成 false——models.dev 覆盖不全，
+ *  贸然当 false 会误伤没被收录但其实支持工具调用的模型）。 */
+export function getModelToolCallSupport(modelName: string): boolean | undefined {
+  if (!toolCallSupportMap) return undefined;
+  return toolCallSupportMap.get(normalize(modelName));
+}
+
+/** 查模型是否支持视觉输入（models.dev `modalities.input` 含 "image"）。语义同上，
+ *  undefined = 不确定，不是"不支持"。 */
+export function getModelVisionSupport(modelName: string): boolean | undefined {
+  if (!visionSupportMap) return undefined;
+  return visionSupportMap.get(normalize(modelName));
 }
 
 /** 本次调用该传的 maxOutputTokens：clamp 到模型真实上限、封顶 CEILING、查不到用 CEILING。
@@ -194,8 +324,12 @@ export function resolveSseFirstByteTimeoutMs(modelName: string): number {
 export function __setLimitMapForTest(
   map: Map<string, number> | null,
   contextMap?: Map<string, number> | null,
+  toolCallMap?: Map<string, boolean> | null,
+  visionMap?: Map<string, boolean> | null,
 ): void {
   limitMap = map;
   if (contextMap !== undefined) contextLimitMap = contextMap;
+  if (toolCallMap !== undefined) toolCallSupportMap = toolCallMap;
+  if (visionMap !== undefined) visionSupportMap = visionMap;
   loadPromise = null;
 }
