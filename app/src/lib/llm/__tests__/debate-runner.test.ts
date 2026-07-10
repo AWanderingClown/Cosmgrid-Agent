@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   generateText: vi.fn(),
+  generateObject: vi.fn(),
   streamViaCli: vi.fn(),
   recordUsageEvent: vi.fn(),
   resolveMaxOutputTokens: vi.fn(() => 4096),
@@ -13,7 +14,10 @@ const mocks = vi.hoisted(() => ({
   isCliProviderType: vi.fn((t: string) => t === "claude-cli" || t === "codex-cli"),
 }));
 
-vi.mock("ai", () => ({ generateText: mocks.generateText }));
+vi.mock("ai", () => ({
+  generateText: mocks.generateText,
+  generateObject: mocks.generateObject,
+}));
 vi.mock("../provider-factory", () => ({
   getLanguageModel: mocks.getLanguageModel,
 }));
@@ -30,7 +34,7 @@ vi.mock("../cli-engine", () => ({
   streamViaCli: mocks.streamViaCli,
 }));
 
-const { realRunRole } = await import("../debate-runner");
+const { realRunRole, runJudgeDecisionStructured } = await import("../debate-runner");
 
 const baseConfig = {
   role: "solver" as const,
@@ -155,6 +159,28 @@ describe("realRunRole - API 直连路径", () => {
       expect.objectContaining({ role: "debate_judge" }),
     );
   });
+
+  it("res.usage 缺失 → inputTokens/outputTokens 默认 0（line 54-55 ?? 0 分支）", async () => {
+    mocks.generateText.mockResolvedValue({
+      text: "ok",
+      // 用法：v8 算 branch 时 ?? 0 这个默认值必须被实际跑到
+      usage: undefined,
+    });
+
+    const result = await realRunRole({
+      systemPrompt: "sys",
+      userPrompt: "user",
+      config: baseConfig,
+    });
+
+    expect(result.inputTokens).toBe(0);
+    expect(result.outputTokens).toBe(0);
+    expect(mocks.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        usage: { inputTokens: 0, outputTokens: 0 },
+      }),
+    );
+  });
 });
 
 describe("realRunRole - CLI 路径", () => {
@@ -216,5 +242,297 @@ describe("realRunRole - maxOutputTokens 透传", () => {
     expect(mocks.generateText).toHaveBeenCalledWith(
       expect.objectContaining({ maxOutputTokens: 8192 }),
     );
+  });
+});
+
+describe("realRunRole - CLI 配置透传", () => {
+  it("CLI provider 传 baseUrl → streamViaCli 收到 program 字段 + onDelta 累加 content", async () => {
+    // 让 mock 真的调一下 onDelta，验证 content 累加分支（line 38）
+    mocks.streamViaCli.mockImplementation(async (_cfg, _messages, opts) => {
+      opts.onDelta("hello ");
+      opts.onDelta("world");
+      return {
+        inputTokens: 10,
+        outputTokens: 5,
+        finishReason: "stop",
+        officialSessionId: null,
+        actualModelName: null,
+      };
+    });
+
+    const result = await realRunRole({
+      systemPrompt: "sys",
+      userPrompt: "user",
+      config: {
+        ...baseConfig,
+        providerType: "claude-cli",
+        baseUrl: "/usr/local/bin/claude",
+      },
+    });
+
+    expect(result.content).toBe("hello world");
+    const callArgs = mocks.streamViaCli.mock.calls[0]![0] as {
+      providerType: string;
+      modelName: string;
+      program?: string;
+    };
+    expect(callArgs.program).toBe("/usr/local/bin/claude");
+    // 没传 workingDirectory 时不要塞空字段
+    expect(callArgs).not.toHaveProperty("workingDirectory");
+  });
+
+  it("CLI provider 传 workingDirectory → streamViaCli 收到 workingDirectory 字段", async () => {
+    mocks.streamViaCli.mockResolvedValue({
+      inputTokens: 10,
+      outputTokens: 5,
+      finishReason: "stop",
+      officialSessionId: null,
+      actualModelName: null,
+    });
+
+    await realRunRole({
+      systemPrompt: "sys",
+      userPrompt: "user",
+      config: {
+        ...baseConfig,
+        providerType: "codex-cli",
+        baseUrl: undefined,
+        workingDirectory: "/tmp/work",
+      },
+    });
+
+    const callArgs = mocks.streamViaCli.mock.calls[0]![0] as {
+      workingDirectory?: string;
+    };
+    expect(callArgs.workingDirectory).toBe("/tmp/work");
+  });
+});
+
+// ====== runJudgeDecisionStructured（整函数之前 0 测试，补齐） ======
+
+const baseJudgeConfig = {
+  role: "judge" as const,
+  modelId: "judge-m-1",
+  modelName: "judge-model",
+  providerType: "openai",
+  providerId: "p-1",
+  apiCredentialId: "c-1",
+  apiKey: "sk-judge",
+  baseUrl: "https://api.test.com",
+  workingDirectory: null,
+};
+
+const baseJudgeArgs = {
+  topic: "给个方案",
+  proposalContent: "原方案正文",
+  critiques: [
+    {
+      role: "critic" as const,
+      modelId: "critic-m",
+      content: "这个方案有 bug",
+      inputTokens: 10,
+      outputTokens: 5,
+    },
+  ],
+};
+
+describe("runJudgeDecisionStructured - CLI provider 短路", () => {
+  it("judge providerType 是 CLI → 直接返 null（走旧 parseJudgeDecision 路径）", async () => {
+    const result = await runJudgeDecisionStructured({
+      ...baseJudgeArgs,
+      judgeConfig: { ...baseJudgeConfig, providerType: "claude-cli" },
+    });
+
+    expect(result).toBeNull();
+    // CLI 分支根本不该调到 generateObject
+    expect(mocks.generateObject).not.toHaveBeenCalled();
+  });
+});
+
+describe("runJudgeDecisionStructured - API 成功路径", () => {
+  it("返回 generateObject 的结构化结果 + 落 UsageEvent role=debate_judge_structured", async () => {
+    mocks.generateObject.mockResolvedValue({
+      object: {
+        approved: true,
+        feedback: ["微调一下"],
+        finalSolution: "修正后的最终方案",
+      },
+      usage: { inputTokens: 200, outputTokens: 100 },
+    });
+
+    const result = await runJudgeDecisionStructured({
+      ...baseJudgeArgs,
+      judgeConfig: baseJudgeConfig,
+    });
+
+    expect(result).toEqual({
+      approved: true,
+      feedback: ["微调一下"],
+      finalSolution: "修正后的最终方案",
+    });
+    expect(mocks.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: "debate_judge_structured",
+        modelId: "judge-m-1",
+        finishReason: "stop",
+        usage: { inputTokens: 200, outputTokens: 100 },
+      }),
+    );
+    // judgeConfig 的 maxOutputTokens 应来自 resolveMaxOutputTokens(modelName)
+    expect(mocks.resolveMaxOutputTokens).toHaveBeenCalledWith("judge-model");
+    expect(mocks.generateObject).toHaveBeenCalledWith(
+      expect.objectContaining({ maxOutputTokens: 4096 }),
+    );
+  });
+
+  it("approved=false / 合法 feedback 数组 / 合法 finalSolution 都正常映射", async () => {
+    mocks.generateObject.mockResolvedValue({
+      object: {
+        approved: false,
+        feedback: ["把 X 改了解决 Y", "补全 Z 维度"],
+        finalSolution: "重做方案",
+      },
+      usage: { inputTokens: 1, outputTokens: 1 },
+    });
+
+    const result = await runJudgeDecisionStructured({
+      ...baseJudgeArgs,
+      judgeConfig: baseJudgeConfig,
+    });
+
+    expect(result?.approved).toBe(false);
+    expect(result?.feedback).toEqual(["把 X 改了解决 Y", "补全 Z 维度"]);
+    expect(result?.finalSolution).toBe("重做方案");
+  });
+
+  it("critiques 为空时仍能生成 user prompt（不依赖批评分支）", async () => {
+    mocks.generateObject.mockResolvedValue({
+      object: { approved: true, feedback: [], finalSolution: "原方案即可" },
+      usage: { inputTokens: 1, outputTokens: 1 },
+    });
+
+    const result = await runJudgeDecisionStructured({
+      ...baseJudgeArgs,
+      critiques: [],
+      judgeConfig: baseJudgeConfig,
+    });
+
+    expect(result?.approved).toBe(true);
+    expect(mocks.generateObject).toHaveBeenCalledTimes(1);
+  });
+
+  it("res.usage 缺失 → inputTokens/outputTokens 默认 0", async () => {
+    mocks.generateObject.mockResolvedValue({
+      object: { approved: true, feedback: [], finalSolution: "ok" },
+      // 用法：v8 算 branch 时 ?? 0 这个默认值必须被实际跑到
+      usage: undefined,
+    });
+
+    await runJudgeDecisionStructured({
+      ...baseJudgeArgs,
+      judgeConfig: baseJudgeConfig,
+    });
+
+    expect(mocks.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        usage: { inputTokens: 0, outputTokens: 0 },
+      }),
+    );
+  });
+});
+
+describe("runJudgeDecisionStructured - 字段归一化（边界类型）", () => {
+  it("object.approved 不是 boolean → 强制转 false", async () => {
+    // zod schema 严格下不该出现，但运行期 zod 不抛错时仍要兜底
+    mocks.generateObject.mockResolvedValue({
+      object: { approved: "yes", feedback: [], finalSolution: "ok" },
+      usage: { inputTokens: 1, outputTokens: 1 },
+    });
+
+    const result = await runJudgeDecisionStructured({
+      ...baseJudgeArgs,
+      judgeConfig: baseJudgeConfig,
+    });
+
+    expect(result?.approved).toBe(false);
+  });
+
+  it("object.feedback 不是数组 → 强制空数组", async () => {
+    mocks.generateObject.mockResolvedValue({
+      object: { approved: true, feedback: "not an array", finalSolution: "ok" },
+      usage: { inputTokens: 1, outputTokens: 1 },
+    });
+
+    const result = await runJudgeDecisionStructured({
+      ...baseJudgeArgs,
+      judgeConfig: baseJudgeConfig,
+    });
+
+    expect(result?.feedback).toEqual([]);
+  });
+
+  it("object.finalSolution 不是字符串 → 强制空串", async () => {
+    mocks.generateObject.mockResolvedValue({
+      object: { approved: true, feedback: [], finalSolution: 12345 },
+      usage: { inputTokens: 1, outputTokens: 1 },
+    });
+
+    const result = await runJudgeDecisionStructured({
+      ...baseJudgeArgs,
+      judgeConfig: baseJudgeConfig,
+    });
+
+    expect(result?.finalSolution).toBe("");
+  });
+});
+
+describe("runJudgeDecisionStructured - 错误分支", () => {
+  it("AbortError（name === 'AbortError'）原样抛 → 调用方按已停止处理", async () => {
+    const abortError = Object.assign(new Error("aborted"), { name: "AbortError" });
+    mocks.generateObject.mockRejectedValue(abortError);
+
+    await expect(
+      runJudgeDecisionStructured({
+        ...baseJudgeArgs,
+        judgeConfig: baseJudgeConfig,
+      }),
+    ).rejects.toBe(abortError);
+  });
+
+  it("signal.aborted=true 时也走原样抛路径（即使 err.name 不是 AbortError）", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const other = new Error("connection reset");
+    mocks.generateObject.mockRejectedValue(other);
+
+    await expect(
+      runJudgeDecisionStructured({
+        ...baseJudgeArgs,
+        judgeConfig: baseJudgeConfig,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(other);
+  });
+
+  it("普通错误 → 返 null（让 debate-engine 兜底到 parseJudgeDecision，不阻断主对话）", async () => {
+    mocks.generateObject.mockRejectedValue(new Error("rate limit exceeded"));
+
+    const result = await runJudgeDecisionStructured({
+      ...baseJudgeArgs,
+      judgeConfig: baseJudgeConfig,
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("非 Error 抛错也走返 null 路径（不抛上去）", async () => {
+    mocks.generateObject.mockRejectedValue("plain string error");
+
+    const result = await runJudgeDecisionStructured({
+      ...baseJudgeArgs,
+      judgeConfig: baseJudgeConfig,
+    });
+
+    expect(result).toBeNull();
   });
 });
