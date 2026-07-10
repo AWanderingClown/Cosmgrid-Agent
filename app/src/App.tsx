@@ -23,8 +23,7 @@ import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 import { OnboardingModal } from "@/pages/OnboardingModal";
-import { disposeLspSessions } from "@/lib/lsp/lsp-session";
-import { disposeAllMcpSessions } from "@/lib/mcp/client";
+import { disposeBackgroundSessionsForClose } from "@/lib/app-close";
 import { migrateLegacyMcpServerSecrets } from "@/lib/mcp/secret-store";
 
 const ChatPage = lazy(() => import("@/pages/ChatPage").then((m) => ({ default: m.ChatPage })));
@@ -121,12 +120,13 @@ function App() {
 
   useEffect(() => {
     let closing = false;
-    const unlisten = getCurrentWindow().onCloseRequested(async (event) => {
+    const appWindow = getCurrentWindow();
+    const unlisten = appWindow.onCloseRequested(async (event) => {
       if (closing) return;
       event.preventDefault();
       closing = true;
-      await Promise.allSettled([disposeLspSessions(), disposeAllMcpSessions()]);
-      await getCurrentWindow().destroy();
+      await disposeBackgroundSessionsForClose();
+      await appWindow.destroy().catch(() => appWindow.close().catch(() => undefined));
     });
     return () => {
       void unlisten.then((fn) => fn());
