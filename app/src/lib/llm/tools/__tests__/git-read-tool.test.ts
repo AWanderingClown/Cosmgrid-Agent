@@ -15,6 +15,7 @@ vi.mock("../../../db", () => ({
 }));
 
 import { gitReadTool, GIT_READ_OUTPUT_LIMIT } from "../git-read-tool";
+import { executeTool } from "../executor";
 import {
   setGitReadAdapter,
   type GitReadAdapter,
@@ -38,39 +39,39 @@ beforeEach(() => {
 
 describe("git_read operation → 参数构造", () => {
   it("status 默认参数含 --short --branch", async () => {
-    await gitReadTool.execute({ operation: "status" }, ctx);
+    await executeTool(gitReadTool, { operation: "status" }, ctx);
     expect(lastCall?.args).toEqual(["status", "--short", "--branch"]);
   });
 
   it("diff 默认无 staged", async () => {
-    await gitReadTool.execute({ operation: "diff" }, ctx);
+    await executeTool(gitReadTool, { operation: "diff" }, ctx);
     expect(lastCall?.args).toEqual(["diff"]);
   });
 
   it("diff + staged=true 加 --staged", async () => {
-    await gitReadTool.execute({ operation: "diff", staged: true }, ctx);
+    await executeTool(gitReadTool, { operation: "diff", staged: true }, ctx);
     expect(lastCall?.args).toEqual(["diff", "--staged"]);
   });
 
   it("log 默认 20 条 + --oneline", async () => {
-    await gitReadTool.execute({ operation: "log" }, ctx);
+    await executeTool(gitReadTool, { operation: "log" }, ctx);
     expect(lastCall?.args).toEqual(["log", "--oneline", "-n", "20"]);
   });
 
   it("log + maxCount=5 用 5", async () => {
-    await gitReadTool.execute({ operation: "log", maxCount: 5 }, ctx);
+    await executeTool(gitReadTool, { operation: "log", maxCount: 5 }, ctx);
     expect(lastCall?.args).toEqual(["log", "--oneline", "-n", "5"]);
   });
 
   it("pathspec 一律放在 -- 之后（防参数注入）", async () => {
-    await gitReadTool.execute({ operation: "status", path: "src/a.ts" }, ctx);
+    await executeTool(gitReadTool, { operation: "status", path: "src/a.ts" }, ctx);
     expect(lastCall?.args).toEqual(["status", "--short", "--branch", "--", "/ws/src/a.ts"]);
   });
 });
 
 describe("git_read path 校验", () => {
   it("path 越出 workspace → denied", async () => {
-    const res = await gitReadTool.execute(
+    const res = await executeTool(gitReadTool,
       { operation: "status", path: "../../etc/passwd" },
       ctx,
     );
@@ -80,14 +81,14 @@ describe("git_read path 校验", () => {
   });
 
   it("path 命中敏感路径（.ssh）→ denied", async () => {
-    const res = await gitReadTool.execute({ operation: "log", path: ".ssh/id_rsa" }, ctx);
+    const res = await executeTool(gitReadTool, { operation: "log", path: ".ssh/id_rsa" }, ctx);
     expect(res.status).toBe("denied");
     expect(res.output).toContain("敏感路径");
     expect(lastCall).toBeNull();
   });
 
   it("path 空字符串 → 当作未指定", async () => {
-    await gitReadTool.execute({ operation: "status", path: "  " }, ctx);
+    await executeTool(gitReadTool, { operation: "status", path: "  " }, ctx);
     expect(lastCall?.args).toEqual(["status", "--short", "--branch"]);
   });
 });
@@ -97,7 +98,7 @@ describe("git_read adapter 结果处理", () => {
     setGitReadAdapter({
       run: async () => ({ stdout: "", stderr: "not a git repository", code: 128 }),
     });
-    const res = await gitReadTool.execute({ operation: "status" }, ctx);
+    const res = await executeTool(gitReadTool, { operation: "status" }, ctx);
     expect(res.status).toBe("error");
     expect(res.output).toContain("not a git repository");
   });
@@ -106,7 +107,7 @@ describe("git_read adapter 结果处理", () => {
     setGitReadAdapter({
       run: async () => ({ stdout: "", stderr: "", code: 128 }),
     });
-    const res = await gitReadTool.execute({ operation: "diff" }, ctx);
+    const res = await executeTool(gitReadTool, { operation: "diff" }, ctx);
     expect(res.status).toBe("error");
     expect(res.output).toContain("128");
   });
@@ -115,7 +116,7 @@ describe("git_read adapter 结果处理", () => {
     setGitReadAdapter({
       run: async () => ({ stdout: "", stderr: "", code: 0 }),
     });
-    const res = await gitReadTool.execute({ operation: "status" }, ctx);
+    const res = await executeTool(gitReadTool, { operation: "status" }, ctx);
     expect(res.status).toBe("success");
     expect(res.output).toContain("无输出");
   });
@@ -124,7 +125,7 @@ describe("git_read adapter 结果处理", () => {
     setGitReadAdapter({
       run: async () => ({ stdout: " M src/a.ts\n", stderr: "", code: 0 }),
     });
-    const res = await gitReadTool.execute({ operation: "status" }, ctx);
+    const res = await executeTool(gitReadTool, { operation: "status" }, ctx);
     expect(res.status).toBe("success");
     expect(res.output).toBe("M src/a.ts");
   });
@@ -134,7 +135,7 @@ describe("git_read adapter 结果处理", () => {
     setGitReadAdapter({
       run: async () => ({ stdout: huge, stderr: "", code: 0 }),
     });
-    const res = await gitReadTool.execute({ operation: "diff" }, ctx);
+    const res = await executeTool(gitReadTool, { operation: "diff" }, ctx);
     expect(res.status).toBe("success");
     // 锁死契约：截断 = 原文前 N 字符（不能改成别的截断长度）
     expect(res.output.startsWith("x".repeat(GIT_READ_OUTPUT_LIMIT))).toBe(true);
@@ -147,7 +148,7 @@ describe("git_read adapter 结果处理", () => {
         throw new Error("Tauri invoke failed");
       },
     });
-    const res = await gitReadTool.execute({ operation: "log" }, ctx);
+    const res = await executeTool(gitReadTool, { operation: "log" }, ctx);
     expect(res.status).toBe("error");
     expect(res.output).toContain("Tauri invoke failed");
   });
