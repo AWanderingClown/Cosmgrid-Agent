@@ -18,10 +18,26 @@
 // （含云 metadata 169.254.169.254）/localhost。
 // 已知局限：无法防御 DNS rebinding（一个公网域名解析到内网 IP）——跟 command-safety.ts
 // 的黑名单式拦截同一个安全姿态：挡常见/明显的攻击面，不是密不透风的沙箱。
+//
+// Harness 阶段2（2026-07-11）：返回 ToolResultV2。
+// - SSRF 命中 → errorResult{TOOL_INVALID_URL, retryable=false}（不可绕开，必须换 URL）
+// - HTTP 4xx（401/403/404）→ errorResult{TOOL_HTTP_ERROR, retryable=false}
+// - HTTP 5xx / 网络层失败 → errorResult{TOOL_NETWORK_ERROR, retryable=true}
+// - 超时 → timeoutResult
+// - HTTP 2xx/3xx → successResult + url artifact
 
 import { invoke } from "@tauri-apps/api/core";
 import { z } from "zod";
-import type { ToolDefinition, ToolResult } from "./types";
+import type { ToolDefinition } from "./types";
+import {
+  errorResult,
+  successResult,
+  timeoutResult,
+  TOOL_HTTP_ERROR,
+  TOOL_INVALID_URL,
+  TOOL_NETWORK_ERROR,
+  type ToolResultV2,
+} from "./result-contract";
 
 const FETCH_OUTPUT_LIMIT = 8000;
 
@@ -114,13 +130,70 @@ function looksIncomplete(status: number, plainText: string): boolean {
   return BOT_CHALLENGE_MARKERS.some((re) => re.test(trimmed));
 }
 
-function formatOutput(finalUrl: string, status: number, plainText: string): ToolResult {
+/**
+ * 把 tier1/tier3 拿到的内容映射成 ToolResultV2。
+ *  - 2xx/3xx → success
+ *  - 401/403/404/410 → error{TOOL_HTTP_ERROR, retryable=false}（客户端错误，重试无意义）
+ *  - 429/5xx → error{TOOL_HTTP_ERROR, retryable=true}（服务端临时错误，可以退避后重试）
+ *  - body 为空但 status 200 → success 但 nextAction 提示"换源"
+ */
+function formatOutput(
+  finalUrl: string,
+  status: number,
+  plainText: string,
+): ToolResultV2 {
   const clipped = plainText.length > FETCH_OUTPUT_LIMIT ? plainText.slice(0, FETCH_OUTPUT_LIMIT) + "\n…(截断)" : plainText;
   const ok = status >= 200 && status < 400;
-  return {
-    status: ok ? "success" : "error",
+  const artifacts = [{ kind: "url" as const, uri: finalUrl, label: `HTTP ${status}` }];
+
+  if (ok) {
+    const empty = clipped.trim().length === 0;
+    if (empty) {
+      // status 200 但 body 是空 / 只有反爬挑战页：作为 warning，让模型换源
+      return errorResult({
+        output: `${finalUrl}（HTTP ${status}）\n(返回内容为空或被反爬页面占据)`,
+        summary: `web_fetch ${finalUrl} 空响应`,
+        artifacts,
+        error: {
+          code: TOOL_NETWORK_ERROR,
+          rootCauseHint: "HTTP 200 但 body 是空 / 反爬挑战页（CDN 把 LLM 流量识别为机器人）",
+          retryable: false,
+          stopCondition: "这种网站通常 LLM 抓不到，不要重试；换 web_search 找替代来源",
+        },
+        nextActions: [
+          { action: "switch_to_web_search", reason: "改用 web_search 找这个内容的其他来源", safe: true },
+          { action: "ask_user_for_alternative_url", reason: "让用户给一个更友好的镜像 / 备用 URL", safe: true },
+        ],
+      });
+    }
+    return successResult({
+      output: `${finalUrl}（HTTP ${status}）\n${clipped}`,
+      summary: `web_fetch ${finalUrl} → ${clipped.length}B`,
+      artifacts,
+    });
+  }
+
+  // 4xx/5xx
+  const isClientError = status >= 400 && status < 500;
+  const isRateLimit = status === 429;
+  return errorResult({
     output: `${finalUrl}（HTTP ${status}）\n${clipped}`,
-  };
+    summary: `web_fetch ${finalUrl} → HTTP ${status}`,
+    artifacts,
+    error: {
+      code: TOOL_HTTP_ERROR,
+      rootCauseHint: `HTTP ${status}`,
+      retryable: isRateLimit || status >= 500, // 5xx + 429 可重试；其他 4xx 不可
+      retryInstruction: isRateLimit
+        ? "429 限流——退避 30 秒后重试"
+        : status >= 500
+          ? "服务端临时错误——可以重试一次"
+          : `HTTP ${status} 是客户端错误——不要重试，换 URL 或换源`,
+      stopCondition: isClientError && !isRateLimit
+        ? "4xx 错误重试无意义，停下换源（404/403 通常说明 URL 失效或没权限）"
+        : undefined,
+    },
+  });
 }
 
 export const webFetchTool: ToolDefinition<WebFetchParams> = {
@@ -132,10 +205,19 @@ export const webFetchTool: ToolDefinition<WebFetchParams> = {
   // web_fetch 的校验对象是 URL（SSRF 内网地址拦截）不是 shell 命令，跟 command-safety
   // 不是同一道安全网，不适合套 "command" kind，assertSafeUrl 继续留在工具内部自己调用。
   security: { kind: "none" },
-  async execute(input): Promise<ToolResult> {
+  async execute(input): Promise<ToolResultV2> {
     const safety = assertSafeUrl(input.url);
     if (!safety.ok) {
-      return { status: "denied", output: `已拦截：${safety.reason}` };
+      return errorResult({
+        output: `已拦截：${safety.reason}`,
+        summary: `web_fetch URL 拦截`,
+        error: {
+          code: TOOL_INVALID_URL,
+          rootCauseHint: safety.reason,
+          retryable: false,
+          stopCondition: "SSRF 防护不允许该 URL（内网/私有地址）——必须换 URL，不能绕开",
+        },
+      });
     }
 
     let tier1PlainText = "";
@@ -158,10 +240,25 @@ export const webFetchTool: ToolDefinition<WebFetchParams> = {
       if (tier1Result && tier1PlainText.trim().length > 0) {
         return formatOutput(tier1Result.finalUrl, tier1Result.status, tier1PlainText);
       }
-      return {
-        status: "error",
-        output: `请求失败（直接请求和真实渲染两种方式都试过了）：${err instanceof Error ? err.message : String(err)}`,
-      };
+      const msg = err instanceof Error ? err.message : String(err);
+      const aborted = /abort/i.test(msg);
+      if (aborted) {
+        return timeoutResult({
+          output: `请求超时：${msg}`,
+          summary: `web_fetch 超时`,
+        });
+      }
+      return errorResult({
+        output: `请求失败（直接请求和真实渲染两种方式都试过了）：${msg}`,
+        summary: `web_fetch 两档都失败`,
+        error: {
+          code: TOOL_NETWORK_ERROR,
+          rootCauseHint: msg,
+          retryable: true,
+          retryInstruction: "网络层失败通常跟 DNS / 路由 / 目标站点不可达有关，可以隔一会儿再试一次",
+          stopCondition: "连续失败 2 次后切到 web_search 找替代来源",
+        },
+      });
     }
   },
 };

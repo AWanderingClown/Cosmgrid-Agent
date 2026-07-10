@@ -35,12 +35,14 @@ describe("LSP tools", () => {
   });
 
   it("runs diagnostics, definition, and hover with resolved paths", async () => {
-    mocks.diagnostics.mockResolvedValue("diagnostics");
+    // 阶段2（2026-07-11）：lsp_diagnostics 干净路径返回空字符串（"no diagnostics"），
+    // 有问题才返回具体诊断文本。Stub 用空字符串代表干净，更接近生产语义。
+    mocks.diagnostics.mockResolvedValue("no diagnostics");
     mocks.definition.mockResolvedValue("definition");
     mocks.hover.mockResolvedValue("hover");
 
     await expect(executeTool(lspDiagnosticsTool, { file_path: "src/a.ts" }, ctx))
-      .resolves.toMatchObject({ status: "success", output: "diagnostics" });
+      .resolves.toMatchObject({ status: "success", output: "no diagnostics" });
     await expect(executeTool(lspDefinitionTool, { file_path: "src/a.ts", line: 2, character: 3 }, ctx))
       .resolves.toMatchObject({ status: "success", output: "definition" });
     await expect(executeTool(lspHoverTool, { file_path: "src/a.ts", line: 4, character: 5 }, ctx))

@@ -488,6 +488,11 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         createdAt: new Date().toISOString(),
         durationMs: 0,
         messageId: null,
+        // 阶段2（2026-07-11）：ToolCallView 新增结构化字段；awaiting_approval 是 UI 占位
+        // 状态（待用户确认），还没真正执行，无 resultJson / artifacts / nextActions。
+        errorCode: null,
+        nextActions: [],
+        artifacts: [],
       }
     : latestToolCalls[latestToolCalls.length - 1];
 

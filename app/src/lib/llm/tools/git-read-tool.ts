@@ -8,10 +8,24 @@
 //   2. 参数由本工具构造成独立数组，经 Rust 不走 sh -c → 杜绝 shell 注入
 //   3. 可选 path 经 path-safety 校验，越出工作区/命中敏感路径直接拒
 // 因此模型无法借此跑 git push / reset --hard 等写命令。
+//
+// Harness 阶段2（2026-07-11）：返回 ToolResultV2。
+// - 工作区不是 git 仓库（exit != 0）→ errorResult{TOOL_NOT_FOUND, retryable=false}——
+//   不是 git 仓库就是不是，重试也救不了。
+// - 执行抛错 → errorResult{TOOL_UNKNOWN_ERROR}
+// - 工作区干净（diff/status 空）→ successResult（这是预期行为，不需要 warning）
+// - 成功 → successResult + 可选 file artifact（diff/log 时指向查询的 path）
 
 import { z } from "zod";
-import type { ToolDefinition, ToolResult } from "./types";
+import type { ToolDefinition } from "./types";
 import { getGitReadAdapter } from "./git-read-adapter";
+import {
+  errorResult,
+  successResult,
+  TOOL_NOT_FOUND,
+  TOOL_UNKNOWN_ERROR,
+  type ToolResultV2,
+} from "./result-contract";
 
 /** log 默认条数上限（避免历史过长撑爆上下文） */
 const GIT_LOG_DEFAULT_COUNT = 20;
@@ -73,7 +87,7 @@ export const gitReadTool: ToolDefinition<GitReadParams> = {
   // executor 声明式检查在字段值为空时会跳过（见 executor.ts runSecurityPrecheck），
   // ctx.security 此时是 undefined，工具自己判断落到"不限定 pathspec"分支。
   security: { kind: "read-path", pathField: "path" },
-  async execute(input, ctx): Promise<ToolResult> {
+  async execute(input, ctx): Promise<ToolResultV2> {
     // 传了 path 时，executor 已经跑过 checkPath（越界/敏感会在 executor 层直接 denied，
     // 走不到这里）；没传时 ctx.security 是 undefined，pathspec 保持 null。
     const pathspec = ctx.security?.kind === "read-path" ? ctx.security.resolved : null;
@@ -85,15 +99,47 @@ export const gitReadTool: ToolDefinition<GitReadParams> = {
       // git 非零退出（多为「不是 git 仓库」），把 stderr 当错误回给模型
       if (res.code !== 0 && res.code !== null) {
         const msg = res.stderr.trim() || res.stdout.trim() || `git 退出码 ${res.code}`;
-        return { status: "error", output: `git ${input.operation} 失败：${msg}` };
+        // 区分"不是 git 仓库"vs"命令本身错"：典型特征是 stderr 里出现 "not a git repository"
+        const notARepo = /not a git repository/i.test(msg);
+        return errorResult({
+          output: `git ${input.operation} 失败：${msg}`,
+          summary: `git ${input.operation} 失败`,
+          error: {
+            code: notARepo ? TOOL_NOT_FOUND : TOOL_UNKNOWN_ERROR,
+            rootCauseHint: notARepo
+              ? "工作区不是 git 仓库（可能未初始化 .git 目录）"
+              : msg,
+            retryable: false,
+            stopCondition: notARepo
+              ? "git_read 不能用于非 git 工作区；要看文件改动用 read/diff 直接读文件"
+              : "检查 git 命令是否合法、工作区状态是否正常",
+          },
+        });
       }
       const body = res.stdout.trim() || "(无输出：工作区干净或无匹配)";
-      return { status: "success", output: clip(body) };
+      return successResult({
+        output: clip(body),
+        summary: `git ${input.operation} → ${body.length > 0 ? "有结果" : "空"}`,
+        ...(pathspec
+          ? {
+              artifacts: [
+                { kind: "command_output", uri: `git ${args.join(" ")}`, label: `${input.operation} ${pathspec}` },
+              ],
+            }
+          : {}),
+      });
     } catch (err) {
-      return {
-        status: "error",
-        output: `执行 git ${input.operation} 失败：${err instanceof Error ? err.message : String(err)}`,
-      };
+      const msg = err instanceof Error ? err.message : String(err);
+      return errorResult({
+        output: `执行 git ${input.operation} 失败：${msg}`,
+        summary: `git ${input.operation} 抛错`,
+        error: {
+          code: TOOL_UNKNOWN_ERROR,
+          rootCauseHint: msg,
+          retryable: false,
+          stopCondition: "git adapter 抛错通常跟 git binary 缺失 / 路径权限有关，先排查环境",
+        },
+      });
     }
   },
 };

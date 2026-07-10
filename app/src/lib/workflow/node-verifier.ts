@@ -27,6 +27,9 @@ export interface VerifyNodeOutcomeInput {
   userDeniedPermission?: boolean;
   /** 用户主动中止了这一轮。 */
   controllerAborted?: boolean;
+  /** verify 阶段已经自动打回 execute 修复过的次数（WorkflowNode.repairAttempts）。
+   *  只对 phase === "verify" 生效，决定 failed 该降级成 retryable 还是升级成 blocked。 */
+  repairAttempts?: number;
   artifactIds?: string[];
   toolExecutionIds?: string[];
   evidenceIds?: string[];
@@ -34,6 +37,32 @@ export interface VerifyNodeOutcomeInput {
 
 /** 需要真实工具调用证据才能通过的阶段（对应文档表格里"至少有真实证据"这几档）。 */
 const PHASES_REQUIRING_TOOL_EVIDENCE = new Set<WorkflowPhase>(["read_project", "execute", "verify"]);
+
+/** verify 失败后最多自动打回 execute 修复的次数，达到后进入 blocked，不能无限循环。 */
+export const MAX_REPAIR_ATTEMPTS = 2;
+
+/**
+ * verify 阶段专属：把"failed"降级成受控修复循环的"retryable"，或者在修复次数耗尽后
+ * 升级成终态的"blocked"。非 verify 阶段的 failed 原样返回，不进入自动修复。
+ */
+function applyVerifyRepairLoop(outcome: NodeOutcome, input: VerifyNodeOutcomeInput): NodeOutcome {
+  if (input.phase !== "verify" || outcome.status !== "failed") return outcome;
+
+  const attempts = input.repairAttempts ?? 0;
+  if (attempts >= MAX_REPAIR_ATTEMPTS) {
+    return {
+      ...outcome,
+      status: "blocked",
+      summary: `verify 已自动修复 ${attempts} 次仍未通过，达到上限，需要人工介入。原因：${outcome.summary}`,
+      stopReason: "repair_attempts_exhausted",
+    };
+  }
+  return {
+    ...outcome,
+    status: "retryable",
+    retryHint: outcome.retryHint ?? "回到 execute 阶段修复后重新验证。",
+  };
+}
 
 export function verifyNodeOutcome(input: VerifyNodeOutcomeInput): NodeOutcome {
   const base = {
@@ -50,34 +79,38 @@ export function verifyNodeOutcome(input: VerifyNodeOutcomeInput): NodeOutcome {
   }
 
   if (input.harnessDirty) {
-    return {
-      ...base,
-      status: "failed",
-      summary: "Harness 判定本轮回答存在编造嫌疑，未通过验收。",
-      failureCode: "harness_dirty",
-      retryHint: "让模型真实调用工具核实后重答，不要凭回忆或推测继续。",
-    };
+    return applyVerifyRepairLoop(
+      {
+        ...base,
+        status: "failed",
+        summary: "Harness 判定本轮回答存在编造嫌疑，未通过验收。",
+        failureCode: "harness_dirty",
+        retryHint: "让模型真实调用工具核实后重答，不要凭回忆或推测继续。",
+      },
+      input,
+    );
   }
 
   if (!input.hasSummary) {
-    return {
-      ...base,
-      status: "failed",
-      summary: "本轮没有产出任何回答内容。",
-      failureCode: "empty_output",
-    };
+    return applyVerifyRepairLoop(
+      { ...base, status: "failed", summary: "本轮没有产出任何回答内容。", failureCode: "empty_output" },
+      input,
+    );
   }
 
   const requiresToolEvidence = PHASES_REQUIRING_TOOL_EVIDENCE.has(input.phase);
   const hasToolEvidence = input.toolCallCount > 0 || !!input.explicitNoopDeclared;
   if (requiresToolEvidence && !hasToolEvidence) {
-    return {
-      ...base,
-      status: "failed",
-      summary: `阶段 "${input.phase}" 需要真实工具调用证据，本轮 0 次工具调用。`,
-      failureCode: "no_tool_evidence",
-      retryHint: "调用真实工具（read/write/bash 等）产出证据，不要只在文字里描述已经做过。",
-    };
+    return applyVerifyRepairLoop(
+      {
+        ...base,
+        status: "failed",
+        summary: `阶段 "${input.phase}" 需要真实工具调用证据，本轮 0 次工具调用。`,
+        failureCode: "no_tool_evidence",
+        retryHint: "调用真实工具（read/write/bash 等）产出证据，不要只在文字里描述已经做过。",
+      },
+      input,
+    );
   }
 
   return { ...base, status: "passed", summary: "本轮验收通过。" };

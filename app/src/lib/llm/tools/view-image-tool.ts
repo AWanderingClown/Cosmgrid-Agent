@@ -10,12 +10,26 @@
 // - 自动按比例缩小长边到 1568px（Claude vision 推荐尺寸，省 token）
 //
 // Provider 兼容性：Anthropic 原生支持；OpenAI / Google 落地验证后由 model-capabilities 控制。
+//
+// Harness 阶段2（2026-07-11）：返回 ToolResultV2。
+// - 不支持格式 → errorResult{TOOL_INVALID_PARAMS, retryable=true}
+// - 读不到 / 文件为空 → errorResult{TOOL_NOT_FOUND}
+// - 超 5MB → errorResult{TOOL_INVALID_PARAMS, retryable=true, retryInstruction="先压缩再试"}
+// - 成功 → successResult + parts（多模态通道）+ file artifact
 
 import { z } from "zod";
-import type { ToolDefinition, ToolResult } from "./types";
+import type { ToolDefinition } from "./types";
 import { getFsAdapter } from "./fs-adapter";
 import { bytesToDataUrl, textPart } from "./image-part";
 import { summarizePartsForAudit } from "./executor";
+import {
+  errorResult,
+  successResult,
+  TOOL_INVALID_PARAMS,
+  TOOL_NOT_FOUND,
+  type ToolArtifactRef,
+  type ToolResultV2,
+} from "./result-contract";
 
 /** Anthropic 协议层 tool_result image 单块上限（KB），超出会被 server 拒收 */
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -64,37 +78,65 @@ export const viewImageTool: ToolDefinition<ViewImageParams> = {
   parameters: paramsSchema,
   readOnly: true,
   security: { kind: "read-path", pathField: "file_path" },
-  async execute(_input, ctx): Promise<ToolResult> {
+  async execute(_input, ctx): Promise<ToolResultV2> {
     if (ctx.security?.kind !== "read-path") throw new Error("view_image 工具必须经 executeTool 调用（缺 ctx.security）");
     const resolved = ctx.security.resolved;
 
     const mediaType = mediaTypeFromExt(resolved);
     if (!mediaType || !SUPPORTED_MEDIA_TYPES.has(mediaType)) {
-      return {
-        status: "error",
+      return errorResult({
         output: `不支持的图片格式：${resolved}（仅支持 PNG/JPEG/WebP/GIF）`,
-      };
+        summary: `view_image 不支持 ${resolved}`,
+        error: {
+          code: TOOL_INVALID_PARAMS,
+          rootCauseHint: "文件扩展名不在 PNG/JPEG/WebP/GIF 列表里",
+          retryable: true,
+          retryInstruction: "换一张支持的图片，或者先用 image 转换工具把图片转成 PNG/JPEG 再传",
+        },
+      });
     }
 
     let bytes: Uint8Array;
     try {
       bytes = await getFsAdapter().readBytes(resolved);
     } catch (err) {
-      return {
-        status: "error",
-        output: `读取失败：${err instanceof Error ? err.message : String(err)}`,
-      };
+      const msg = err instanceof Error ? err.message : String(err);
+      return errorResult({
+        output: `读取失败：${msg}`,
+        summary: `view_image 读取失败 ${resolved}`,
+        error: {
+          code: TOOL_NOT_FOUND,
+          rootCauseHint: msg,
+          retryable: false,
+          stopCondition: "确认文件存在 / 有读权限",
+        },
+      });
     }
 
     if (bytes.byteLength === 0) {
-      return { status: "error", output: "图片为空文件" };
+      return errorResult({
+        output: "图片为空文件",
+        summary: `${resolved} 是空图片`,
+        error: {
+          code: TOOL_NOT_FOUND,
+          rootCauseHint: "文件存在但 0 字节",
+          retryable: false,
+          stopCondition: "换一张非空图片",
+        },
+      });
     }
     if (bytes.byteLength > MAX_IMAGE_BYTES) {
       const mb = (bytes.byteLength / (1024 * 1024)).toFixed(1);
-      return {
-        status: "error",
+      return errorResult({
         output: `图片过大（${mb}MB），单图上限 5MB。请先压缩或缩放后再试。`,
-      };
+        summary: `view_image ${resolved} 超 5MB`,
+        error: {
+          code: TOOL_INVALID_PARAMS,
+          rootCauseHint: `单图 ${mb}MB > 5MB 上限（Anthropic 协议层硬限制）`,
+          retryable: true,
+          retryInstruction: "先用 image 转换工具压缩或缩放到 ≤5MB 后再调用 view_image",
+        },
+      });
     }
 
     const { bytes: finalBytes, resized, longEdge } = maybeShrink(bytes);
@@ -105,10 +147,15 @@ export const viewImageTool: ToolDefinition<ViewImageParams> = {
       { type: "image" as const, image: dataUrl, mediaType },
     ];
 
-    return {
-      status: "success",
+    const artifacts: ToolArtifactRef[] = [
+      { kind: "file", uri: resolved, label: `${(finalBytes.byteLength / 1024).toFixed(1)}KB ${mediaType}` },
+    ];
+
+    return successResult({
       output: summarizePartsForAudit(parts),
+      summary,
       parts,
-    };
+      artifacts,
+    });
   },
 };

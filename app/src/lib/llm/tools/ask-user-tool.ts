@@ -4,9 +4,21 @@
 //
 // 没有 ctx.askUser（当前环境不支持，比如没有对应 UI 通道）时直接 denied，明确告诉模型
 // "别等了，直接给最佳判断"——不能让它以为问题已经问出去、傻等一个不会来的回答。
+//
+// Harness 阶段2（2026-07-11）：返回 ToolResultV2。
+// - 通道缺失 → errorResult{TOOL_DENIED, retryable=false, stopCondition:"直接给最佳判断"}。
+//   注意：这里用 errorResult 而不是 deniedResult 是因为这不是用户主动拒绝，是"环境不支持"。
+//   模型看到 errorCode=TOOL_DENIED 也能正确识别"等不到回答"。
+// - 成功 → successResult
 
 import { z } from "zod";
-import type { ToolDefinition, ToolResult } from "./types";
+import type { ToolDefinition } from "./types";
+import {
+  errorResult,
+  successResult,
+  TOOL_DENIED,
+  type ToolResultV2,
+} from "./result-contract";
 
 const optionSchema = z.object({
   label: z.string().min(1).describe("选项的简短文本"),
@@ -28,14 +40,31 @@ export const askUserTool: ToolDefinition<AskUserParams> = {
   parameters: paramsSchema,
   readOnly: true,
   security: { kind: "none" },
-  async execute(input, ctx): Promise<ToolResult> {
+  async execute(input, ctx): Promise<ToolResultV2> {
     if (!ctx.askUser) {
-      return {
-        status: "denied",
-        output: "当前环境不支持向用户提问（没有可用的追问通道）。请基于已知信息直接给出你的最佳判断，不要停下等待不会到来的回答。",
-      };
+      return errorResult({
+        output:
+          "当前环境不支持向用户提问（没有可用的追问通道）。请基于已知信息直接给出你的最佳判断，不要停下等待不会到来的回答。",
+        summary: "ask_user 通道缺失",
+        error: {
+          code: TOOL_DENIED,
+          rootCauseHint: "当前执行环境没有 askUser 通道（CLI 模式 / headless 模式 / 无 UI）",
+          retryable: false,
+          stopCondition: "直接给最佳判断，不要傻等用户回答",
+        },
+        nextActions: [
+          {
+            action: "make_a_decision",
+            reason: "等不到用户回答时，基于已知信息给出最佳判断 + 说明判断依据",
+            safe: true,
+          },
+        ],
+      });
     }
     const answer = await ctx.askUser({ question: input.question, options: input.options });
-    return { status: "success", output: `用户选择：${answer}` };
+    return successResult({
+      output: `用户选择：${answer}`,
+      summary: `用户选择「${answer}」`,
+    });
   },
 };

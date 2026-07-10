@@ -13,12 +13,26 @@
 // 2. 用户在确认弹窗看到 title + content + kind，可以拒绝
 // 3. importance < 20 的会被标"低优先级"，库查询时不主动召回（避免噪音）
 // 4. 标题和内容长度上限防垃圾数据
+//
+// Harness 阶段2（2026-07-11）：返回 ToolResultV2。
+// - 用户拒绝 → deniedResult
+// - 当前对话未绑项目 → errorResult{TOOL_UNKNOWN_ERROR, retryable=false}——记忆必须挂项目，
+//   这是项目维度的资产设计
+// - 落库失败 → errorResult{TOOL_UNKNOWN_ERROR, retryable=true}
+// - 成功 → successResult + memory artifact
 
 import { z } from "zod";
-import type { ToolDefinition, ToolResult } from "./types";
-import { requireApproval } from "./confirm";
+import type { ToolDefinition } from "./types";
+import { requireApprovalAsV2 } from "./confirm";
 import { projectMemories, type MemoryKind } from "@/lib/db/memory";
 import { conversations } from "@/lib/db";
+import {
+  errorResult,
+  successResult,
+  TOOL_UNKNOWN_ERROR,
+  type ToolArtifactRef,
+  type ToolResultV2,
+} from "./result-contract";
 
 const paramsSchema = z.object({
   title: z.string().min(1).max(200).describe("记忆标题（一句话概述这条记忆在说什么）"),
@@ -61,26 +75,43 @@ export const rememberTool: ToolDefinition<RememberParams> = {
   readOnly: false,
   security: { kind: "none" },
 
-  async execute(input, ctx): Promise<ToolResult> {
+  async execute(input, ctx): Promise<ToolResultV2> {
     const kind: MemoryKind = input.kind ?? "other";
     const importance = input.importance ?? 50;
 
     // 安全：必须用户确认才能落库
-    const denied = await requireApproval(ctx, {
-      toolName: "remember",
-      summary: `记忆：${input.title}`,
-      // 给用户看到完整内容（决策/教训类内容用户要看清楚才敢确认）
-      diff: `kind: ${kind}\nimportance: ${importance}\n\n${input.content}`,
-    });
+    const denied = await requireApprovalAsV2(
+      ctx,
+      {
+        toolName: "remember",
+        summary: `记忆：${input.title}`,
+        // 给用户看到完整内容（决策/教训类内容用户要看清楚才敢确认）
+        diff: `kind: ${kind}\nimportance: ${importance}\n\n${input.content}`,
+      },
+      "用户拒绝 remember",
+    );
     if (denied) return denied;
 
     try {
       const projectId = await resolveProjectIdForMemory(ctx.conversationId ?? null);
       if (!projectId) {
-        return {
-          status: "error",
+        return errorResult({
           output: "记忆失败：当前对话未绑定项目，记忆必须挂在具体项目下才能保存。",
-        };
+          summary: "remember 无项目",
+          error: {
+            code: TOOL_UNKNOWN_ERROR,
+            rootCauseHint: "当前对话未关联任何 project（projectId 为 null）",
+            retryable: false,
+            stopCondition: "记忆按设计就是项目级资产，没绑项目不能存——让用户先在 UI 里绑项目",
+          },
+          nextActions: [
+            {
+              action: "ask_user_to_bind_project",
+              reason: "让用户先把这个对话绑到一个项目上才能存记忆",
+              safe: true,
+            },
+          ],
+        });
       }
       const memory = await projectMemories.create({
         projectId,
@@ -91,15 +122,42 @@ export const rememberTool: ToolDefinition<RememberParams> = {
         tags: input.tags && input.tags.length > 0 ? input.tags.join(",") : null,
       });
 
-      return {
-        status: "success",
+      const artifacts: ToolArtifactRef[] = [
+        {
+          kind: "memory",
+          uri: memory.id,
+          label: `${memory.title}（${memory.kind}, importance ${memory.importance}）`,
+        },
+      ];
+
+      return successResult({
         output: `已记住：${memory.title}（${memory.kind}，重要性 ${memory.importance}/100）`,
-      };
+        summary: `已存记忆 ${memory.title}`,
+        artifacts,
+        nextActions:
+          importance < 60
+            ? [
+                {
+                  action: "verify_recall",
+                  reason: `importance=${importance} < 60 不会被主动召回——如果想让它浮现到未来对话，需要 importance >= 60`,
+                  safe: true,
+                },
+              ]
+            : [],
+      });
     } catch (err) {
-      return {
-        status: "error",
-        output: `记忆失败：${err instanceof Error ? err.message : String(err)}`,
-      };
+      const msg = err instanceof Error ? err.message : String(err);
+      return errorResult({
+        output: `记忆失败：${msg}`,
+        summary: "remember 落库失败",
+        error: {
+          code: TOOL_UNKNOWN_ERROR,
+          rootCauseHint: msg,
+          retryable: true,
+          retryInstruction: "SQLite 写入失败可能是 transient 错误，可以重试一次",
+          stopCondition: "连续失败说明可能是 schema 不一致或磁盘问题——停下来排查",
+        },
+      });
     }
   },
 };

@@ -6,11 +6,24 @@
 // hashline_edit 工具按这个 hash 引用定位编辑——文件在多轮对话之间被改动，hash 会立即
 // 失配并报错，不会像老式行号/字符串定位那样悄悄改错地方。旧 edit 工具（old_string/new_string）
 // 继续保留，两者并存。
+//
+// Harness 阶段2（2026-07-11）：返回 ToolResultV2。
+// - 读失败 → errorResult{TOOL_NOT_FOUND, retryable=false}
+// - 命中但内容为空（0 字节文件）→ warningResult 而不是 success——模型据此换源（不要重试）
+// - 成功 → successResult + file artifact
 
 import { z } from "zod";
-import type { ToolDefinition, ToolResult } from "./types";
+import type { ToolDefinition } from "./types";
 import { getFsAdapter } from "./fs-adapter";
 import { formatHashLine } from "./hashline";
+import {
+  readOrError,
+  successResult,
+  warningResult,
+  TOOL_NOT_FOUND,
+  type ToolArtifactRef,
+  type ToolResultV2,
+} from "./result-contract";
 
 /** 默认最多读 200 行（大文件截断，避免撑爆上下文） */
 const READ_DEFAULT_LIMIT = 200;
@@ -36,16 +49,18 @@ export const readTool: ToolDefinition<ReadParams> = {
   parameters: paramsSchema,
   readOnly: true,
   security: { kind: "read-path", pathField: "file_path" },
-  async execute(input, ctx): Promise<ToolResult> {
+  async execute(input, ctx): Promise<ToolResultV2> {
     if (ctx.security?.kind !== "read-path") throw new Error("read 工具必须经 executeTool 调用（缺 ctx.security）");
     const resolved = ctx.security.resolved;
 
-    let content: string;
-    try {
-      content = await getFsAdapter().readTextFile(resolved);
-    } catch (err) {
-      return { status: "error", output: `读取失败：${err instanceof Error ? err.message : String(err)}` };
-    }
+    const fs = getFsAdapter();
+    const r = await readOrError(fs, resolved, {
+      toolName: "read",
+      pathLabel: resolved,
+      notFoundStop: "确认文件存在 / 路径正确 / 有读权限；不是临时问题所以不该重试",
+    });
+    if (!r.ok) return r.result;
+    const content = r.content;
 
     const allLines = content.split("\n");
     const start = input.offset ?? 1;
@@ -59,9 +74,45 @@ export const readTool: ToolDefinition<ReadParams> = {
         ? `\n…（共 ${allLines.length} 行，已显示第 ${start}–${startIdx + slice.length} 行）`
         : "";
 
-    return {
-      status: "success",
-      output: `${header}\n${withLineNumbers(slice, start)}${truncatedNote}`,
-    };
+    const output = `${header}\n${withLineNumbers(slice, start)}${truncatedNote}`;
+
+    const artifacts: ToolArtifactRef[] = [
+      { kind: "file", uri: resolved, label: `${allLines.length} 行（显示 ${start}–${startIdx + slice.length}）` },
+    ];
+
+    // 空文件 = "warning" 而不是 "success"，避免模型误以为读到了内容
+    if (allLines.length === 1 && allLines[0] === "") {
+      return warningResult({
+        output: `${resolved}：空文件（0 字节）`,
+        summary: `${resolved} 是空文件`,
+        artifacts,
+        error: {
+          code: TOOL_NOT_FOUND,
+          rootCauseHint: "文件存在但是空的（0 字节）",
+          retryable: false,
+          stopCondition: "不要重试 read 同一文件——换源：要么换文件、要么先 write 内容",
+        },
+        nextActions: [
+          { action: "verify_with_glob", reason: "确认路径拼写是否正确（glob 找一下同名/近似路径）", safe: true },
+          { action: "switch_file", reason: "可能读错了文件，切到目标文件再试", safe: true },
+        ],
+      });
+    }
+
+    return successResult({
+      output,
+      summary: `${resolved} ${allLines.length} 行`,
+      artifacts,
+      nextActions:
+        startIdx + limit < allLines.length
+          ? [
+              {
+                action: "read_more",
+                reason: `文件还有 ${allLines.length - (startIdx + slice.length)} 行未读，用 offset=${startIdx + slice.length + 1} 继续`,
+                safe: true,
+              },
+            ]
+          : [],
+    });
   },
 };

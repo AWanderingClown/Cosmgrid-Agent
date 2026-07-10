@@ -5,8 +5,10 @@ import type { ChatMessage } from "@/pages/chat/types";
 const mocks = vi.hoisted(() => ({
   writeCache: vi.fn(),
   saveSnapshot: vi.fn(),
+  listByMessage: vi.fn(),
   completeCurrentWorkflowNode: vi.fn(),
   failCurrentWorkflowNode: vi.fn(),
+  repairCurrentWorkflowNode: vi.fn(),
 }));
 
 vi.mock("@/lib/llm/semantic-cache", () => ({
@@ -17,18 +19,22 @@ vi.mock("@/lib/db", () => ({
   workflowRuns: {
     saveSnapshot: mocks.saveSnapshot,
   },
+  toolExecutions: {
+    listByMessage: mocks.listByMessage,
+  },
 }));
 
 vi.mock("@/lib/workflow/reducer", () => ({
   completeCurrentWorkflowNode: mocks.completeCurrentWorkflowNode,
   failCurrentWorkflowNode: mocks.failCurrentWorkflowNode,
+  repairCurrentWorkflowNode: mocks.repairCurrentWorkflowNode,
 }));
 
-function makeSnapshot(phase: string) {
+function makeSnapshot(phase: string, overrides: Record<string, unknown> = {}) {
   return {
     runId: "run-1",
     currentNodeId: "node-1",
-    nodes: [{ id: "node-1", phase, status: "running" }],
+    nodes: [{ id: "node-1", phase, status: "running", ...overrides }],
   } as never;
 }
 
@@ -36,8 +42,10 @@ describe("finalizeStreamedChatTurn", () => {
   beforeEach(() => {
     mocks.writeCache.mockReset();
     mocks.saveSnapshot.mockReset().mockResolvedValue(undefined);
+    mocks.listByMessage.mockReset().mockResolvedValue([]);
     mocks.completeCurrentWorkflowNode.mockReset().mockReturnValue({ runId: "run-1", currentNodeId: null });
     mocks.failCurrentWorkflowNode.mockReset().mockReturnValue({ runId: "run-1", currentNodeId: "node-1" });
+    mocks.repairCurrentWorkflowNode.mockReset().mockReturnValue({ runId: "run-1", currentNodeId: "execute" });
   });
 
   it("更新工具调用数、持久化助手消息，并写入语义缓存", async () => {
@@ -196,5 +204,124 @@ describe("finalizeStreamedChatTurn", () => {
     expect(mocks.failCurrentWorkflowNode).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: expect.objectContaining({ failureCode: "harness_dirty" }) }),
     );
+  });
+
+  it("Harness 工程实施计划阶段1：verify 阶段 0 工具证据 + 未达修复上限 → retryable，打回 execute 而不是锁死失败", async () => {
+    const repairedWorkflow = { runId: "run-1", currentNodeId: "execute" };
+    mocks.repairCurrentWorkflowNode.mockReturnValue(repairedWorkflow);
+    const applyWorkflowSnapshot = vi.fn();
+    const workflowSnapshot = makeSnapshot("verify", { repairAttempts: 0 });
+
+    await finalizeStreamedChatTurn({
+      text: "hello",
+      assistantMessage: { id: "assistant-1", role: "assistant", content: "" },
+      assistantId: "assistant-1",
+      streamingResult: {
+        fullContent: "测试跑完了",
+        lastModelId: "model-1",
+        lastToolCallCount: 0,
+        harnessDirty: false,
+      },
+      conversationId: "conv-1",
+      cacheEligible: false,
+      taskRole: "standard",
+      shouldCompleteWorkflowNode: true,
+      workflowSnapshot,
+      workflowRunId: "run-1",
+      controllerAborted: false,
+      persistAssistant: vi.fn(),
+      setMessages: vi.fn((updater) => updater([])),
+      applyWorkflowSnapshot,
+    });
+
+    expect(mocks.completeCurrentWorkflowNode).not.toHaveBeenCalled();
+    expect(mocks.failCurrentWorkflowNode).not.toHaveBeenCalled();
+    expect(mocks.repairCurrentWorkflowNode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshot: workflowSnapshot,
+        outcome: expect.objectContaining({ status: "retryable", failureCode: "no_tool_evidence" }),
+      }),
+    );
+    expect(mocks.saveSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      runId: "run-1",
+      snapshot: repairedWorkflow,
+      eventType: "workflow.node_repair_retry",
+    }));
+    expect(applyWorkflowSnapshot).toHaveBeenCalledWith(repairedWorkflow);
+  });
+
+  it("Harness 工程实施计划阶段1：verify 已修复到上限（repairAttempts=2）→ blocked，锁死等人工介入", async () => {
+    const blockedWorkflow = { runId: "run-1", currentNodeId: "node-1" };
+    mocks.failCurrentWorkflowNode.mockReturnValue(blockedWorkflow);
+    const applyWorkflowSnapshot = vi.fn();
+    const workflowSnapshot = makeSnapshot("verify", { repairAttempts: 2 });
+
+    await finalizeStreamedChatTurn({
+      text: "hello",
+      assistantMessage: { id: "assistant-1", role: "assistant", content: "" },
+      assistantId: "assistant-1",
+      streamingResult: {
+        fullContent: "又跑了一次",
+        lastModelId: "model-1",
+        lastToolCallCount: 0,
+        harnessDirty: false,
+      },
+      conversationId: "conv-1",
+      cacheEligible: false,
+      taskRole: "standard",
+      shouldCompleteWorkflowNode: true,
+      workflowSnapshot,
+      workflowRunId: "run-1",
+      controllerAborted: false,
+      persistAssistant: vi.fn(),
+      setMessages: vi.fn((updater) => updater([])),
+      applyWorkflowSnapshot,
+    });
+
+    expect(mocks.repairCurrentWorkflowNode).not.toHaveBeenCalled();
+    expect(mocks.failCurrentWorkflowNode).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: expect.objectContaining({ status: "blocked" }) }),
+    );
+    expect(mocks.saveSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      runId: "run-1",
+      snapshot: blockedWorkflow,
+      eventType: "workflow.node_blocked",
+    }));
+    expect(applyWorkflowSnapshot).toHaveBeenCalledWith(blockedWorkflow);
+  });
+
+  it("Harness 工程实施计划阶段1：本轮有工具被用户拒绝（denied）→ needs_user，节点原样不动", async () => {
+    mocks.listByMessage.mockResolvedValue([{ id: "te-1", status: "denied" }]);
+    const applyWorkflowSnapshot = vi.fn();
+    const workflowSnapshot = makeSnapshot("execute");
+
+    await finalizeStreamedChatTurn({
+      text: "hello",
+      assistantMessage: { id: "assistant-1", role: "assistant", content: "" },
+      assistantId: "assistant-1",
+      streamingResult: {
+        fullContent: "我需要写文件但你拒绝了",
+        lastModelId: "model-1",
+        lastToolCallCount: 0,
+        harnessDirty: false,
+      },
+      conversationId: "conv-1",
+      cacheEligible: false,
+      taskRole: "standard",
+      shouldCompleteWorkflowNode: true,
+      workflowSnapshot,
+      workflowRunId: "run-1",
+      controllerAborted: false,
+      persistAssistant: vi.fn(),
+      setMessages: vi.fn((updater) => updater([])),
+      applyWorkflowSnapshot,
+    });
+
+    expect(mocks.listByMessage).toHaveBeenCalledWith("assistant-1");
+    expect(mocks.completeCurrentWorkflowNode).not.toHaveBeenCalled();
+    expect(mocks.failCurrentWorkflowNode).not.toHaveBeenCalled();
+    expect(mocks.repairCurrentWorkflowNode).not.toHaveBeenCalled();
+    expect(mocks.saveSnapshot).not.toHaveBeenCalled();
+    expect(applyWorkflowSnapshot).not.toHaveBeenCalled();
   });
 });

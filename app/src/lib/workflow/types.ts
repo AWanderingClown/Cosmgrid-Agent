@@ -110,6 +110,9 @@ export interface WorkflowNode {
   assignedRoles: RoleId[];
   assignedModelId?: string | null;
   autoAdvance: "always" | "if_confident" | "never";
+  /** Harness 工程实施计划阶段1：verify 阶段验收失败后已经自动打回 execute 修复的次数。
+   *  达到 node-verifier.ts 的 MAX_REPAIR_ATTEMPTS 后不再自动重试，进入 blocked。 */
+  repairAttempts?: number;
   outputs?: {
     summary?: string;
     artifactIds?: string[];

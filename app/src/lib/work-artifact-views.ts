@@ -1,6 +1,13 @@
 import type { ToolExecutionRow } from "@/lib/db";
+import { deserializeResultV2, type ToolResultV2 } from "@/lib/llm/tools/result-contract";
 
-export type ToolCallViewStatus = "success" | "error" | "denied" | "timeout" | "awaiting_approval";
+export type ToolCallViewStatus =
+  | "success"
+  | "warning"
+  | "error"
+  | "denied"
+  | "timeout"
+  | "awaiting_approval";
 
 export interface ToolCallView {
   id: string;
@@ -25,6 +32,29 @@ export interface ToolCallView {
    * null = 迁移前的历史记录（当时没有这一列），UI 侧对这些行退回时间戳窗口兜底归属。
    */
   messageId: string | null;
+  /**
+   * Harness 阶段2（2026-07-11）：结构化错误码（TOOL_DENIED / TOOL_TIMEOUT / TOOL_DOOM_LOOP 等）。
+   * 来自 row.errorCode（独立列）或 row.resultJson 解出的 error.code。
+   * UI 工具卡可以据此显示"已拦截 / 已超时 / doom loop"等稳定错误标识。
+   */
+  errorCode: string | null;
+  /**
+   * 结构化建议下一步（switch_strategy / ask_user / read_back 等），每项含 safe 标记。
+   * 来自 v2.nextActions。普通用户 UI 默认折叠不展开，开发者诊断面板可以展开。
+   */
+  nextActions: Array<{ action: string; reason: string; safe: boolean }>;
+  /**
+   * 结构化产物引用（file/diff/url/memory/diagnostic）。UI 可以据此渲染可点击入口。
+   * 来自 v2.artifacts。
+   */
+  artifacts: Array<{
+    id?: string;
+    kind: string;
+    uri: string;
+    label: string;
+    exitCode?: number;
+    external?: boolean;
+  }>;
 }
 
 function safeParseJson(input: string): Record<string, unknown> {
@@ -52,6 +82,7 @@ function countLines(text: string): number {
 
 function statusText(status: string): string {
   if (status === "success") return "已完成";
+  if (status === "warning") return "完成但有警告";
   if (status === "denied") return "已取消";
   if (status === "awaiting_approval") return "等待确认";
   if (status === "timeout") return "已超时";
@@ -108,12 +139,55 @@ function summaryMeta(toolName: string, input: Record<string, unknown>): { key: s
   }
 }
 
-function buildHumanDetail(row: ToolExecutionRow, shortSummary: string): string {
+/**
+ * 从 ToolExecutionRow 提取 ToolResultV2，老数据（result_json=null）走兼容路径。
+ * 阶段2 设计点：errorCode 单独成列是为了 SQL 过滤效率；UI 渲染时 row.errorCode 优先，
+ * 缺时再从 v2.error.code 兜底（防御性，正常不会到这一步）。
+ */
+function parseV2(row: ToolExecutionRow): ToolResultV2 | undefined {
+  if (row.resultJson) {
+    const parsed = deserializeResultV2(row.resultJson);
+    if (parsed) return parsed;
+  }
+  return undefined;
+}
+
+function buildHumanDetail(row: ToolExecutionRow, shortSummary: string, v2?: ToolResultV2): string {
   const lines = [
     `动作：${shortSummary}`,
     `结果：${statusText(row.status)}`,
-    `耗时：${row.durationMs}ms`,
   ];
+  if (v2?.summary) {
+    lines.push(`摘要：${v2.summary}`);
+  }
+  // 阶段2：errorCode 单独显示一行，比"执行失败"更具诊断价值
+  const errCode = row.errorCode ?? v2?.error?.code;
+  if (errCode) {
+    lines.push(`错误码：${errCode}${v2?.error?.retryable ? "（可重试）" : ""}`);
+  }
+  if (v2?.error?.rootCauseHint) {
+    lines.push(`根因：${v2.error.rootCauseHint}`);
+  }
+  if (v2?.error?.retryInstruction) {
+    lines.push(`建议：${v2.error.retryInstruction}`);
+  }
+  if (v2?.error?.stopCondition) {
+    lines.push(`停止条件：${v2.error.stopCondition}`);
+  }
+  if (v2?.nextActions && v2.nextActions.length > 0) {
+    const actions = v2.nextActions
+      .map((a) => `${a.action}${a.safe ? "" : "（需用户确认）"}: ${a.reason}`)
+      .join(" | ");
+    lines.push(`下一步建议：${actions}`);
+  }
+  if (v2?.artifacts && v2.artifacts.length > 0) {
+    const refs = v2.artifacts
+      .slice(0, 5)
+      .map((a) => `${a.kind}:${a.uri}${a.label ? ` (${a.label})` : ""}`)
+      .join(" | ");
+    lines.push(`产物：${refs}${v2.artifacts.length > 5 ? ` …等 ${v2.artifacts.length} 个` : ""}`);
+  }
+  lines.push(`耗时：${row.durationMs}ms`);
   const out = outputSummary(row.output);
   if (out && row.status !== "success") lines.push(`提示：${out}`);
   return lines.join("\n");
@@ -124,12 +198,15 @@ export function deriveToolCallViews(rows: ToolExecutionRow[]): ToolCallView[] {
     const input = safeParseJson(row.input);
     const meta = summaryMeta(row.toolName, input);
     const shortSummary = summarizeToolCall(row.toolName, input);
-    const detailFull = buildHumanDetail(row, shortSummary);
+    const v2 = parseV2(row);
+    const detailFull = buildHumanDetail(row, shortSummary, v2);
     return {
       id: row.id,
       toolName: row.toolName,
-      status: row.status as ToolCallViewStatus,
-      shortSummary,
+      // 阶段2：v2.status 是真相源；老数据 row.status 兼容。warning 单独显示（≠ success）
+      status: ((v2?.status ?? row.status) as ToolCallViewStatus),
+      // 阶段2：v2.summary 优先（来自 result-contract.summarize，比纯 output 第一行更结构化）
+      shortSummary: v2?.summary && v2.summary.length > 0 ? v2.summary : shortSummary,
       summaryKey: meta.key,
       summaryVars: meta.vars,
       detailPreview: detailFull.slice(0, 240),
@@ -140,6 +217,10 @@ export function deriveToolCallViews(rows: ToolExecutionRow[]): ToolCallView[] {
       reversible: row.reversible,
       // 2026-07-04 修复：透传真实 messageId，替代时间戳窗口猜测归属
       messageId: row.messageId,
+      // 阶段2：结构化错误码 + 建议下一步 + 产物引用
+      errorCode: row.errorCode ?? v2?.error?.code ?? null,
+      nextActions: (v2?.nextActions ?? []) as ToolCallView["nextActions"],
+      artifacts: (v2?.artifacts ?? []) as ToolCallView["artifacts"],
     };
   });
 }

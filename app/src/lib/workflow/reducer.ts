@@ -122,6 +122,43 @@ export function failCurrentWorkflowNode(args: {
   };
 }
 
+/**
+ * Harness 工程实施计划阶段1 —— verify 验收 outcome.status === "retryable" 时的落库路径。
+ * 跟 failCurrentWorkflowNode 不同：不是终态锁死，而是把 verify 节点打回 pending、
+ * 把 currentNodeId 切回 execute 节点等待下一轮修复，同时把 repairAttempts 计数 +1
+ * （持久化在 snapshot_json 里，重启后从这个计数继续算，不会无限重试）。
+ * 调用方（stream-finalization.ts）只在 outcome.status === "retryable" 时调用这个函数；
+ * 达到 node-verifier.ts 的 MAX_REPAIR_ATTEMPTS 上限后 outcome.status 会变成 "blocked"，
+ * 那种情况走 failCurrentWorkflowNode 锁死，不再调这里。
+ */
+export function repairCurrentWorkflowNode(args: {
+  snapshot: WorkflowSnapshot;
+  outcome: NodeOutcome;
+}): WorkflowSnapshot {
+  const verifyNode = args.snapshot.nodes.find((n) => n.id === args.snapshot.currentNodeId);
+  if (!verifyNode) return args.snapshot;
+
+  const withRepairCount = updateNode(args.snapshot, verifyNode.id, {
+    status: "pending",
+    repairAttempts: (verifyNode.repairAttempts ?? 0) + 1,
+    outputs: { ...(verifyNode.outputs ?? {}), summary: args.outcome.summary },
+  });
+
+  const executeNode = withRepairCount.nodes.find((n) => n.phase === "execute");
+  if (!executeNode) {
+    return { ...withRepairCount, status: "waiting_user", nextActions: [], pendingDecision: undefined };
+  }
+
+  return {
+    ...withRepairCount,
+    currentNodeId: executeNode.id,
+    nodes: withRepairCount.nodes.map((n) => (n.id === executeNode.id ? { ...n, status: "ready" } : n)),
+    status: "running",
+    nextActions: [],
+    pendingDecision: undefined,
+  };
+}
+
 export function attachPlanSourceToWorkflow(args: {
   snapshot: WorkflowSnapshot;
   summary: string;

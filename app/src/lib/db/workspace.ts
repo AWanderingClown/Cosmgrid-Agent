@@ -102,6 +102,12 @@ export interface ToolExecutionRow {
   reversible: boolean;
   durationMs: number;
   createdAt: string;
+  /** 阶段2 工具结果协议 v2：完整结构化结果 JSON 序列化。
+   *  老数据 result_json 为 null，UI 走 compatFromLegacy 兜底显示。 */
+  resultJson: string | null;
+  /** 阶段2：稳定的错误码（TOOL_DENIED / TOOL_TIMEOUT / TOOL_DOOM_LOOP 等），无错为 null。
+   *  单独列出来方便 UI / 评估器按错误类型过滤，不必解析 result_json。 */
+  errorCode: string | null;
 }
 
 function mapToolExecRow(r: any): ToolExecutionRow {
@@ -118,6 +124,8 @@ function mapToolExecRow(r: any): ToolExecutionRow {
     reversible: !!r.reversible,
     durationMs: r.duration_ms,
     createdAt: r.created_at,
+    resultJson: r.result_json ?? null,
+    errorCode: r.error_code ?? null,
   };
 }
 
@@ -133,19 +141,24 @@ export const toolExecutions = {
     userConfirmed?: boolean;
     reversible?: boolean;
     durationMs: number;
+    /** 阶段2：序列化好的 ToolResultV2，老数据 / 未迁移工具不传。 */
+    resultJson?: string | null;
+    /** 阶段2：从 ToolResultV2.error.code 取出来单独落库，方便 SQL 过滤。 */
+    errorCode?: string | null;
   }): Promise<string> {
     const db = await getDb();
     const id = newId();
     await db.execute(
       `INSERT INTO tool_executions
         (id, project_id, conversation_id, message_id, tool_name, input, output, status,
-         user_confirmed, reversible, duration_ms, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+         user_confirmed, reversible, duration_ms, created_at, result_json, error_code)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [
         id, input.projectId ?? null, input.conversationId ?? null, input.messageId ?? null, input.toolName,
         input.input, input.output, input.status,
         boolToInt(input.userConfirmed ?? false), boolToInt(input.reversible ?? false),
         input.durationMs, now(),
+        input.resultJson ?? null, input.errorCode ?? null,
       ]
     );
     return id;
@@ -166,6 +179,17 @@ export const toolExecutions = {
     const rows = await db.select<any[]>(
       "SELECT * FROM tool_executions WHERE conversation_id = $1 ORDER BY created_at ASC",
       [conversationId]
+    );
+    return rows.map(mapToolExecRow);
+  },
+
+  /** Harness 工程实施计划阶段1：查这条 assistant 消息本轮的工具执行，
+   *  给 node-verifier 判断 userDeniedPermission（是否有 status=denied 的记录）。 */
+  async listByMessage(messageId: string): Promise<ToolExecutionRow[]> {
+    const db = await getDb();
+    const rows = await db.select<any[]>(
+      "SELECT * FROM tool_executions WHERE message_id = $1 ORDER BY created_at ASC",
+      [messageId]
     );
     return rows.map(mapToolExecRow);
   },

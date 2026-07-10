@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { createCodeTaskWorkflowSnapshot } from "../code-task-template";
-import { applyTurnIntentDecision, attachActiveSkillToWorkflow, completeCurrentWorkflowNode } from "../reducer";
+import {
+  applyTurnIntentDecision,
+  attachActiveSkillToWorkflow,
+  completeCurrentWorkflowNode,
+  repairCurrentWorkflowNode,
+} from "../reducer";
+import type { NodeOutcome } from "../node-outcome";
 import type { TurnIntentDecision } from "../types";
 
 function snapshot() {
@@ -128,6 +134,45 @@ describe("workflow reducer", () => {
       snapshot: snapshot(),
       decision: decision({ patch: { debateRequested: true } }),
     }).currentNodeId).toBe("debate");
+  });
+
+  it("Harness 工程实施计划阶段1：repairCurrentWorkflowNode 把 verify 打回 execute 并计数 +1", () => {
+    const verifying = { ...snapshot(), currentNodeId: "verify" };
+    const outcome: NodeOutcome = {
+      status: "retryable",
+      summary: "0 工具证据",
+      evidenceIds: [],
+      artifactIds: [],
+      toolExecutionIds: [],
+      failureCode: "no_tool_evidence",
+    };
+
+    const next = repairCurrentWorkflowNode({ snapshot: verifying, outcome });
+
+    expect(next.currentNodeId).toBe("execute");
+    expect(next.status).toBe("running");
+    expect(next.nodes.find((n) => n.id === "verify")?.status).toBe("pending");
+    expect(next.nodes.find((n) => n.id === "verify")?.repairAttempts).toBe(1);
+    expect(next.nodes.find((n) => n.id === "execute")?.status).toBe("ready");
+  });
+
+  it("repairCurrentWorkflowNode 在已有 repairAttempts 基础上继续累加", () => {
+    const verifying = {
+      ...snapshot(),
+      currentNodeId: "verify",
+      nodes: snapshot().nodes.map((n) => (n.id === "verify" ? { ...n, repairAttempts: 1 } : n)),
+    };
+    const outcome: NodeOutcome = {
+      status: "retryable",
+      summary: "再次没证据",
+      evidenceIds: [],
+      artifactIds: [],
+      toolExecutionIds: [],
+    };
+
+    const next = repairCurrentWorkflowNode({ snapshot: verifying, outcome });
+
+    expect(next.nodes.find((n) => n.id === "verify")?.repairAttempts).toBe(2);
   });
 
   it("多个 nextActions 时 continue_run 停在 waiting_user 等用户选择", () => {

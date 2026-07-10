@@ -16,6 +16,8 @@ function row(over: Partial<ToolExecutionRow>): ToolExecutionRow {
     reversible: false,
     durationMs: 10,
     createdAt: "2026-06-29T00:00:00.000Z",
+    resultJson: null,
+    errorCode: null,
     ...over,
   };
 }

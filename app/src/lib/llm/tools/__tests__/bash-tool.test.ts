@@ -24,7 +24,14 @@ beforeEach(() => {
 });
 
 function ctx(confirm?: ToolContext["confirm"], blocked?: string[]): ToolContext {
-  return { workspacePath: "/ws", ...(confirm ? { confirm } : {}), ...(blocked ? { blockedCommands: blocked } : {}) };
+  // 阶段2（2026-07-11）：每个测试用独立 messageId 隔离 doom-loop 状态，
+  // 避免模块级 doomLoopGlobal/ByMessage 在测试间互相污染——同 messageId + 同 tool+input 连续 3 次才会触发拦截。
+  return {
+    workspacePath: "/ws",
+    messageId: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    ...(confirm ? { confirm } : {}),
+    ...(blocked ? { blockedCommands: blocked } : {}),
+  };
 }
 
 describe("bash 工具 — 安全闸", () => {

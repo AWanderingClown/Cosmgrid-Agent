@@ -1,8 +1,8 @@
 import type { Dispatch, SetStateAction } from "react";
-import { workflowRuns } from "@/lib/db";
+import { toolExecutions, workflowRuns } from "@/lib/db";
 import { writeCache } from "@/lib/llm/semantic-cache";
 import type { StreamUsage } from "@/lib/llm/chat-fallback";
-import { completeCurrentWorkflowNode, failCurrentWorkflowNode } from "@/lib/workflow/reducer";
+import { completeCurrentWorkflowNode, failCurrentWorkflowNode, repairCurrentWorkflowNode } from "@/lib/workflow/reducer";
 import { verifyNodeOutcome } from "@/lib/workflow/node-verifier";
 import type { WorkflowSnapshot } from "@/lib/workflow/types";
 import type { ChatMessage } from "@/pages/chat/types";
@@ -78,15 +78,24 @@ export async function finalizeStreamedChatTurn(
       const currentNode = args.workflowSnapshot.nodes.find(
         (n) => n.id === args.workflowSnapshot!.currentNodeId,
       );
+      // Harness 工程实施计划阶段1：本轮是否有工具被用户拒绝（denied），据此判定 needs_user，
+      // 不能把"用户不同意写"当成"验收失败"处理。查失败不阻塞正常完成路径。
+      const userDeniedPermission = await toolExecutions
+        .listByMessage(args.assistantId)
+        .then((rows) => rows.some((row) => row.status === "denied"))
+        .catch(() => false);
       // Harness 工程实施计划阶段1：不再是"非空回复就完成"——先跑独立验收器，
-      // 只有 passed 才真的把节点标 done；harnessDirty/无工具证据时标 failed，
-      // 写 workflow.node_failed_verification 事件，节点保持未完成让用户能看到。
+      // 只有 passed 才真的把节点标 done；harnessDirty/无工具证据时 failed，
+      // verify 阶段 failed 且未达修复上限时降级成 retryable 打回 execute 重来，
+      // 写 workflow.node_failed_verification / node_repair_retry / node_blocked 事件。
       const outcome = currentNode
         ? verifyNodeOutcome({
             phase: currentNode.phase,
             harnessDirty: args.streamingResult.harnessDirty,
             toolCallCount: args.streamingResult.lastToolCallCount,
             hasSummary: finalContent.length > 0,
+            userDeniedPermission,
+            repairAttempts: currentNode.repairAttempts ?? 0,
           })
         : null;
 
@@ -102,6 +111,24 @@ export async function finalizeStreamedChatTurn(
           eventPayload: {
             nodeId: args.workflowSnapshot.currentNodeId,
             summaryPreview: finalContent.slice(0, 240),
+            // Harness 工程实施计划阶段1 退出标准："所有节点完成事件都有 NodeOutcome"。
+            // outcome 在没有 currentNode 时兜底为 null（极端边界），此时事件仍然落地，
+            // 只是没有 outcome 字段可附。
+            ...(outcome ? { outcome } : {}),
+          },
+        });
+        args.applyWorkflowSnapshot(nextWorkflow);
+      } else if (outcome.status === "retryable") {
+        const nextWorkflow = repairCurrentWorkflowNode({ snapshot: args.workflowSnapshot, outcome });
+        await workflowRuns.saveSnapshot({
+          runId: args.workflowRunId,
+          snapshot: nextWorkflow,
+          eventType: "workflow.node_repair_retry",
+          eventPayload: {
+            nodeId: args.workflowSnapshot.currentNodeId,
+            failureCode: outcome.failureCode,
+            repairAttempts: (currentNode?.repairAttempts ?? 0) + 1,
+            summaryPreview: finalContent.slice(0, 240),
           },
         });
         args.applyWorkflowSnapshot(nextWorkflow);
@@ -110,7 +137,7 @@ export async function finalizeStreamedChatTurn(
         await workflowRuns.saveSnapshot({
           runId: args.workflowRunId,
           snapshot: nextWorkflow,
-          eventType: "workflow.node_failed_verification",
+          eventType: outcome.status === "blocked" ? "workflow.node_blocked" : "workflow.node_failed_verification",
           eventPayload: {
             nodeId: args.workflowSnapshot.currentNodeId,
             failureCode: outcome.failureCode,

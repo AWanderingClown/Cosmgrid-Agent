@@ -16,7 +16,9 @@ const TOOL_ICON = {
 
 function statusVisual(status: ToolCallView["status"]) {
   if (status === "success") return { Icon: CheckCircle2, cls: "text-emerald-400" };
+  if (status === "warning") return { Icon: ShieldAlert, cls: "text-amber-400" };
   if (status === "denied") return { Icon: Ban, cls: "text-amber-400" };
+  if (status === "timeout") return { Icon: Clock, cls: "text-amber-400" };
   if (status === "awaiting_approval") return { Icon: Clock, cls: "text-primary animate-pulse" };
   return { Icon: XCircle, cls: "text-rose-400" };
 }

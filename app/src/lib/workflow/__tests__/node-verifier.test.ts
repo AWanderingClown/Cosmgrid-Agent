@@ -1,6 +1,6 @@
 // Harness 工程实施计划阶段1 —— 节点完成门控测试（先写失败测试，再实现最小结构）。
 import { describe, expect, it } from "vitest";
-import { verifyNodeOutcome } from "../node-verifier";
+import { MAX_REPAIR_ATTEMPTS, verifyNodeOutcome } from "../node-verifier";
 
 describe("verifyNodeOutcome", () => {
   it("Harness 判定编造（harnessDirty=true）→ failed，不管是哪个阶段", () => {
@@ -46,15 +46,39 @@ describe("verifyNodeOutcome", () => {
     expect(outcome.status).toBe("passed");
   });
 
-  it("verify 阶段 0 工具调用（没有真实测试/构建证据）→ failed", () => {
+  it("verify 阶段 0 工具调用（没有真实测试/构建证据）且未达修复上限 → retryable，打回 execute 修复", () => {
     const outcome = verifyNodeOutcome({
       phase: "verify",
       harnessDirty: false,
       toolCallCount: 0,
       hasSummary: true,
+      repairAttempts: 0,
+    });
+    expect(outcome.status).toBe("retryable");
+    expect(outcome.failureCode).toBe("no_tool_evidence");
+  });
+
+  it("verify 阶段已修复到上限（repairAttempts=MAX_REPAIR_ATTEMPTS）→ blocked，不再自动重试", () => {
+    const outcome = verifyNodeOutcome({
+      phase: "verify",
+      harnessDirty: false,
+      toolCallCount: 0,
+      hasSummary: true,
+      repairAttempts: MAX_REPAIR_ATTEMPTS,
+    });
+    expect(outcome.status).toBe("blocked");
+    expect(outcome.stopReason).toBe("repair_attempts_exhausted");
+  });
+
+  it("execute 阶段失败不进入 verify 的修复循环，始终是 failed（repair loop 只对 verify 生效）", () => {
+    const outcome = verifyNodeOutcome({
+      phase: "execute",
+      harnessDirty: false,
+      toolCallCount: 0,
+      hasSummary: true,
+      repairAttempts: 0,
     });
     expect(outcome.status).toBe("failed");
-    expect(outcome.failureCode).toBe("no_tool_evidence");
   });
 
   it("read_project 阶段没有任何工具调用（纯凭空说项目情况）→ failed", () => {

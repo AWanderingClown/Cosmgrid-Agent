@@ -93,6 +93,11 @@ describe("initSchema", () => {
       "202607040002-conversation-archived-at",
       "202607040003-message-tool-call-count",
       "202607090001-mcp-secret-credential",
+      // 阶段2（2026-07-11）：tool_executions 加 result_json + error_code 两列
+      "202607110001-tool-execution-result-v2",
+      "202607110002-tool-execution-error-code",
+      // 阶段2 code-review-loop：listByMessage 全表扫补索引
+      "202607110003-tool-execution-msg-error-index",
     ]);
 
     const usageColumns = await adapter.select<Array<{ name: string }>>("PRAGMA table_info(usage_events)");

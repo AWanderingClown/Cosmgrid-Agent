@@ -18,6 +18,8 @@ const rowOf = (overrides: Partial<ToolExecutionRow>): ToolExecutionRow => ({
   reversible: true,
   durationMs: 0,
   createdAt: new Date().toISOString(),
+  resultJson: null,
+  errorCode: null,
   ...overrides,
 });
 

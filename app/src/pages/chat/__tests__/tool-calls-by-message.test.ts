@@ -24,6 +24,9 @@ function tc(over: Partial<ToolCallView> & { id: string }): ToolCallView {
     createdAt: "2026-07-04T00:00:00.000Z",
     durationMs: 10,
     messageId: null,
+    errorCode: null,
+    nextActions: [],
+    artifacts: [],
     ...over,
   };
 }

@@ -5,7 +5,7 @@
 
 import { tool, type Tool } from "ai";
 import { ToolRegistry } from "./registry";
-import { executeTool } from "./executor";
+import { executeTool, renderForModel } from "./executor";
 import type { ToolContext } from "./types";
 import { readTool } from "./read-tool";
 import { globTool } from "./glob-tool";
@@ -85,13 +85,17 @@ export function createDefaultToolRegistry(opts: { includeWrite?: boolean; modelN
  * 把注册表里的工具转成 Vercel AI SDK 的 tools 映射，挂到 streamText({ tools })。
  * 每个工具的 execute 走统一 executeTool（zod 校验 + 审计 + 错误收敛）。
  *
- * 多模态返回（2026-07-09 view_image 工具新增）：若 ToolResult 含 parts 字段，
+ * 多模态返回（2026-07-09 view_image 工具新增）：若 ToolResultV2 含 parts 字段，
  * 转成 AI SDK v6 的 { content: ContentPart[] } 形态，让 provider 透传给模型；
- * 否则走旧的 output 字符串路径——所有老工具零影响。
+ * 否则走 renderForModel 把 ToolResultV2 渲染成结构化字符串（含 status / summary /
+ * error.code / nextActions / artifacts 头部），模型一眼就能看到下一步该怎么做。
  *
  * 为什么灰度分支：AI SDK 6 的 ToolResultUnion 接受 string 或 { content: [...] }，
  * 老工具没 parts 走 string，view_image 有 parts 走 content 形态；这是 SDK 官方推荐用法。
- */
+ *
+ * 阶段2（2026-07-11）：返回值改为字符串型 ToolResultV2 渲染产物，不再是裸 output。
+ * 这是"结构化工具结果"的最后一公里——buildAiSdkTools 是 AI SDK 与内部 ToolResultV2
+ * 之间的唯一边界，文本侧的脱敏 + 截断 + 结构化头部全部在这里统一注入。 */
 export function buildAiSdkTools(registry: ToolRegistry, ctx: ToolContext): Record<string, Tool> {
   const out: Record<string, Tool> = {};
   for (const def of registry.list()) {
@@ -103,7 +107,7 @@ export function buildAiSdkTools(registry: ToolRegistry, ctx: ToolContext): Recor
         if (res.parts && res.parts.length > 0) {
           return { content: res.parts };
         }
-        return res.output;
+        return renderForModel(res);
       },
     });
   }

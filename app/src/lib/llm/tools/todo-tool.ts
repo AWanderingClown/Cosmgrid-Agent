@@ -3,9 +3,15 @@
 //
 // 全量替换语义（每次调用传完整列表，不是增量 diff）——跟三家参考实现一致，模型侧逻辑简单，
 // 也避免"增量更新哪一项"的歧义。不需要用户确认（不改本地文件、无副作用），readOnly。
+//
+// Harness 阶段2（2026-07-11）：返回 ToolResultV2。
+// - 空数组 → successResult("待办列表已清空")
+// - 非空 → successResult + 列表内容
+// 注：todo_write 本质就是 UI 渲染数据，没有错误路径；阶段2 也维持这一定位。
 
 import { z } from "zod";
-import type { ToolDefinition, ToolResult } from "./types";
+import type { ToolDefinition } from "./types";
+import { successResult, type ToolResultV2 } from "./result-contract";
 
 const todoItemSchema = z.object({
   content: z.string().min(1).describe("这一项任务的内容"),
@@ -32,11 +38,35 @@ export const todoWriteTool: ToolDefinition<TodoWriteParams> = {
   parameters: paramsSchema,
   readOnly: true,
   security: { kind: "none" },
-  async execute(input): Promise<ToolResult> {
-    if (input.todos.length === 0) {
-      return { status: "success", output: "(待办列表已清空)" };
+  async execute(input): Promise<ToolResultV2> {
+    const totalCount = input.todos.length;
+    const completedCount = input.todos.filter((t) => t.status === "completed").length;
+    const inProgressCount = input.todos.filter((t) => t.status === "in_progress").length;
+
+    if (totalCount === 0) {
+      return successResult({
+        output: "(待办列表已清空)",
+        summary: "todo_write 清空",
+        nextActions: [
+          { action: "consider_more_breakdown", reason: "清空意味着这一轮任务结束", safe: true },
+        ],
+      });
     }
+
     const lines = input.todos.map((item) => `${STATUS_MARK[item.status]} ${item.content}`);
-    return { status: "success", output: lines.join("\n") };
+    return successResult({
+      output: lines.join("\n"),
+      summary: `todo_write ${completedCount}/${totalCount} 完成（${inProgressCount} 进行中）`,
+      nextActions:
+        inProgressCount === 0 && completedCount < totalCount
+          ? [
+              {
+                action: "start_next_pending",
+                reason: `还有 ${totalCount - completedCount} 项 pending，挑下一项开始（标记 in_progress）`,
+                safe: true,
+              },
+            ]
+          : [],
+    });
   },
 };

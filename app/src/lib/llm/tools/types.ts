@@ -57,7 +57,7 @@ export interface ToolConfirmRequest {
   diff?: string;
 }
 
-export type ToolStatus = "success" | "error" | "denied" | "timeout";
+export type ToolStatus = "success" | "warning" | "error" | "denied" | "timeout";
 
 /** 多模态工具结果的内容片段（与 Vercel AI SDK v6 ToolResultContent 对齐）。
  *  - text：纯文本，按 MAX_OUTPUT_CHARS 截断
@@ -107,7 +107,39 @@ export interface ToolDefinition<TInput = unknown> {
     | { kind: "write-path"; pathField: keyof TInput }
     | { kind: "command"; commandField: keyof TInput }
     | { kind: "none" };
-  execute: (input: TInput, ctx: ToolContext) => Promise<ToolResult>;
+  /**
+   * 执行函数。
+   * 阶段2（2026-07-11）起推荐返回 ToolResultV2（结构化）；老 ToolResult 仍然兼容，
+   * executor 会通过 compatFromLegacy 兜底归一化。这样老工具零改动也能享受到 v2 的
+   * 落库 / 渲染路径，但模型看不到 error.code / nextActions / artifacts。
+   *
+   * 注意：返回类型用 ToolResultV2Like 而非 ToolResult | ToolResultV2Like 的 union——
+   * union 让消费者 TS 推断时拿不到 .error 等 v2 字段（ToolResult 没这些字段），
+   * 工具代码基本都已经在写 v2 形态，兼容兜底由 executor 处理。
+   */
+  execute: (input: TInput, ctx: ToolContext) => Promise<ToolResultV2Like>;
+}
+
+/**
+ * ToolResultV2 鸭子类型：ToolDefinition.execute 不直接依赖 result-contract.ts（避免循环 import），
+ * 实际返回时 executor 内部做 union 校验。
+ */
+export interface ToolResultV2Like {
+  status: ToolStatus;
+  summary: string;
+  output: string;
+  artifacts?: unknown[];
+  nextActions?: unknown[];
+  error?: {
+    code: string;
+    rootCauseHint: string;
+    retryable: boolean;
+    retryInstruction?: string;
+    stopCondition?: string;
+  };
+  parts?: ContentPart[];
+  reversible?: boolean;
+  durationMs?: number;
 }
 
 /** 把任意 ToolDefinition 擦除输入类型，便于放进 Registry/列表 */

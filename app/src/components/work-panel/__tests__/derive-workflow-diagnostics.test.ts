@@ -17,6 +17,9 @@ function tool(overrides: Partial<ToolCallView>): ToolCallView {
     createdAt: "2026-07-07T00:00:00.000Z",
     durationMs: 10,
     messageId: "assistant-1",
+    errorCode: null,
+    nextActions: [],
+    artifacts: [],
     ...overrides,
   };
 }

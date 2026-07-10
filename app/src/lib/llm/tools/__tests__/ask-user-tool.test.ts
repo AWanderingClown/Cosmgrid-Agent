@@ -3,13 +3,17 @@ import { askUserTool } from "../ask-user-tool";
 import type { ToolContext } from "../types";
 
 describe("askUserTool", () => {
-  it("没有 ctx.askUser 时 denied，明确告知不要傻等", async () => {
+  it("没有 ctx.askUser 时走 TOOL_DENIED 错误协议，明确告知不要傻等", async () => {
     const ctx: ToolContext = { workspacePath: "" };
     const res = await askUserTool.execute(
       { question: "选哪个？", options: [{ label: "A" }, { label: "B" }] },
       ctx,
     );
-    expect(res.status).toBe("denied");
+    // 阶段2（2026-07-11）：环境/通道缺失走 error + error.code=TOOL_DENIED 而非 status=denied，
+    // 用户主动拒绝才是 status=denied。两者 retryable 都 false，但模型看 error.code 能区分。
+    expect(res.status).toBe("error");
+    expect(res.error?.code).toBe("TOOL_DENIED");
+    expect(res.error?.retryable).toBe(false);
     expect(res.output).toContain("不支持");
     expect(res.output).toContain("最佳判断");
   });

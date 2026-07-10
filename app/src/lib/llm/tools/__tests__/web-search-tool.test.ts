@@ -17,12 +17,15 @@ describe("webSearchTool", () => {
     getApiKeyMock.mockReset();
   });
 
-  it("未配置 API Key 时 denied，不发起请求", async () => {
+  it("未配置 API Key 走 TOOL_DENIED 错误协议，不发起请求", async () => {
     getApiKeyMock.mockResolvedValue(null);
     const fetchSpy = vi.fn();
     global.fetch = fetchSpy as unknown as typeof fetch;
     const res = await webSearchTool.execute({ query: "test" }, ctx);
-    expect(res.status).toBe("denied");
+    // 阶段2：环境配置缺失走 error + error.code=TOOL_DENIED（不是用户主动拒绝）。
+    expect(res.status).toBe("error");
+    expect(res.error?.code).toBe("TOOL_DENIED");
+    expect(res.error?.retryable).toBe(false);
     expect(res.output).toContain("Tavily");
     expect(fetchSpy).not.toHaveBeenCalled();
   });

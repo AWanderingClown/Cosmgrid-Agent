@@ -78,4 +78,41 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       await addColumnIfMissing(db, "mcp_servers", "secret_credential_id", "TEXT");
     },
   },
+  {
+    version: "202607110001-tool-execution-result-v2",
+    description:
+      "Add result_json to tool_executions so we can persist the structured ToolResultV2 " +
+      "(status/summary/artifacts/nextActions/error) alongside the legacy status/output columns. " +
+      "Old rows keep working: result_json is NULL, read path falls back to compatFromLegacy.",
+    up: async (db) => {
+      await addColumnIfMissing(db, "tool_executions", "result_json", "TEXT");
+    },
+  },
+  {
+    version: "202607110002-tool-execution-error-code",
+    description:
+      "Add error_code to tool_executions so UI/queries can filter by stable error taxonomy " +
+      "(TOOL_DENIED/TOOL_TIMEOUT/TOOL_DOOM_LOOP/etc) without parsing result_json. " +
+      "Indexed for the eval harness dashboard (阶段4 will read this).",
+    up: async (db) => {
+      await addColumnIfMissing(db, "tool_executions", "error_code", "TEXT");
+      await addColumnIfMissing(db, "tool_executions", "warning_count", "INTEGER NOT NULL DEFAULT 0");
+    },
+  },
+  {
+    version: "202607110003-tool-execution-msg-error-index",
+    description:
+      "Add idx_tool_executions_message and idx_tool_executions_error_code indexes. " +
+      "阶段1 引入 listByMessage(messageId) 在 stream-finalization 每次 finalize 都查一次， " +
+      "没索引就全表扫；阶段2 新增 error_code 列也被阶段4 eval dashboard 用作过滤字段， " +
+      "同样需要索引。",
+    up: async (db) => {
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tool_executions_message ON tool_executions(message_id) WHERE message_id IS NOT NULL",
+      );
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tool_executions_error_code ON tool_executions(error_code) WHERE error_code IS NOT NULL",
+      );
+    },
+  },
 ];

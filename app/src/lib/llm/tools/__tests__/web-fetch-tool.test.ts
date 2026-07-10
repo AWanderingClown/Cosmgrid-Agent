@@ -51,9 +51,12 @@ describe("webFetchTool", () => {
     mocks.invoke.mockReset();
   });
 
-  it("内网 URL 直接 denied，不发起真实请求", async () => {
+  it("内网 URL 走 TOOL_INVALID_URL 错误协议，不发起真实请求", async () => {
     const res = await webFetchTool.execute({ url: "http://127.0.0.1/" }, ctx);
-    expect(res.status).toBe("denied");
+    // 阶段2：SSRF 命中是 URL 本身无效，跟 ask-user 通道缺失同档——error + 稳定 code。
+    expect(res.status).toBe("error");
+    expect(res.error?.code).toBe("TOOL_INVALID_URL");
+    expect(res.error?.retryable).toBe(false);
     expect(mocks.invoke).not.toHaveBeenCalled();
   });
 
