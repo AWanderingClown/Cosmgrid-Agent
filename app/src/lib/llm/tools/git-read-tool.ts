@@ -11,7 +11,6 @@
 
 import { z } from "zod";
 import type { ToolDefinition, ToolResult } from "./types";
-import { checkPath } from "./path-safety";
 import { getGitReadAdapter } from "./git-read-adapter";
 
 /** log 默认条数上限（避免历史过长撑爆上下文） */
@@ -70,17 +69,14 @@ export const gitReadTool: ToolDefinition<GitReadParams> = {
     "只读查看 git 状态：status（工作区改了哪些文件）、diff（具体改了什么）、log（最近提交）。仅查看，不会改动仓库。",
   parameters: paramsSchema,
   readOnly: true,
+  // path 真正可选（不像 glob/grep 有默认值）：不传时语义是"整个仓库"，不是"待补默认值"。
+  // executor 声明式检查在字段值为空时会跳过（见 executor.ts runSecurityPrecheck），
+  // ctx.security 此时是 undefined，工具自己判断落到"不限定 pathspec"分支。
+  security: { kind: "read-path", pathField: "path" },
   async execute(input, ctx): Promise<ToolResult> {
-    // 可选 path 做边界校验，越界/敏感直接拒
-    let pathspec: string | null = null;
-    const trimmedPath = input.path?.trim();
-    if (trimmedPath) {
-      const check = await checkPath(ctx.workspacePath, trimmedPath);
-      if (!check.ok) {
-        return { status: "denied", output: check.reason ?? "路径不允许" };
-      }
-      pathspec = check.resolved;
-    }
+    // 传了 path 时，executor 已经跑过 checkPath（越界/敏感会在 executor 层直接 denied，
+    // 走不到这里）；没传时 ctx.security 是 undefined，pathspec 保持 null。
+    const pathspec = ctx.security?.kind === "read-path" ? ctx.security.resolved : null;
 
     const args = buildGitArgs(input, pathspec);
 

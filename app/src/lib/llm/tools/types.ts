@@ -24,6 +24,16 @@ export interface ToolContext {
   blockedCommands?: string[];
   /** ask_user_question 工具用：向用户提一个结构化问题，返回用户选中的 label 文本 */
   askUser?: (request: AskUserRequest) => Promise<string>;
+  /**
+   * executor 按 tool.security 声明跑完前置检查后的结果，工具从这里取，不用自己再调
+   * checkPath/checkWritePath/checkCommand。tool.security.kind 为 "read-path"/"write-path"
+   * 时若目标字段值为空（如 git_read 的可选 path 未传），executor 会跳过检查，此时该字段
+   * 保持 undefined——工具自己判断是否需要处理"没有路径可查"的分支。
+   */
+  security?:
+    | { kind: "read-path"; resolved: string }
+    | { kind: "write-path"; resolved: string; external: boolean }
+    | { kind: "command"; verdict: "allow" | "block"; reason?: string };
 }
 
 /** 结构化追问用户时的一个候选选项 */
@@ -49,11 +59,28 @@ export interface ToolConfirmRequest {
 
 export type ToolStatus = "success" | "error" | "denied" | "timeout";
 
+/** 多模态工具结果的内容片段（与 Vercel AI SDK v6 ToolResultContent 对齐）。
+ *  - text：纯文本，按 MAX_OUTPUT_CHARS 截断
+ *  - image：base64 dataURL（image/png | image/jpeg | image/webp | image/gif），不参与字符截断
+ *
+ *  设计动机：view_image 工具要让模型真的看到图片（不是 base64 字符串塞进 output 让模型自己解码）。
+ *  Anthropic 协议层 tool_result 原生支持嵌 image content block（参见 Claude API docs），
+ *  AI SDK 6 的 `@ai-sdk/anthropic` provider 透传给该通道；OpenAI / Google 兼容性需落地验证，
+ *  见 model-capabilities view_image 字段。 */
+export type TextPart = { type: "text"; text: string };
+export type ImagePart = { type: "image"; image: string; mediaType: string };
+export type ContentPart = TextPart | ImagePart;
+
 /** 工具执行结果 */
 export interface ToolResult {
   status: ToolStatus;
-  /** 给模型看的输出（成功是内容，失败是错误信息） */
+  /** 给模型看的输出（成功是内容，失败是错误信息）。
+   *  简单工具（read/glob/grep 等）只用这一字段；多模态工具可同时填 parts 让模型看到图片。 */
   output: string;
+  /** 多模态内容片段（可选）。存在时 buildAiSdkTools 把它转成 AI SDK v6 的
+   *  { content: ContentPart[] } 形态透传给 provider；不存在时仍走旧 output 字符串路径，
+   *  向后兼容所有老工具。 */
+  parts?: ContentPart[];
   /** 这次执行是否可回滚（写操作有 git commit 则 true） */
   reversible?: boolean;
 }
@@ -66,6 +93,20 @@ export interface ToolDefinition<TInput = unknown> {
   parameters: z.ZodType<TInput>;
   /** 只读工具（read/glob/grep/git_status）无需用户确认；写/执行工具为 false */
   readOnly: boolean;
+  /**
+   * 声明这个工具需要执行器做哪种前置安全检查（L6 安全网收拢，2026-07-09）：
+   * - "read-path"：从 input 里按 pathField 取路径，跑 checkPath（只读边界）
+   * - "write-path"：跑 checkWritePath（写路径，工作区外标记 external 而非直接拒）
+   * - "command"：从 input 里按 commandField 取命令，跑 checkCommand
+   * - "none"：不需要（memory/todo/ask-user/web-search/web-fetch 这类不碰文件系统/
+   *   shell 命令的工具；web-fetch 的 SSRF 校验对象是 URL 不是路径/命令，不属于这三道
+   *   安全网中的任何一道，继续在工具内部自己调用 assertSafeUrl）
+   */
+  security:
+    | { kind: "read-path"; pathField: keyof TInput }
+    | { kind: "write-path"; pathField: keyof TInput }
+    | { kind: "command"; commandField: keyof TInput }
+    | { kind: "none" };
   execute: (input: TInput, ctx: ToolContext) => Promise<ToolResult>;
 }
 

@@ -7,11 +7,9 @@
 
 import { z } from "zod";
 import type { ToolDefinition, ToolResult } from "./types";
-import { checkWritePath } from "./path-safety";
 import { getFsAdapter } from "./fs-adapter";
 import { computeDiff, diffSummaryLine } from "./diff-util";
 import { requireApproval } from "./confirm";
-import { snapshotWrite } from "./git-snapshot";
 import { withDiagnostics } from "./diagnostics";
 
 const paramsSchema = z.object({
@@ -32,36 +30,37 @@ export const writeTool: ToolDefinition<WriteParams> = {
   description: "新建或覆盖一个文件（写入完整内容）。会先让用户确认改动，确认后才写盘。",
   parameters: paramsSchema,
   readOnly: false,
+  security: { kind: "write-path", pathField: "file_path" },
   async execute(input, ctx): Promise<ToolResult> {
-    const check = await checkWritePath(ctx.workspacePath, input.file_path);
-    if (!check.ok) return { status: "denied", output: check.reason ?? "路径不允许" };
+    if (ctx.security?.kind !== "write-path") throw new Error("write 工具必须经 executeTool 调用（缺 ctx.security）");
+    const { resolved, external } = ctx.security;
 
     const fs = getFsAdapter();
-    const existed = await fs.exists(check.resolved);
-    const oldContent = existed ? await fs.readTextFile(check.resolved).catch(() => "") : "";
+    const existed = await fs.exists(resolved);
+    const oldContent = existed ? await fs.readTextFile(resolved).catch(() => "") : "";
     const diff = computeDiff(oldContent, input.content);
 
-    const externalNotice = check.external ? "⚠️ 这次要写到工作区之外：" : "";
+    const externalNotice = external ? "⚠️ 这次要写到工作区之外：" : "";
     const denied = await requireApproval(ctx, {
       toolName: "write",
-      summary: `${externalNotice}${existed ? "覆盖" : "新建"} ${diffSummaryLine(check.resolved, diff)}`,
+      summary: `${externalNotice}${existed ? "覆盖" : "新建"} ${diffSummaryLine(resolved, diff)}`,
       diff: diff.patch,
     });
     if (denied) return denied;
 
     try {
-      await fs.mkdirp(parentDir(check.resolved));
-      await fs.writeTextFile(check.resolved, input.content);
+      await fs.mkdirp(parentDir(resolved));
+      await fs.writeTextFile(resolved, input.content);
     } catch (err) {
       return { status: "error", output: `写入失败：${err instanceof Error ? err.message : String(err)}` };
     }
 
-    const reversible = await snapshotWrite(ctx.workspacePath, check.resolved, "write");
-    const baseOutput = `已写入 ${check.resolved}（+${diff.added} −${diff.removed}）${reversible ? "，已 git 快照可回滚" : ""}`;
+    // git 快照 + reversible 标记现在由 executor 在 execute() 成功返回后统一做
+    // （L6 安全网收拢，2026-07-09）：executor 拿到本次 resolved 路径就能做，工具自己不用管。
+    const baseOutput = `已写入 ${resolved}（+${diff.added} −${diff.removed}）`;
     return {
       status: "success",
-      output: await withDiagnostics(ctx.workspacePath, check.resolved, baseOutput),
-      reversible,
+      output: await withDiagnostics(ctx.workspacePath, resolved, baseOutput),
     };
   },
 };

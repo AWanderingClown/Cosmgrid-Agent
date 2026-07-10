@@ -4,7 +4,6 @@
 
 import { z } from "zod";
 import type { ToolDefinition, ToolResult } from "./types";
-import { checkPath } from "./path-safety";
 import { getFsAdapter } from "./fs-adapter";
 
 /** 默认最多读 200 行（大文件截断，避免撑爆上下文） */
@@ -30,15 +29,14 @@ export const readTool: ToolDefinition<ReadParams> = {
   description: "读取一个文本文件的内容。返回带行号的内容，大文件会截断。",
   parameters: paramsSchema,
   readOnly: true,
+  security: { kind: "read-path", pathField: "file_path" },
   async execute(input, ctx): Promise<ToolResult> {
-    const check = await checkPath(ctx.workspacePath, input.file_path);
-    if (!check.ok) {
-      return { status: "denied", output: check.reason ?? "路径不允许" };
-    }
+    if (ctx.security?.kind !== "read-path") throw new Error("read 工具必须经 executeTool 调用（缺 ctx.security）");
+    const resolved = ctx.security.resolved;
 
     let content: string;
     try {
-      content = await getFsAdapter().readTextFile(check.resolved);
+      content = await getFsAdapter().readTextFile(resolved);
     } catch (err) {
       return { status: "error", output: `读取失败：${err instanceof Error ? err.message : String(err)}` };
     }
@@ -49,7 +47,7 @@ export const readTool: ToolDefinition<ReadParams> = {
     const startIdx = start - 1;
     const slice = allLines.slice(startIdx, startIdx + limit);
 
-    const header = `${check.resolved}（${allLines.length} 行）`;
+    const header = `${resolved}（${allLines.length} 行）`;
     const truncatedNote =
       startIdx + limit < allLines.length
         ? `\n…（共 ${allLines.length} 行，已显示第 ${start}–${startIdx + slice.length} 行）`

@@ -27,6 +27,7 @@ export const askUserTool: ToolDefinition<AskUserParams> = {
     "用户选择后你会收到选中项的 label 文本。只在真正卡住的决策点用，不要用来问琐碎问题或替代正常对话。",
   parameters: paramsSchema,
   readOnly: true,
+  security: { kind: "none" },
   async execute(input, ctx): Promise<ToolResult> {
     if (!ctx.askUser) {
       return {

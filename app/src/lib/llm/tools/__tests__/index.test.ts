@@ -14,6 +14,7 @@ const ctx: ToolContext = { workspacePath: "/ws" };
 beforeEach(() => {
   const fs: FsAdapter = {
     readTextFile: async () => "hello\nworld",
+    readBytes: async () => new Uint8Array(0),
     readDir: async () => [],
     exists: async () => true,
     writeTextFile: async () => {},
@@ -36,7 +37,9 @@ describe("createDefaultToolRegistry", () => {
     expect(r.has("lsp_diagnostics")).toBe(true);
     expect(r.has("lsp_definition")).toBe(true);
     expect(r.has("lsp_hover")).toBe(true);
-    expect(r.listReadOnly()).toHaveLength(11);
+    // 2026-07-09 加 view_image 工具后总数从 11 → 12（仅只读集合；写工具仍按 includeWrite 控）
+    expect(r.has("view_image")).toBe(true);
+    expect(r.listReadOnly()).toHaveLength(12);
   });
 });
 
@@ -44,6 +47,7 @@ describe("buildAiSdkTools", () => {
   it("每个工具转成带 description 的 AI SDK tool", () => {
     const tools = buildAiSdkTools(createDefaultToolRegistry(), ctx);
     // remember（3.1 修复）始终注册，不分只读/写——它自己走 confirm 审批，不受权限档位过滤。
+    // 2026-07-09 加 view_image，工具集合从 11 → 12
     expect(Object.keys(tools).sort()).toEqual([
       "ask_user_question",
       "git_read",
@@ -55,6 +59,7 @@ describe("buildAiSdkTools", () => {
       "read",
       "remember",
       "todo_write",
+      "view_image",
       "web_fetch",
       "web_search",
     ]);

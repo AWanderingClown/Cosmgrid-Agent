@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type { ToolDefinition, ToolResult } from "./types";
-import { checkPath } from "./path-safety";
 import { getLspDefinition, getLspDiagnostics, getLspHover } from "@/lib/lsp/lsp-session";
 
 const fileSchema = z.object({
@@ -15,15 +14,15 @@ const positionSchema = fileSchema.extend({
 type FileParams = z.infer<typeof fileSchema>;
 type PositionParams = z.infer<typeof positionSchema>;
 
-async function withCheckedFile<T extends FileParams>(
-  input: T,
-  ctx: { workspacePath: string },
+async function withCheckedFile(
+  ctx: { security?: { kind: string; resolved?: string } },
   run: (resolved: string) => Promise<string>,
 ): Promise<ToolResult> {
-  const check = await checkPath(ctx.workspacePath, input.file_path);
-  if (!check.ok) return { status: "denied", output: check.reason ?? "路径不允许" };
+  if (ctx.security?.kind !== "read-path" || !ctx.security.resolved) {
+    throw new Error("lsp 工具必须经 executeTool 调用（缺 ctx.security）");
+  }
   try {
-    return { status: "success", output: await run(check.resolved) };
+    return { status: "success", output: await run(ctx.security.resolved) };
   } catch (err) {
     return { status: "error", output: `LSP 查询失败：${err instanceof Error ? err.message : String(err)}` };
   }
@@ -34,7 +33,8 @@ export const lspDiagnosticsTool: ToolDefinition<FileParams> = {
   description: "通过语言服务读取一个源码文件的诊断信息，比如 TypeScript 类型错误。",
   parameters: fileSchema,
   readOnly: true,
-  execute: (input, ctx) => withCheckedFile(input, ctx, (resolved) => getLspDiagnostics(ctx.workspacePath, resolved)),
+  security: { kind: "read-path", pathField: "file_path" },
+  execute: (_input, ctx) => withCheckedFile(ctx, (resolved) => getLspDiagnostics(ctx.workspacePath, resolved)),
 };
 
 export const lspDefinitionTool: ToolDefinition<PositionParams> = {
@@ -42,8 +42,8 @@ export const lspDefinitionTool: ToolDefinition<PositionParams> = {
   description: "通过语言服务查询指定源码位置的定义位置。line/character 都是 1-based。",
   parameters: positionSchema,
   readOnly: true,
+  security: { kind: "read-path", pathField: "file_path" },
   execute: (input, ctx) => withCheckedFile(
-    input,
     ctx,
     (resolved) => getLspDefinition(ctx.workspacePath, resolved, input.line, input.character),
   ),
@@ -54,8 +54,8 @@ export const lspHoverTool: ToolDefinition<PositionParams> = {
   description: "通过语言服务查询指定源码位置的类型/文档悬停信息。line/character 都是 1-based。",
   parameters: positionSchema,
   readOnly: true,
+  security: { kind: "read-path", pathField: "file_path" },
   execute: (input, ctx) => withCheckedFile(
-    input,
     ctx,
     (resolved) => getLspHover(ctx.workspacePath, resolved, input.line, input.character),
   ),

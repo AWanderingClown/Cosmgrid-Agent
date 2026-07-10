@@ -7,7 +7,7 @@
 
 import { z } from "zod";
 import type { ToolDefinition, ToolResult } from "./types";
-import { checkCommand, isReadOnlyCommand } from "./command-safety";
+import { isReadOnlyCommand } from "./command-safety";
 import { getShellAdapter } from "./shell-adapter";
 import { requireApproval } from "./confirm";
 
@@ -29,12 +29,10 @@ export const bashTool: ToolDefinition<BashParams> = {
   description: "在工作文件夹根目录执行一条 shell 命令（如 pnpm test / git status）。命令已经在工作目录里运行，直接用相对路径，不要用 cd 切目录。搜文件内容优先用 grep 工具、找文件用 glob 工具、读文件用 read 工具（更可靠）；bash 主要用于跑测试 / 构建 / git 等。危险命令会被拦截，写操作需用户确认。",
   parameters: paramsSchema,
   readOnly: false,
+  security: { kind: "command", commandField: "command" },
   async execute(input, ctx): Promise<ToolResult> {
-    // 闸 1：安全分类
-    const check = checkCommand(input.command, ctx.blockedCommands ?? []);
-    if (check.verdict === "block") {
-      return { status: "denied", output: `已拦截：${check.reason}` };
-    }
+    // 闸 1：安全分类，现在由 executor 按 tool.security 声明强制跑（L6 安全网收拢，2026-07-09）——
+    // 走到这里说明 checkCommand 已经判过 allow，block 在 executor 层就直接 denied 了。
 
     // 闸 2：只读命令（git log/status/diff、ls/cat/grep 等只看不改）免确认，看项目不被打扰；
     //        写/有副作用命令（装依赖、git 提交、跑脚本等）才需用户确认。

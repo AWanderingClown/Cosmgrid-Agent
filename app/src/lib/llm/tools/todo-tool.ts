@@ -31,6 +31,7 @@ export const todoWriteTool: ToolDefinition<TodoWriteParams> = {
     "只在任务有 3 步以上时使用；简单任务不需要。开始做一步前把它标记 in_progress，做完立刻标记 completed——不要攒到最后一次性打勾，也不要谎报 completed。",
   parameters: paramsSchema,
   readOnly: true,
+  security: { kind: "none" },
   async execute(input): Promise<ToolResult> {
     if (input.todos.length === 0) {
       return { status: "success", output: "(待办列表已清空)" };

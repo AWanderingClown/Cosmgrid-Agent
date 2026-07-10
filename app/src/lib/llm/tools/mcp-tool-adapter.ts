@@ -75,6 +75,9 @@ export function buildMcpToolDefinitions(args: {
       description: tool.description || `MCP tool ${tool.name} from ${args.serverId}`,
       parameters: jsonSchemaToZod(tool.inputSchema),
       readOnly: false,
+      // MCP 工具是运行时透传，路径/命令语义不可知，交给对端 server 自己负责；
+      // 本地这层只保证 confirm 审批（见下），不套 L6 的三道声明式安全网。
+      security: { kind: "none" },
       execute: async (input: unknown, ctx: ToolContext): Promise<ToolResult> => {
         const approved = await ctx.confirm?.({
           toolName: `mcp:${args.serverId}/${tool.name}`,

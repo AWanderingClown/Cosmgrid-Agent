@@ -59,6 +59,7 @@ export const rememberTool: ToolDefinition<RememberParams> = {
     "重要性 >= 60 会在后续 AI 对话中主动召回，< 60 不会（默认 50，不召回；确实重要就给 60 以上）。",
   parameters: paramsSchema,
   readOnly: false,
+  security: { kind: "none" },
 
   async execute(input, ctx): Promise<ToolResult> {
     const kind: MemoryKind = input.kind ?? "other";

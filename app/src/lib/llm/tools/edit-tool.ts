@@ -5,11 +5,9 @@
 
 import { z } from "zod";
 import type { ToolDefinition, ToolResult } from "./types";
-import { checkWritePath } from "./path-safety";
 import { getFsAdapter } from "./fs-adapter";
 import { computeDiff, diffSummaryLine } from "./diff-util";
 import { requireApproval } from "./confirm";
-import { snapshotWrite } from "./git-snapshot";
 import { withDiagnostics } from "./diagnostics";
 
 const paramsSchema = z.object({
@@ -37,9 +35,10 @@ export const editTool: ToolDefinition<EditParams> = {
   description: "把文件里某段文本（old_string）替换成新文本（new_string）。old_string 必须唯一。会先让用户确认。",
   parameters: paramsSchema,
   readOnly: false,
+  security: { kind: "write-path", pathField: "file_path" },
   async execute(input, ctx): Promise<ToolResult> {
-    const check = await checkWritePath(ctx.workspacePath, input.file_path);
-    if (!check.ok) return { status: "denied", output: check.reason ?? "路径不允许" };
+    if (ctx.security?.kind !== "write-path") throw new Error("edit 工具必须经 executeTool 调用（缺 ctx.security）");
+    const { resolved, external } = ctx.security;
     if (input.old_string === input.new_string) {
       return { status: "error", output: "old_string 与 new_string 相同，无需修改。" };
     }
@@ -47,7 +46,7 @@ export const editTool: ToolDefinition<EditParams> = {
     const fs = getFsAdapter();
     let oldContent: string;
     try {
-      oldContent = await fs.readTextFile(check.resolved);
+      oldContent = await fs.readTextFile(resolved);
     } catch (err) {
       return { status: "error", output: `读取失败：${err instanceof Error ? err.message : String(err)}` };
     }
@@ -63,26 +62,25 @@ export const editTool: ToolDefinition<EditParams> = {
     const newContent = oldContent.replace(input.old_string, input.new_string);
     const diff = computeDiff(oldContent, newContent);
 
-    const externalNotice = check.external ? "⚠️ 这次要写到工作区之外：" : "";
+    const externalNotice = external ? "⚠️ 这次要写到工作区之外：" : "";
     const denied = await requireApproval(ctx, {
       toolName: "edit",
-      summary: `${externalNotice}修改 ${diffSummaryLine(check.resolved, diff)}`,
+      summary: `${externalNotice}修改 ${diffSummaryLine(resolved, diff)}`,
       diff: diff.patch,
     });
     if (denied) return denied;
 
     try {
-      await fs.writeTextFile(check.resolved, newContent);
+      await fs.writeTextFile(resolved, newContent);
     } catch (err) {
       return { status: "error", output: `写入失败：${err instanceof Error ? err.message : String(err)}` };
     }
 
-    const reversible = await snapshotWrite(ctx.workspacePath, check.resolved, "edit");
-    const baseOutput = `已修改 ${check.resolved}（+${diff.added} −${diff.removed}）${reversible ? "，已 git 快照可回滚" : ""}`;
+    // git 快照 + reversible 标记现在由 executor 在 execute() 成功返回后统一做（同 write-tool）。
+    const baseOutput = `已修改 ${resolved}（+${diff.added} −${diff.removed}）`;
     return {
       status: "success",
-      output: await withDiagnostics(ctx.workspacePath, check.resolved, baseOutput),
-      reversible,
+      output: await withDiagnostics(ctx.workspacePath, resolved, baseOutput),
     };
   },
 };

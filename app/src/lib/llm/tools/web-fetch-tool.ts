@@ -128,6 +128,10 @@ export const webFetchTool: ToolDefinition<WebFetchParams> = {
   description: "抓取一个公网 URL 的内容并转成纯文本返回（只支持 http/https，拒绝内网/本机地址）。用于查资料、看文档、验证链接内容。",
   parameters: paramsSchema,
   readOnly: true,
+  // L6 安全网收拢（2026-07-09）核实：command-safety.ts 只被 bash-tool.ts 真正调用，
+  // web_fetch 的校验对象是 URL（SSRF 内网地址拦截）不是 shell 命令，跟 command-safety
+  // 不是同一道安全网，不适合套 "command" kind，assertSafeUrl 继续留在工具内部自己调用。
+  security: { kind: "none" },
   async execute(input): Promise<ToolResult> {
     const safety = assertSafeUrl(input.url);
     if (!safety.ok) {

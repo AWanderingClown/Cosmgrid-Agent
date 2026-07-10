@@ -33,6 +33,7 @@ export const webSearchTool: ToolDefinition<WebSearchParams> = {
     "如果已经有明确 URL 想看内容，直接用 web_fetch。需要用户在设置页配置搜索 API Key，没配置会拒绝。",
   parameters: paramsSchema,
   readOnly: true,
+  security: { kind: "none" },
   async execute(input): Promise<ToolResult> {
     const apiKey = await getApiKey(TAVILY_SEARCH_CREDENTIAL_ID);
     if (!apiKey) {
