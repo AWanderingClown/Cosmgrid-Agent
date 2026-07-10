@@ -18,6 +18,12 @@ export const SSE_CHUNK_TIMEOUT_MARKER = "SSE_CHUNK_TIMEOUT";
 
 /** 默认 chunk 静默上限。健康的流每几百毫秒就有 chunk，60s 不会误伤；僵尸流 60s 内必被掐。 */
 export const SSE_CHUNK_TIMEOUT_MS = 60_000;
+export const FIRST_BYTE_TIMEOUT_MS = 60_000;
+
+export interface SseTimeoutOptions {
+  chunkTimeoutMs?: number;
+  firstByteTimeoutMs?: number;
+}
 
 /**
  * 把一个 SSE 响应体包一层：每次读下一个 chunk 时和 `setTimeout(ms)` 赛跑。
@@ -110,10 +116,14 @@ async function fetchWithTimeout(
  */
 export function withSseChunkTimeout(
   baseFetch: typeof fetch = fetch,
-  ms: number = SSE_CHUNK_TIMEOUT_MS,
+  options: number | SseTimeoutOptions = SSE_CHUNK_TIMEOUT_MS,
 ): typeof fetch {
+  const chunkTimeoutMs =
+    typeof options === "number" ? options : (options.chunkTimeoutMs ?? SSE_CHUNK_TIMEOUT_MS);
+  const firstByteTimeoutMs =
+    typeof options === "number" ? options : (options.firstByteTimeoutMs ?? FIRST_BYTE_TIMEOUT_MS);
   return async (input, init) => {
-    const res = await fetchWithTimeout(baseFetch, input, init, ms);
-    return wrapSseResponse(res, ms);
+    const res = await fetchWithTimeout(baseFetch, input, init, firstByteTimeoutMs);
+    return wrapSseResponse(res, chunkTimeoutMs);
   };
 }

@@ -6,39 +6,9 @@
 import type { ToolSet } from "ai";
 import type { LlmErrorCategory } from "./error-classifier";
 import type { CliAccessOptions } from "./cli-protocol";
+import type { ModelEndpoint, StreamUsage } from "./chat-fallback-contracts";
 import type { LlmInvocationAuditEvent } from "./invocation-audit";
-
-/** 一个可调用的模型端点：模型 + 凭证 + baseUrl */
-export interface ModelEndpoint {
-  /** DB 里 Model 表的 id（用于 cooldown 跟踪 + UsageEvent 关联） */
-  modelId: string;
-  /** 给 LLM 用的模型名（如 "claude-opus-4-8"） */
-  modelName: string;
-  /** "anthropic" / "openai" / "google" / "openai-compatible" */
-  providerType: string;
-  apiKey: string;
-  baseUrl?: string;
-  /** CLI provider 的工作目录：绑定工作文件夹时传入，避免 CLI 读到应用开发目录 */
-  workingDirectory?: string | null;
-  /** 给 UI 显示的标签（如 "Opus 4.8"），仅做展示 */
-  displayLabel?: string;
-  /** 对应 ApiCredential 的 id（用于 recordUsageEvent 落库关联） */
-  apiCredentialId: string;
-  /** 对应 Provider 的 id（用于 recordUsageEvent 落库关联） */
-  providerId: string;
-}
-
-/** 给 UI 流的文本增量 */
-export interface StreamUsage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadInputTokens?: number;
-  cacheWriteInputTokens?: number;
-  /** 阶段 H：本轮真实工具调用次数（来自 stepToolCalls.length）。
-   *  - 0 + finishReason="stop" + 输出含动手意图 → Harness nudge 重答触发条件之一
-   *  - 加这个字段让 ChatPage 在 onUsage 回调里直接拿到，不用额外暴露 streamText 内部状态 */
-  toolCallCount: number;
-}
+export type { ModelEndpoint, StreamUsage } from "./chat-fallback-contracts";
 
 /**
  * 切模型的原因（discriminated union）

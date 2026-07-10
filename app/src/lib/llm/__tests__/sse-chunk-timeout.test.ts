@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  FIRST_BYTE_TIMEOUT_MS,
   SSE_CHUNK_TIMEOUT_MARKER,
   withSseChunkTimeout,
 } from "../sse-chunk-timeout";
@@ -152,5 +153,21 @@ describe("withSseChunkTimeout", () => {
     const wrapped = withSseChunkTimeout(base as unknown as typeof fetch, 10);
     const res = await wrapped("https://x/stream");
     await expect(drain(res)).rejects.toThrow(SSE_CHUNK_TIMEOUT_MARKER);
+  });
+
+  it("对象参数可把首字节超时和 chunk 超时拆开", async () => {
+    vi.useRealTimers();
+    const base = vi.fn(async () =>
+      makeSseResponse([
+        { delayMs: 5, data: "a" },
+        { delayMs: 30, data: "b" },
+      ]),
+    );
+    const wrapped = withSseChunkTimeout(base as unknown as typeof fetch, {
+      firstByteTimeoutMs: FIRST_BYTE_TIMEOUT_MS,
+      chunkTimeoutMs: 50,
+    });
+    const res = await wrapped("https://x/stream");
+    await expect(drain(res)).resolves.toBe("ab");
   });
 });

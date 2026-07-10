@@ -18,6 +18,7 @@ function makeFakeFs(
       if (p in files) return files[p]!;
       throw new Error(`ENOENT: ${p}`);
     },
+    readBytes: async () => new Uint8Array(0),
     readDir: async (p) => dirs[p] ?? [],
     writeTextFile: async () => {},
     mkdirp: async () => {},

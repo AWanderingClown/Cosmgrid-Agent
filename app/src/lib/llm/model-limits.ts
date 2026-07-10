@@ -22,6 +22,8 @@ export const DEFAULT_COMPRESSION_BUDGET = 12_000;
  *  不是把模型的完整输出上限都扣掉（那样上下文窗口大部分模型都够用不着这么保守），
  *  只留一个够用的缓冲，其余全部拿来装历史消息。 */
 export const COMPACTION_RESERVE_CEILING = 20_000;
+export const DEFAULT_FIRST_BYTE_TIMEOUT_MS = 60_000;
+export const REASONING_FIRST_BYTE_TIMEOUT_MS = 180_000;
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
 const STORAGE_KEY = "cosmgrid:model-output-limits:v1";
@@ -171,6 +173,21 @@ export function resolveContextBudget(modelName: string, knownContextWindow?: num
   const reserve = Math.min(COMPACTION_RESERVE_CEILING, resolveMaxOutputTokens(modelName));
   const budget = context - reserve;
   return budget > 0 ? budget : DEFAULT_COMPRESSION_BUDGET;
+}
+
+export function resolveSseFirstByteTimeoutMs(modelName: string): number {
+  const normalized = normalize(modelName);
+  if (
+    normalized.includes("gpt-5") ||
+    normalized.includes("o1") ||
+    normalized.includes("o3") ||
+    normalized.includes("reason") ||
+    normalized.includes("thinking") ||
+    normalized.includes("minimax-m3")
+  ) {
+    return REASONING_FIRST_BYTE_TIMEOUT_MS;
+  }
+  return DEFAULT_FIRST_BYTE_TIMEOUT_MS;
 }
 
 /** 仅供测试：直接注入输出上限表（+ 可选上下文窗口表），绕过网络。 */

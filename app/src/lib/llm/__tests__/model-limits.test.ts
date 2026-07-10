@@ -4,12 +4,15 @@ import {
   parseModelsDevContext,
   resolveMaxOutputTokens,
   resolveContextBudget,
+  resolveSseFirstByteTimeoutMs,
   getModelOutputLimit,
   getModelContextWindow,
   __setLimitMapForTest,
   MAX_OUTPUT_TOKENS_CEILING,
   DEFAULT_COMPRESSION_BUDGET,
   COMPACTION_RESERVE_CEILING,
+  DEFAULT_FIRST_BYTE_TIMEOUT_MS,
+  REASONING_FIRST_BYTE_TIMEOUT_MS,
 } from "../model-limits";
 
 afterEach(() => __setLimitMapForTest(null));
@@ -140,5 +143,17 @@ describe("resolveContextBudget", () => {
   it("上下文窗口小到扣完预留就 <= 0 → 退回 DEFAULT_COMPRESSION_BUDGET，不返回负数/零", () => {
     __setLimitMapForTest(new Map([["tiny-model", 8_000]]), new Map([["tiny-model", 4_000]]));
     expect(resolveContextBudget("tiny-model")).toBe(DEFAULT_COMPRESSION_BUDGET);
+  });
+});
+
+describe("resolveSseFirstByteTimeoutMs", () => {
+  it("普通模型走默认 60s", () => {
+    expect(resolveSseFirstByteTimeoutMs("claude-sonnet-4-6")).toBe(DEFAULT_FIRST_BYTE_TIMEOUT_MS);
+  });
+
+  it("重 reasoning 模型放宽到 180s", () => {
+    expect(resolveSseFirstByteTimeoutMs("gpt-5")).toBe(REASONING_FIRST_BYTE_TIMEOUT_MS);
+    expect(resolveSseFirstByteTimeoutMs("MiniMax-M3")).toBe(REASONING_FIRST_BYTE_TIMEOUT_MS);
+    expect(resolveSseFirstByteTimeoutMs("o3")).toBe(REASONING_FIRST_BYTE_TIMEOUT_MS);
   });
 });
