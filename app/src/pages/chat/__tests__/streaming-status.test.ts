@@ -1,21 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { getActiveAssistantModelLabel } from "../streaming-status";
+import { getAssistantActivityLabel } from "@/pages/chat/streaming-status";
 
-describe("getActiveAssistantModelLabel", () => {
-  it("uses the currently streaming assistant model before the selected model", () => {
-    expect(
-      getActiveAssistantModelLabel(
-        [
-          { role: "assistant", content: "old", modelLabel: "MiniMax-M3" },
-          { role: "user", content: "continue" },
-          { role: "assistant", content: "new", modelLabel: "deepseek-chat" },
-        ],
-        "MiniMax-M3",
-      ),
-    ).toBe("deepseek-chat");
+describe("getAssistantActivityLabel", () => {
+  it("模型输出阶段显示回复中", () => {
+    expect(getAssistantActivityLabel("streaming", "回复中", "正在自检")).toBe("回复中");
   });
 
-  it("falls back to the selected model when no assistant label exists", () => {
-    expect(getActiveAssistantModelLabel([{ role: "user", content: "hi" }], "MiniMax-M3")).toBe("MiniMax-M3");
+  it("模型停字后的判定阶段显示正在自检，不再显示回复中", () => {
+    expect(getAssistantActivityLabel("checking", "回复中", "正在自检")).toBe("正在自检");
   });
 });

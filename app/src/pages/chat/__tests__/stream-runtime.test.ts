@@ -58,6 +58,48 @@ describe("runChatStreamRuntime", () => {
     expect(mocks.streamWithFallback).toHaveBeenCalledTimes(1);
   });
 
+  it("纯净单模型模式下模型停字后直接结束，不再跑 harness 自检", async () => {
+    const evalHarness = vi.fn(async () => {
+      throw new Error("pure mode should not run harness");
+    });
+    mocks.streamWithFallback.mockImplementation(async (_chain, _messages, callbacks) => {
+      callbacks.onDelta("普通回答");
+      callbacks.onUsage({ inputTokens: 1, outputTokens: 2, toolCallCount: 0 }, { modelId: "model-1", modelName: "Model 1" }, "stop");
+      return { usedModelId: "model-1" };
+    });
+
+    const result = await runChatStreamRuntime({
+      chain,
+      initialMessages: baseMessages,
+      assistantId: "assistant-1",
+      controller: new AbortController(),
+      modelId: "model-1",
+      conversationId: "conv-1",
+      taskRole: "standard",
+      actorRole: "leader",
+      routingDecision: null,
+      compressionStats: null,
+      tools: { write: {} } as never,
+      pureMode: true,
+      turnImpliesWrite: true,
+      turnStartedAt: "2026-07-10T00:00:00.000Z",
+      evalHarness,
+      labels: {
+        harnessRetry: "harness retry",
+        intentNudgeRetry: "nudge retry",
+        switchedTo: (name) => `switched ${name}`,
+      },
+      setMessages: vi.fn(),
+      setSwitchNotice: vi.fn(),
+      setLastUsage: vi.fn(),
+      setHarnessNotice: vi.fn(),
+    });
+
+    expect(result.fullContent).toBe("普通回答");
+    expect(evalHarness).not.toHaveBeenCalled();
+    expect(mocks.streamWithFallback).toHaveBeenCalledTimes(1);
+  });
+
   it("写意图但 0 工具调用时触发一次 nudge 重答，并强制 toolChoice required", async () => {
     const setHarnessNotice = vi.fn();
     const evalHarness = vi.fn(async () => null);
