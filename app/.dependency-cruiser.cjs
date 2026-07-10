@@ -9,9 +9,10 @@
 // 需要知道它存的数据长什么"形状"是正常的数据契约，不是逻辑耦合。用 dependencyTypesNot 排除
 // type-only 依赖，只让「调用了上层函数/用了上层的值」的真实耦合报错。
 //
-// lib/llm 目前混杂 L1(接入)/L2(调度)/L6(工具)/L8(harness) 多层，尚未按层拆分子目录，
-// 因此暂时无法对 lib/llm 内部做更细的层间规则；这是已知缺口，见方案 Phase 0 遗留项，
-// 拆分完成后需要在这里补充 L1→L2→L6→L8 的方向规则。
+// lib/llm 还没有完全按层拆成子目录，但已稳定的子边界先强制：
+//   - harness 是 L8 审计层，不允许回头调用工具/UI/工作流运行时。
+//   - tools 是 L6 工具层，不允许依赖 UI、workflow、skills。
+//   - provider/CLI/错误分类/模型限制是 L1 接入底座，不允许依赖上层工具、workflow、UI。
 module.exports = {
   forbidden: [
     {
@@ -52,6 +53,29 @@ module.exports = {
       comment: "lib/skills (L7 Skill 层) 不允许直接依赖 UI 层的运行时值。",
       from: { path: "^src/lib/skills" },
       to: { path: "^src/(pages|components)", dependencyTypesNot: ["type-only"] },
+    },
+    {
+      name: "l8-harness-no-upstack-runtime",
+      severity: "error",
+      comment: "lib/llm/harness (L8 审计层) 只能读证据/做判定，不允许反向调用工具、workflow 或 UI 运行时。",
+      from: { path: "^src/lib/llm/harness" },
+      to: { path: "^src/(pages|components)|^src/lib/(workflow|skills)|^src/lib/llm/tools", dependencyTypesNot: ["type-only"] },
+    },
+    {
+      name: "l6-tools-no-upstack-runtime",
+      severity: "error",
+      comment: "lib/llm/tools (L6 工具层) 不允许依赖 UI、workflow、skills 的运行时值。",
+      from: { path: "^src/lib/llm/tools" },
+      to: { path: "^src/(pages|components)|^src/lib/(workflow|skills)", dependencyTypesNot: ["type-only"] },
+    },
+    {
+      name: "l1-llm-core-no-upstack-runtime",
+      severity: "error",
+      comment: "LLM 接入底座（provider/CLI/错误分类/模型限制）不允许依赖工具、workflow 或 UI 运行时。",
+      from: {
+        path: "^src/lib/llm/(provider-|provider\\.|cli-|chat-fallback-types|error-classifier|finish-reason|model-limits|sse-chunk-timeout)",
+      },
+      to: { path: "^src/(pages|components)|^src/lib/workflow|^src/lib/llm/tools", dependencyTypesNot: ["type-only"] },
     },
   ],
   options: {
