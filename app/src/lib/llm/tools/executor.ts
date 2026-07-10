@@ -3,12 +3,15 @@
 // 统一入口：zod 校验参数 → 执行 → 截断输出 → 落 ToolExecution 审计。
 // 任何工具的异常都被收敛成 status=error 的结果（不抛给上层，避免一个工具崩了整条对话挂）。
 
+import { z } from "zod";
 import { toolExecutions } from "../../db";
 import type { AnyToolDefinition, ContentPart, ToolContext, ToolResult } from "./types";
 import { checkPath, checkWritePath } from "./path-safety";
 import { checkCommand } from "./command-safety";
 import { snapshotWrite } from "./git-snapshot";
 import { runPostWriteFormatter } from "./post-write-format";
+import { collectNestedRulesContext } from "./nested-rules-injector";
+import { formatToolParamsError } from "./tool-error-fixhints";
 
 /** 审计里 output 的截断上限（防超长内容撑爆库） */
 export const MAX_OUTPUT_CHARS = 10_000;
@@ -128,9 +131,31 @@ export async function executeTool(
         void runPostWriteFormatter(resolved);
         result = { ...result, reversible };
       }
+
+      // 2026-07-10 移植 OMO agents-md-core：read/write 命中某个文件成功后，把该文件所在
+      // 目录往上到工作区根沿途尚未见过的 CLAUDE.md/AGENTS.md 追加到这次工具输出里
+      // （详见 nested-rules-injector.ts）。只对成功且真的落到了具体文件路径的调用生效。
+      if (
+        result.status === "success" &&
+        (pre.security?.kind === "read-path" || pre.security?.kind === "write-path")
+      ) {
+        try {
+          const nested = await collectNestedRulesContext(ctx, pre.security.resolved);
+          if (nested) result = { ...result, output: `${result.output}${nested}` };
+        } catch {
+          // 嵌套规则注入失败不影响工具本身的结果
+        }
+      }
     }
   } catch (err) {
-    result = { status: "error", output: `工具 ${tool.name} 执行失败：${errMessage(err)}` };
+    // 2026-07-10 移植 OMO delegate-core/retry-patterns 的思路：参数校验失败（zod）时给
+    // 逐字段的可执行修复提示，而不是把 ZodError 的原始 JSON 甩给模型自己猜。
+    // tool.parameters.parse 是这个 try 块里唯一会抛 ZodError 的地方，其余错误
+    // （安全检查/工具业务逻辑）沿用原有的"执行失败："前缀 + 错误消息。
+    result =
+      err instanceof z.ZodError
+        ? { status: "error", output: formatToolParamsError(tool.name, err) }
+        : { status: "error", output: `工具 ${tool.name} 执行失败：${errMessage(err)}` };
   }
 
   const durationMs = Date.now() - startedAt;

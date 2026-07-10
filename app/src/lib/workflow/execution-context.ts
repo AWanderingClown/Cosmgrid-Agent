@@ -1,5 +1,6 @@
 import type { FsAdapter } from "@/lib/llm/tools/fs-adapter";
 import type { WorkflowSnapshot } from "./types";
+import { formatPlanChecklistStatus, parsePlanChecklist } from "./plan-checklist";
 
 const MAX_PLAN_CHARS = 12_000;
 
@@ -81,6 +82,10 @@ export function buildWorkflowContextPreamble(args: {
       `\n已读取到用户桌面的方案文件：${args.desktopPlan.path}`,
       `\n方案文件内容：\n${args.desktopPlan.content}`,
     );
+    // 2026-07-10 移植 OMO boulder-state 思路：数方案里的 checkbox 清单，把真实完成进度
+    // 注入进来，防止清单还有未勾选项时模型就自称"全部完成"（详见 plan-checklist.ts）。
+    const checklistStatus = formatPlanChecklistStatus(parsePlanChecklist(args.desktopPlan.content));
+    if (checklistStatus) parts.push(`\n${checklistStatus}`);
   } else if (referencesExistingPlan(args.userText) && /执行|开始|直接|按|照|方案/i.test(args.userText)) {
     parts.push(
       "\n用户正在要求按既定方案执行，但本轮没有读取到完整方案文件。",

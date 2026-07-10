@@ -88,6 +88,26 @@ describe("workflow execution context", () => {
     expect(preamble).toContain("不要每个阶段都停下来等用户确认");
   });
 
+  it("桌面方案带 checkbox 清单时，注入真实完成进度（防止清单没勾完就自称完工）", () => {
+    const preamble = buildWorkflowContextPreamble({
+      snapshot: workflow(),
+      userText: "开始执行",
+      desktopPlan: { path: "/Users/me/Desktop/PLAN.md", content: "## TODOs\n- [x] 任务A\n- [ ] 任务B" },
+    });
+    expect(preamble).toContain("1/2 项已完成");
+    expect(preamble).toContain("任务B");
+    expect(preamble).toContain("不要向用户宣称任务已经完工");
+  });
+
+  it("桌面方案没有 checkbox 时，不注入清单进度（现有 toContain 断言不受影响）", () => {
+    const preamble = buildWorkflowContextPreamble({
+      snapshot: workflow(),
+      userText: "开始执行",
+      desktopPlan: { path: "/Users/me/Desktop/PLAN.md", content: "桌面方案正文" },
+    });
+    expect(preamble).not.toContain("方案清单进度");
+  });
+
   it("桌面方案读取后可绑定回 workflow，重启恢复时仍有方案来源", () => {
     const attached = attachPlanSourceToWorkflow({
       snapshot: workflow(),
