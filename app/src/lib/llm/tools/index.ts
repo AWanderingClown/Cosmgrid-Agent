@@ -13,6 +13,7 @@ import { grepTool } from "./grep-tool";
 import { gitReadTool } from "./git-read-tool";
 import { writeTool } from "./write-tool";
 import { editTool } from "./edit-tool";
+import { hashlineEditTool } from "./hashline-edit-tool"; // 2026-07-10 移植 OMO hashline：按行 hash 引用编辑，与 editTool 并存
 import { bashTool } from "./bash-tool";
 import { rememberTool } from "./memory-tool"; // 3.1 修复：AI 写入记忆工具
 import { webFetchTool } from "./web-fetch-tool"; // 2026-07-05 新增：唯一的联网能力，只读免确认
@@ -64,7 +65,7 @@ export function createDefaultToolRegistry(opts: { includeWrite?: boolean } = {})
     lspHoverTool,
     viewImageTool,
   ]);
-  if (opts.includeWrite) registry.registerAll([writeTool, editTool, bashTool]);
+  if (opts.includeWrite) registry.registerAll([writeTool, editTool, hashlineEditTool, bashTool]);
   return registry;
 }
 

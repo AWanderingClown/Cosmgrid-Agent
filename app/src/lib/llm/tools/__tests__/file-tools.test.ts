@@ -14,6 +14,7 @@ import { globTool } from "../glob-tool";
 import { grepTool } from "../grep-tool";
 import { executeTool } from "../executor";
 import { globToRegExp } from "../walk";
+import { formatHashLine } from "../hashline";
 import type { ToolContext } from "../types";
 
 const WS = "/ws";
@@ -60,16 +61,16 @@ beforeEach(() => {
 });
 
 describe("read 工具", () => {
-  it("读文件返回带行号内容", async () => {
+  it("读文件返回带 hashline（行号#hash|内容）的内容", async () => {
     const r = await executeTool(readTool, { file_path: "src/auth.ts" }, ctx);
     expect(r.status).toBe("success");
-    expect(r.output).toContain("1\tline1");
+    expect(r.output).toContain(formatHashLine(1, "line1"));
     expect(r.output).toContain("3 行");
   });
 
   it("offset/limit 截取", async () => {
     const r = await executeTool(readTool, { file_path: "src/auth.ts", offset: 2, limit: 1 }, ctx);
-    expect(r.output).toContain("2\tline2 TODO fix");
+    expect(r.output).toContain(formatHashLine(2, "line2 TODO fix"));
     expect(r.output).not.toContain("line1");
   });
 

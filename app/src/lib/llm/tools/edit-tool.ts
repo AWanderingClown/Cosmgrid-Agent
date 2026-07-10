@@ -32,7 +32,10 @@ function countOccurrences(haystack: string, needle: string): number {
 
 export const editTool: ToolDefinition<EditParams> = {
   name: "edit",
-  description: "把文件里某段文本（old_string）替换成新文本（new_string）。old_string 必须唯一。会先让用户确认。",
+  description:
+    "把文件里某段文本（old_string）替换成新文本（new_string）。old_string 必须唯一。会先让用户确认。" +
+    "优先用 hashline_edit（按行号#hash 引用，能处理文本重复出现、能感知文件是否被改过）；" +
+    "只有确定 old_string 在文件里唯一出现、且是简单一次性替换时才用这个工具。",
   parameters: paramsSchema,
   readOnly: false,
   security: { kind: "write-path", pathField: "file_path" },
