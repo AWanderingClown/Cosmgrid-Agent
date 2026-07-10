@@ -1,6 +1,12 @@
 import type { TFunction } from "i18next";
-import type { DebateResult } from "@/lib/llm/debate-engine";
-import type { ChatMessage } from "./types";
+import type { DebateResult } from "./debate-engine";
+
+interface DebateTopicMessage {
+  id?: string;
+  role: "user" | "assistant";
+  content: string;
+  kind?: string;
+}
 
 export interface FormattedDebateResult {
   content: string;
@@ -64,8 +70,8 @@ export function formatDebateResultMessage(args: {
 }
 
 export function buildDebateTopic(args: {
-  messages: ChatMessage[];
-  userMessage: ChatMessage;
+  messages: DebateTopicMessage[];
+  userMessage: DebateTopicMessage;
   maxHistoryMessages?: number;
   maxContentChars?: number;
 }): string {

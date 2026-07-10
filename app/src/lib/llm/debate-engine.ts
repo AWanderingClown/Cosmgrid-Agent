@@ -49,8 +49,17 @@ export interface DynamicDebateInput {
   participants: DebateRoleConfig[];
   /** 最多使用多少个参与模型，默认 4。防止模型太多时成本和等待时间失控。 */
   maxParticipants?: number;
-  /** 最大迭代次数，默认 2（即一次修正）。 */
+  /**
+   * 最大迭代次数，默认 3（2026-07-09 与 MAF Writer-Critic 默认对齐）。
+   * 每轮迭代 = Solver 出方案 + Critics 反驳 + Judge 裁决；3 轮典型包含 1 原始 + 2 修正。
+   * 桌面聊天场景 cost 敏感，要加更多轮按需传参。
+   */
   maxIterations?: number;
+  /**
+   * 可选的结构化 Judge runner（2026-07-09 P8② 新增）。不传则走 runRole + parseJudgeDecision 旧路径，
+   * 兼容所有 provider。传了之后 generateObject 失败时调用方应返回 null，engine 兜底。
+   */
+  judgeRunner?: JudgeRunner;
   signal?: AbortSignal;
 }
 
@@ -58,6 +67,11 @@ export interface DebateResult {
   topic: string;
   rounds: RoleOutput[];
   finalSolution: string;
+  /**
+   * 最后一轮 Judge 的结构化裁决（2026-07-09 P8② 新增）。失败 / fallback / 旧记录时为 null。
+   * 上层 UI 用它判断 approved=false 时给 amber 提示"未完全通过/最佳版本"。
+   */
+  judgeDecision?: JudgeDecision | null;
   /** 模型调用失败但已被跳过的内部明细。默认不直接展示给用户，避免一屏底层报错污染聊天。 */
   failures?: string[];
 }
@@ -68,6 +82,20 @@ export interface JudgeDecision {
   feedback: string[];
   finalSolution: string;
 }
+
+/**
+ * Judge 调用方式（可注入）。
+ *  - 默认不传：走 runRole + parseJudgeDecision（文本 JSON，兼容所有 provider）
+ *  - production 传：runJudgeDecisionStructured（generateObject + zod schema，更严格）
+ *  - 注入后 Judge 失败时调用方应返回 null，debate-engine 兜底走 parseJudgeDecision
+ */
+export type JudgeRunner = (params: {
+  topic: string;
+  proposalContent: string;
+  critiques: RoleOutput[];
+  judgeConfig: DebateRoleConfig;
+  signal?: AbortSignal;
+}) => Promise<JudgeDecision | null>;
 
 // ---- Prompt 构造（导出便于单测/调参） ----
 
@@ -90,19 +118,34 @@ export function criticSystemPrompt(): string {
 
 export function judgeSystemPrompt(): string {
   return [
-    "你是裁判（Judge）。综合话题、方案与批评，产出最终方案。",
-    "按 5 个维度权衡：事实准确性 / 完整性 / 可执行性 / 风险评估 / 创新性。",
-    "请严格返回 JSON，格式如下：",
+    "你是裁判（Judge / 质量门禁）。综合话题、方案与批评，按三步独立判断后产出最终方案。",
+    "",
+    "## 第 1 步：判定（approved）",
+    "对照 5 个维度——事实准确性 / 完整性 / 可执行性 / 风险评估 / 创新性——决定方案是否可以直接交付：",
+    "  - approved=true：方案已经可执行，批评要么被方案化解，要么是非阻塞建议；无需再次修正。",
+    "  - approved=false：方案有必须解决的关键缺陷，下一轮 Solver 需要重做。",
+    "  - 不要给\"凑合可过\"——质量门禁，要么通过要么不通过，不要鼓励反复润色。",
+    "",
+    "## 第 2 步：反馈（feedback）",
+    "approved=false 时，feedback 必须是给下一轮 Solver 的**可执行修改任务**：",
+    "  - 列出 critic 的关键问题中方案没解决的部分；",
+    "  - 用\"修改 X 解决 Y\"的句式，不要写\"建议加强\"、\"可以考虑\"这类空话；",
+    "  - 顺序按重要性排，最多 5 条；",
+    "  - approved=true 时，feedback 为空数组，或只给非阻塞建议。",
+    "",
+    "## 第 3 步：最终方案（finalSolution）",
+    "基于原方案 + 你的反馈修正后的最终正文（即使 approved=true 也要给，因为可能需要微调）：",
+    "  - 不要在 JSON 之外的字段加内容；",
+    "  - 直接给方案正文，不要\"以下是方案\"这类元话语。",
+    "",
+    "## 输出格式（严格 JSON）",
     "```json",
     "{",
     '  "approved": true,',
-    '  "feedback": ["改进建议1", "改进建议2"],',
+    '  "feedback": ["修改 X 解决 Y", "..."],',
     '  "finalSolution": "合并并修正后的最终方案正文"',
     "}",
     "```",
-    "其中 approved 为是否通过（true=方案可执行，false=需修改），",
-    "feedback 为裁判给出的改进建议列表（approved 为 true 时可为空数组），",
-    "finalSolution 为最终方案（若 approved 为 true，则与原方案相同或已修正）。",
     "务必不要在 JSON 之外输出任何内容，包括解释、换行或额外文字。",
   ].join("\n");
 }
@@ -258,7 +301,7 @@ function errMessage(err: unknown): string {
  */
 export async function runDynamicDebate(input: DynamicDebateInput, runRole: RunRole): Promise<DebateResult> {
   const participants = input.participants.slice(0, Math.max(1, input.maxParticipants ?? 4));
-  const maxIterations = input.maxIterations ?? 2;
+  const maxIterations = input.maxIterations ?? 3;
   if (participants.length === 0) {
     throw new Error("runDynamicDebate: participants cannot be empty");
   }
@@ -362,29 +405,61 @@ export async function runDynamicDebate(input: DynamicDebateInput, runRole: RunRo
       }
     }
 
-    // ---- 4) Judge：结构化裁决 ----
+    // ---- 4) Judge：结构化裁决（2026-07-09 P8②：优先走结构化 runner，失败兜底旧 parser） ----
     throwIfAborted(input.signal);
-    try {
-      const judgeRes = await runRole({
-        systemPrompt: judgeSystemPrompt(),
-        userPrompt: dynamicJudgeUserPrompt(input.topic, proposal.content, critiques),
-        config: judgeConfig,
-        signal: input.signal,
-      });
-      rounds.push({ role: judgeConfig.role, modelId: judgeConfig.modelId, ...judgeRes });
-      judgeDecision = parseJudgeDecision(judgeRes.content);
-      approved = judgeDecision.approved === true;
-      finalSolution = judgeDecision.finalSolution || proposal.content;
-    } catch (err) {
-      if (isAbort(err)) throw err;
-      failures.push(errMessage(err));
-      // Judge 失败兜底：用原方案，标记未通过以便下轮重试
-      approved = false;
-      finalSolution = proposal.content;
-      judgeDecision = null;
+    let judgeUsedStructured = false;
+    if (input.judgeRunner) {
+      try {
+        const structured = await input.judgeRunner({
+          topic: input.topic,
+          proposalContent: proposal.content,
+          critiques,
+          judgeConfig,
+          signal: input.signal,
+        });
+        if (structured) {
+          judgeDecision = structured;
+          approved = structured.approved === true;
+          finalSolution = structured.finalSolution || proposal.content;
+          judgeUsedStructured = true;
+          // structured 路径不调 runRole，rounds 里不记 judge 这一行（结构化字段已落 DebateResult）
+        } else {
+          failures.push("judgeRunner returned null, falling back to parseJudgeDecision");
+        }
+      } catch (err) {
+        if (isAbort(err)) throw err;
+        failures.push(`judgeRunner failed: ${errMessage(err)}, falling back to parseJudgeDecision`);
+      }
+    }
+    if (!judgeUsedStructured) {
+      try {
+        const judgeRes = await runRole({
+          systemPrompt: judgeSystemPrompt(),
+          userPrompt: dynamicJudgeUserPrompt(input.topic, proposal.content, critiques),
+          config: judgeConfig,
+          signal: input.signal,
+        });
+        rounds.push({ role: judgeConfig.role, modelId: judgeConfig.modelId, ...judgeRes });
+        judgeDecision = parseJudgeDecision(judgeRes.content);
+        approved = judgeDecision.approved === true;
+        finalSolution = judgeDecision.finalSolution || proposal.content;
+      } catch (err) {
+        if (isAbort(err)) throw err;
+        failures.push(errMessage(err));
+        // Judge 失败兜底：用原方案，标记未通过以便下轮重试
+        approved = false;
+        finalSolution = proposal.content;
+        judgeDecision = null;
+      }
     }
     // 循环条件：!approved && iter < maxIterations
   }
 
-  return { topic: input.topic, rounds, finalSolution, ...(failures.length ? { failures } : {}) };
+  return {
+    topic: input.topic,
+    rounds,
+    finalSolution,
+    judgeDecision: judgeDecision ?? null,
+    ...(failures.length ? { failures } : {}),
+  };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDebateTopic, formatDebateResultMessage, isFullDebateResult } from "../debate-result";
+import { buildDebateTopic, formatDebateResultMessage, isFullDebateResult } from "@/lib/llm/debate-result";
 import type { DebateResult } from "@/lib/llm/debate-engine";
 
 const t = ((key: string, options?: { count?: number }) => {

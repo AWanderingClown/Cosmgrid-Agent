@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildDebateParticipants } from "../debate-participants";
+import { buildDebateParticipants } from "@/lib/llm/debate-participants";
 import { _resetCooldowns, markModelFailed } from "@/lib/llm/model-cooldown";
 import type { CredentialListItem, ModelListItem } from "@/lib/api";
 

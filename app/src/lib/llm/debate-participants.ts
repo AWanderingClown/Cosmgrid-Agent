@@ -1,8 +1,8 @@
 import type { CredentialListItem, ModelListItem } from "@/lib/api";
-import type { DebateRoleConfig } from "@/lib/llm/debate-engine";
-import { isCliProviderType } from "@/lib/llm/cli-protocol";
-import { hydrateModelCooldowns, isInCooldown } from "@/lib/llm/model-cooldown";
-import { rankFallbackModels } from "@/lib/llm/model-capabilities";
+import type { DebateRoleConfig } from "./debate-engine";
+import { isCliProviderType } from "./cli-protocol";
+import { hydrateModelCooldowns, isInCooldown } from "./model-cooldown";
+import { rankFallbackModels } from "./model-capabilities";
 
 function debateProviderPriority(model: ModelListItem): number {
   const type = model.provider?.type ?? "";

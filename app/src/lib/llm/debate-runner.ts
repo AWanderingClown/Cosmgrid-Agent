@@ -3,6 +3,8 @@
 // 把 debate-engine 的可注入 RunRole 接到实际模型调用（Vercel AI SDK generateText）+ 落 UsageEvent。
 // 用 generateText（非流式）：对弈每个角色是一次性产出，不需要流式中间态。
 
+import { generateObject } from "ai";
+import { z } from "zod";
 import { generateText } from "ai";
 import { getLanguageModel } from "./provider-factory";
 import { resolveMaxOutputTokens } from "./model-limits";
@@ -10,7 +12,8 @@ import { recordUsageEvent } from "./usage-tracker";
 import { isCliProviderType } from "./cli-protocol";
 import { streamViaCli } from "./cli-engine";
 import { markModelFailed, markModelSucceeded } from "./model-cooldown";
-import type { RunRole } from "./debate-engine";
+import type { RunRole, JudgeRunner, JudgeDecision } from "./debate-engine";
+import { judgeSystemPrompt, parseJudgeDecision } from "./debate-engine";
 
 /** 生产用 RunRole：调真实模型 + 记录用量（role 记成 debate_<角色>，StatsPage 可见对弈成本） */
 export const realRunRole: RunRole = async ({ systemPrompt, userPrompt, config, signal }) => {
@@ -76,3 +79,96 @@ export const realRunRole: RunRole = async ({ systemPrompt, userPrompt, config, s
   markModelSucceeded(config.modelId);
   return { content, inputTokens, outputTokens };
 };
+
+// ====== 2026-07-09 P8②：production 结构化 Judge runner ======
+
+/** generateObject 的 zod schema：和 parseJudgeDecision 的 JudgeDecision 形状一致 */
+const judgeDecisionSchema = z.object({
+  approved: z.boolean(),
+  feedback: z.array(z.string()),
+  finalSolution: z.string(),
+});
+
+function dynamicJudgeStructuredUserPrompt(args: {
+  topic: string;
+  proposalContent: string;
+  critiques: { role: string; modelId: string; content: string }[];
+}): string {
+  const parts = [
+    `任务/方案上下文：\n${args.topic}`,
+    `\n原方案：\n${args.proposalContent}`,
+  ];
+  if (args.critiques.length > 0) {
+    parts.push("\n反驳 / PK 意见：");
+    for (const c of args.critiques) {
+      parts.push(`\n## ${c.role} (${c.modelId})\n${c.content}`);
+    }
+  }
+  parts.push("\n请按 system 提示的三步独立判断后返回 JSON。");
+  return parts.join("\n");
+}
+
+/**
+ * production 结构化 JudgeRunner。
+ * - API 路径：generateObject + zod schema，严格类型保证。
+ * - CLI 路径：直接返 null，调用方走 parseJudgeDecision 旧路径。
+ * - 任何异常：返 null（让 debate-engine 兜底到 runRole + parseJudgeDecision）。
+ */
+export const runJudgeDecisionStructured: JudgeRunner = async ({
+  topic,
+  proposalContent,
+  critiques,
+  judgeConfig,
+  signal,
+}) => {
+  // CLI provider 不一定支持 generateObject，直接 fallback
+  if (isCliProviderType(judgeConfig.providerType)) {
+    return null;
+  }
+
+  try {
+    const lm = getLanguageModel(
+      judgeConfig.providerType,
+      judgeConfig.modelName,
+      judgeConfig.apiKey,
+      judgeConfig.baseUrl,
+    );
+    const res = await generateObject({
+      model: lm,
+      schema: judgeDecisionSchema,
+      system: judgeSystemPrompt(),
+      prompt: dynamicJudgeStructuredUserPrompt({ topic, proposalContent, critiques }),
+      maxOutputTokens: resolveMaxOutputTokens(judgeConfig.modelName),
+      abortSignal: signal,
+    });
+    const obj = res.object;
+    const decision: JudgeDecision = {
+      approved: obj.approved === true,
+      feedback: Array.isArray(obj.feedback) ? obj.feedback : [],
+      finalSolution: typeof obj.finalSolution === "string" ? obj.finalSolution : "",
+    };
+    void recordUsageEvent({
+      modelId: judgeConfig.modelId,
+      modelName: judgeConfig.modelName,
+      providerType: judgeConfig.providerType,
+      providerId: judgeConfig.providerId,
+      apiCredentialId: judgeConfig.apiCredentialId,
+      role: "debate_judge_structured",
+      usage: {
+        inputTokens: res.usage?.inputTokens ?? 0,
+        outputTokens: res.usage?.outputTokens ?? 0,
+      },
+      finishReason: "stop",
+    });
+    markModelSucceeded(judgeConfig.modelId);
+    return decision;
+  } catch (err) {
+    if ((err as { name?: string })?.name === "AbortError" || signal?.aborted) throw err;
+    markModelFailed(judgeConfig.modelId);
+    // 返 null 让 debate-engine 兜底到 parseJudgeDecision（不阻断主对话）
+    return null;
+  }
+};
+
+// 复用旧 parser 作为额外的 fallback helper（外部 module 调用方便）
+export { parseJudgeDecision };
