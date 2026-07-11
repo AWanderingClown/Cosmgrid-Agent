@@ -5,6 +5,7 @@ import { archiveDynamicDebateResult } from "./debate-persistence";
 import { buildDebateParticipants } from "./debate-participants";
 import { buildDebateTopic, formatDebateResultMessage } from "./debate-result";
 import { realRunRole } from "./debate-runner";
+import { createJobBackedRunRole } from "./agent-jobs/job-runner";
 
 interface DebateMessage {
   id?: string;
@@ -21,6 +22,7 @@ interface ExecuteDebateTurnOptions {
   messages: DebateMessage[];
   userMessage: DebateMessage;
   projectId: string | null;
+  workflowRunId?: string | null;
   getApiKey: (credentialId: string) => Promise<string | null>;
   signal: AbortSignal;
   t: TFunction;
@@ -65,7 +67,10 @@ export async function executeDebateTurn(
       maxIterations: 2,
       signal: options.signal,
     },
-    realRunRole,
+    createJobBackedRunRole({
+      workflowRunId: options.workflowRunId ?? null,
+      runRole: realRunRole,
+    }),
   );
   const modelNameFor = (modelId: string) => {
     const model = options.availableModels.find((candidate) => candidate.id === modelId);

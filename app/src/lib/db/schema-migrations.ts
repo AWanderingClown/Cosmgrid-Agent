@@ -519,4 +519,26 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       await db.execute("CREATE INDEX IF NOT EXISTS idx_harness_candidate_eval_candidate ON harness_candidate_eval_results(candidate_id, split)");
     },
   },
+  {
+    version: "202607180002-harness-version-single-active",
+    description:
+      "Ensure only one harness_versions row can be active at a time. " +
+      "Candidate validation may create new versions, but activation must be unambiguous and rollback-safe.",
+    up: async (db) => {
+      await db.execute(`
+        UPDATE harness_versions
+        SET active = 0
+        WHERE active = 1
+          AND id NOT IN (
+            SELECT id FROM harness_versions
+            WHERE active = 1
+            ORDER BY created_at DESC
+            LIMIT 1
+          )
+      `);
+      await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_harness_versions_one_active ON harness_versions(active) WHERE active = 1",
+      );
+    },
+  },
 ];

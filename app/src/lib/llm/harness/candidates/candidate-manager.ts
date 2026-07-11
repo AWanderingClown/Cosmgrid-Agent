@@ -42,8 +42,12 @@ const SAFE_SURFACES = new Set<HarnessCandidateSurface>([
   "model_profile",
 ]);
 
-export function canAutoApplyEditSurface(surface: HarnessCandidateSurface): boolean {
+export function canProposeEditSurface(surface: HarnessCandidateSurface): boolean {
   return SAFE_SURFACES.has(surface);
+}
+
+export function canActivateCandidate(decision: CandidateDecision): boolean {
+  return decision.status === "accepted";
 }
 
 export function deriveCandidateDecision(input: CandidateDecisionInput): CandidateDecision {

@@ -64,6 +64,9 @@ export const harnessVersions = {
   async create(input: { version: string; parentVersionId?: string | null; active?: boolean }): Promise<string> {
     const db = await getDb();
     const id = newId();
+    if (input.active) {
+      await db.execute("UPDATE harness_versions SET active = 0");
+    }
     await db.execute(
       "INSERT INTO harness_versions (id, version, parent_version_id, active, created_at) VALUES ($1,$2,$3,$4,$5)",
       [id, input.version, input.parentVersionId ?? null, input.active ? 1 : 0, now()],

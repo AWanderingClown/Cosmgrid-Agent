@@ -67,6 +67,24 @@ export const modelHarnessProfiles = {
     return rows.map(mapProfileRow);
   },
 
+  async listMatching(input: {
+    modelId: string | null;
+    modelName: string;
+    providerId?: string | null;
+    providerType?: string | null;
+    modelVersion?: string | null;
+    harnessVersion?: string | null;
+  }): Promise<ModelHarnessProfileRow[]> {
+    const db = await getDb();
+    const rows = await db.select<any[]>(
+      "SELECT * FROM model_harness_profiles WHERE model_name = $1 AND enabled = 1 ORDER BY created_at DESC",
+      [input.modelName],
+    );
+    return rows
+      .map(mapProfileRow)
+      .filter((profile) => profileMatchesRuntime(profile, input));
+  },
+
   async listAllByModel(modelName: string): Promise<ModelHarnessProfileRow[]> {
     const db = await getDb();
     const rows = await db.select<any[]>(
@@ -93,6 +111,27 @@ export const modelHarnessProfiles = {
     return rows.length > 0 ? mapProfileRow(rows[0]) : null;
   },
 };
+
+function profileMatchesRuntime(
+  profile: ModelHarnessProfileRow,
+  input: {
+    modelId: string | null;
+    providerId?: string | null;
+    providerType?: string | null;
+    modelVersion?: string | null;
+    harnessVersion?: string | null;
+  },
+): boolean {
+  if (profile.modelId && profile.modelId !== input.modelId) return false;
+  if (profile.providerId && profile.providerId !== (input.providerId ?? null)) return false;
+  if (profile.providerType && profile.providerType !== (input.providerType ?? null)) return false;
+  if (!isApplicableHarnessVersion(profile.versionRange, input.modelVersion ?? null)) return false;
+  if (profile.harnessVersionMin && !input.harnessVersion) return false;
+  if (profile.harnessVersionMax && !input.harnessVersion) return false;
+  if (profile.harnessVersionMin && compareVersion(input.harnessVersion!, profile.harnessVersionMin) < 0) return false;
+  if (profile.harnessVersionMax && compareVersion(input.harnessVersion!, profile.harnessVersionMax) > 0) return false;
+  return true;
+}
 
 // ============ model_harness_profile_events ============
 

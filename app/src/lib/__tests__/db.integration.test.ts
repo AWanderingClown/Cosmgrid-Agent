@@ -116,6 +116,7 @@ describe("initSchema", () => {
       // 阶段7/8（2026-07-11）：Agent Job + 受控 Harness 候选优化
       "202607170001-agent-jobs",
       "202607180001-harness-candidates",
+      "202607180002-harness-version-single-active",
     ]);
 
     const usageColumns = await adapter.select<Array<{ name: string }>>("PRAGMA table_info(usage_events)");
@@ -1052,6 +1053,51 @@ describe("modelHarnessProfiles", () => {
     expect(await db.modelHarnessProfileEvents.listEnabledByProfile(profileId, "1.9")).toEqual([]);
     expect(await db.modelHarnessProfileEvents.listEnabledByProfile(profileId, "2.1")).toHaveLength(1);
   });
+
+  it("按 model/provider/harness version 精确匹配启用 profile", async () => {
+    await db.modelHarnessProfiles.create({
+      modelId: "m-exact",
+      modelName: "exact-profile-model",
+      providerId: "provider-a",
+      providerType: "openai-compatible",
+      versionRange: null,
+      harnessVersionMin: "2.0",
+      harnessVersionMax: "2.9",
+      enabled: true,
+    });
+    await db.modelHarnessProfiles.create({
+      modelId: "m-exact",
+      modelName: "exact-profile-model",
+      providerId: "provider-b",
+      providerType: "openai-compatible",
+      versionRange: null,
+      harnessVersionMin: "2.0",
+      harnessVersionMax: "2.9",
+      enabled: true,
+    });
+
+    expect(await db.modelHarnessProfiles.listMatching({
+      modelId: "m-exact",
+      modelName: "exact-profile-model",
+      providerId: "provider-b",
+      providerType: "openai-compatible",
+      harnessVersion: "2.1",
+    })).toHaveLength(1);
+    expect(await db.modelHarnessProfiles.listMatching({
+      modelId: "m-exact",
+      modelName: "exact-profile-model",
+      providerId: "provider-c",
+      providerType: "openai-compatible",
+      harnessVersion: "2.1",
+    })).toEqual([]);
+    expect(await db.modelHarnessProfiles.listMatching({
+      modelId: "m-exact",
+      modelName: "exact-profile-model",
+      providerId: "provider-b",
+      providerType: "openai-compatible",
+      harnessVersion: "3.0",
+    })).toEqual([]);
+  });
 });
 
 describe("agentJobs", () => {
@@ -1109,6 +1155,20 @@ describe("harnessCandidates", () => {
     expect(await db.harnessCandidates.getById(candidateId)).toMatchObject({
       status: "pending_approval",
       decisionReason: "validated, waiting for user approval",
+    });
+  });
+
+  it("keeps only one active harness version", async () => {
+    await db.harnessVersions.create({ version: "harness-single-active-v1", active: true });
+    const v2 = await db.harnessVersions.create({ version: "harness-single-active-v2", active: true });
+
+    const activeRows = await adapter.select<Array<{ id: string }>>(
+      "SELECT id FROM harness_versions WHERE active = 1",
+    );
+    expect(activeRows).toEqual([{ id: v2 }]);
+    expect(await db.harnessVersions.getActive()).toMatchObject({
+      id: v2,
+      version: "harness-single-active-v2",
     });
   });
 });

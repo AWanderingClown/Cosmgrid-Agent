@@ -16,6 +16,7 @@ export interface ResolveModelHarnessProfileInput {
   modelName: string;
   providerId?: string | null;
   providerType?: string | null;
+  modelVersion?: string | null;
   harnessVersion?: string | null;
 }
 
@@ -23,7 +24,14 @@ export async function resolveModelHarnessProfile(
   input: ResolveModelHarnessProfileInput,
 ): Promise<ResolvedModelHarnessProfile | null> {
   try {
-    const profiles = await modelHarnessProfiles.listEnabled(input.modelName);
+    const profiles = await modelHarnessProfiles.listMatching({
+      modelId: input.modelId,
+      modelName: input.modelName,
+      providerId: input.providerId ?? null,
+      providerType: input.providerType ?? null,
+      modelVersion: input.modelVersion ?? null,
+      harnessVersion: input.harnessVersion ?? null,
+    });
     if (profiles.length === 0) return null;
 
     // 第一版取最新的一个 profile（多 profile 合并留阶段 7 Eval Harness 评分用）

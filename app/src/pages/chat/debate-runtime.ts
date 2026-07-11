@@ -171,6 +171,7 @@ export async function runDebateRuntime(
       messages: options.messages,
       userMessage: options.userMessage,
       projectId,
+      workflowRunId: activeRunId,
       getApiKey: options.getApiKey,
       signal: options.controller.signal,
       t: options.t,
