@@ -14,7 +14,8 @@ function stat(over: Partial<ModelPerformanceStatRow> = {}): ModelPerformanceStat
   return {
     modelId: "m", taskType: "standard", successRate: 1, avgInputTokens: 100,
     avgOutputTokens: 50, avgCost: 0.01, avgLatencyMs: 1000, sampleCount: 50,
-    windowStart: "", windowEnd: "", ...over,
+    windowStart: "", windowEnd: "", transportSuccessRate: 1, taskSuccessRate: 1,
+    verifierPassRate: 1, costPerSuccess: 0.01, failureCountByKindJson: "{}", ...over,
   };
 }
 

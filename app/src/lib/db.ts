@@ -75,6 +75,17 @@ export type {
 } from "./db/evals";
 export { playbookEvents } from "./db/playbook-events";
 export type { PlaybookEventRow } from "./db/playbook-events";
+export { modelHarnessProfiles, modelHarnessProfileEvents } from "./db/model-harness-profiles";
+export type { ModelHarnessProfileRow, ModelHarnessProfileEventRow } from "./db/model-harness-profiles";
+export { agentJobs } from "./db/agent-jobs";
+export type { AgentJobArtifactRow, AgentJobEventRow, AgentJobRow } from "./db/agent-jobs";
+export { harnessCandidateEdits, harnessCandidates, harnessVersions } from "./db/harness-candidates";
+export type {
+  HarnessCandidateEditRow,
+  HarnessCandidateRow,
+  HarnessCandidateStatus,
+  HarnessVersionRow,
+} from "./db/harness-candidates";
 export { mcpServers, mcpServerApprovals } from "./db/mcp";
 export type {
   CreateMcpServerInput,

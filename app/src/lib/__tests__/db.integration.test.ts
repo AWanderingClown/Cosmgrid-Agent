@@ -109,6 +109,13 @@ describe("initSchema", () => {
       "202607130003-eval-results",
       "202607130004-task-outcomes",
       "202607130005-usage-events-latency",
+      // 阶段6（2026-07-11）：模型 Harness Profile（2 表 + model_performance_stats 拆 4 指标）
+      "202607160001-model-harness-profiles",
+      "202607160002-model-harness-profile-events",
+      "202607160003-model-perf-stats-4-indicators",
+      // 阶段7/8（2026-07-11）：Agent Job + 受控 Harness 候选优化
+      "202607170001-agent-jobs",
+      "202607180001-harness-candidates",
     ]);
 
     const usageColumns = await adapter.select<Array<{ name: string }>>("PRAGMA table_info(usage_events)");
@@ -966,6 +973,143 @@ describe("modelPerformanceStats", () => {
     expect(got!.sampleCount).toBe(9);
     const all = await db.modelPerformanceStats.list();
     expect(all.filter((s) => s.modelId === "mP")).toHaveLength(1);
+  });
+
+  it("阶段6新增指标未传时从旧 successRate 兼容回填", async () => {
+    const base = {
+      modelId: "mP2",
+      taskType: "main_chat",
+      successRate: 0.8,
+      avgInputTokens: 100,
+      avgOutputTokens: 200,
+      avgCost: 0.04,
+      avgLatencyMs: 1200,
+      sampleCount: 3,
+      windowStart: new Date().toISOString(),
+      windowEnd: new Date().toISOString(),
+    };
+    await db.modelPerformanceStats.upsert(base);
+    const got = await db.modelPerformanceStats.get("mP2", "main_chat");
+    expect(got).toMatchObject({
+      transportSuccessRate: 0.8,
+      taskSuccessRate: 0.8,
+      verifierPassRate: 0.8,
+      failureCountByKindJson: "{}",
+    });
+    expect(got!.costPerSuccess).toBeCloseTo(0.05);
+  });
+});
+
+describe("modelHarnessProfiles", () => {
+  it("只返回已启用 profile / event，并按 harness version 过滤", async () => {
+    const profileId = await db.modelHarnessProfiles.create({
+      modelId: "m-profile",
+      modelName: "profile-model",
+      providerId: null,
+      providerType: "openai-compatible",
+      versionRange: null,
+      harnessVersionMin: null,
+      harnessVersionMax: null,
+      enabled: false,
+    });
+
+    expect(await db.modelHarnessProfiles.listEnabled("profile-model")).toEqual([]);
+    await db.modelHarnessProfiles.updateEnabled(profileId, true);
+    expect(await db.modelHarnessProfiles.listEnabled("profile-model")).toHaveLength(1);
+
+    await db.modelHarnessProfileEvents.create({
+      profileId,
+      modelId: "m-profile",
+      modelName: "profile-model",
+      providerType: "openai-compatible",
+      failureKind: "no_tool_completion",
+      adaptationRule: { kind: "skill_instruction", content: "先调用工具", tags: ["tool"] },
+      sourceType: "manual",
+      sourceEvalRunId: null,
+      sourceEvalResultId: null,
+      sourceUsageEventId: null,
+      sourceTaskOutcomeId: null,
+      sourceToolExecutionId: null,
+      failureId: null,
+      confidence: 0.9,
+      applicableHarnessVersion: ">=2.0",
+      enabled: false,
+      suggestedAt: new Date().toISOString(),
+      approvedAt: null,
+    });
+
+    expect(await db.modelHarnessProfileEvents.listEnabledByProfile(profileId, "2.1")).toEqual([]);
+
+    const allEvents = await adapter.select<Array<{ id: string }>>(
+      "SELECT id FROM model_harness_profile_events WHERE profile_id = $1",
+      [profileId],
+    );
+    await adapter.execute(
+      "UPDATE model_harness_profile_events SET enabled = 1, approved_at = datetime('now') WHERE id = $1",
+      [allEvents[0]!.id],
+    );
+
+    expect(await db.modelHarnessProfileEvents.listEnabledByProfile(profileId, "1.9")).toEqual([]);
+    expect(await db.modelHarnessProfileEvents.listEnabledByProfile(profileId, "2.1")).toHaveLength(1);
+  });
+});
+
+describe("agentJobs", () => {
+  it("start / artifact / cancel 都持久化到 job 事件流", async () => {
+    const jobId = await db.agentJobs.start({
+      workflowRunId: "run-agent",
+      role: "critic",
+      modelId: "model-a",
+      objective: "review proposal",
+      inputContextRefsJson: JSON.stringify(["ctx-a"]),
+    });
+
+    await db.agentJobs.addArtifact(jobId, {
+      kind: "markdown",
+      uri: "artifact://review-a",
+      summary: "review result",
+    });
+    await db.agentJobs.cancel(jobId, "parent cancelled");
+
+    const got = await db.agentJobs.getById(jobId);
+    expect(got).toMatchObject({
+      role: "critic",
+      modelId: "model-a",
+      status: "cancelled",
+      cancellationReason: "parent cancelled",
+    });
+    expect(await db.agentJobs.listArtifacts(jobId)).toHaveLength(1);
+    expect((await db.agentJobs.listEvents(jobId)).map((e) => e.eventType)).toEqual(["started", "cancelled"]);
+  });
+});
+
+describe("harnessCandidates", () => {
+  it("keeps candidate edits and activation decision separate from active harness version", async () => {
+    const v1 = await db.harnessVersions.create({ version: "harness-v1", active: true });
+    const candidateId = await db.harnessCandidates.create({
+      parentVersionId: v1,
+      targetFailureKind: "no_tool_completion",
+      expectedImprovement: "force evidence before completion",
+      riskSummary: "may increase tool calls",
+    });
+    await db.harnessCandidateEdits.create({
+      candidateId,
+      surface: "skill_instruction",
+      diff: "+ require tool evidence",
+    });
+    await db.harnessCandidates.updateDecision(candidateId, {
+      status: "pending_approval",
+      decisionReason: "validated, waiting for user approval",
+      heldInResultJson: JSON.stringify({ passed: true }),
+      heldOutResultJson: JSON.stringify({ passed: true }),
+    });
+
+    expect(await db.harnessVersions.getActive()).toMatchObject({ id: v1, version: "harness-v1" });
+    expect(await db.harnessCandidateEdits.listByCandidate(candidateId)).toHaveLength(1);
+    expect(await db.harnessCandidates.getById(candidateId)).toMatchObject({
+      status: "pending_approval",
+      decisionReason: "validated, waiting for user approval",
+    });
   });
 });
 

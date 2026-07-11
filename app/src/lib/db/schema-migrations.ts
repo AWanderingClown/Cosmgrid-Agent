@@ -314,4 +314,209 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       );
     },
   },
+  {
+    version: "202607160001-model-harness-profiles",
+    description:
+      "阶段6 模型专属 Harness Profile：新建 model_harness_profiles 表（**不 FK 到 models** —— 模型删除后保留历史 profile）。" +
+      "字段：id / model_id(nullable) / model_name / provider_id / provider_type / version_range / " +
+      "harness_version_min / harness_version_max / enabled / created_at / updated_at。",
+    up: async (db) => {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS model_harness_profiles (
+          id TEXT PRIMARY KEY,
+          model_id TEXT,
+          model_name TEXT NOT NULL,
+          provider_id TEXT,
+          provider_type TEXT,
+          version_range TEXT,
+          harness_version_min TEXT,
+          harness_version_max TEXT,
+          enabled INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_model_profile_model ON model_harness_profiles(model_name, enabled)",
+      );
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_model_profile_enabled ON model_harness_profiles(enabled) WHERE enabled = 1",
+      );
+    },
+  },
+  {
+    version: "202607160002-model-harness-profile-events",
+    description:
+      "阶段6：model_harness_profile_events 表（一个 profile 可关联多条 event，每条 event 对应一个 FailureKind + AdaptationRule）。" +
+      "字段：id / profile_id / model_id(nullable) / model_name / provider_type / failure_kind / " +
+      "adaptation_rule_json / source_type / source_* 引用 / failure_id / confidence / applicable_harness_version / " +
+      "enabled / suggested_at / approved_at / created_at / updated_at。**默认 enabled=false**，用户必须显式批准。",
+    up: async (db) => {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS model_harness_profile_events (
+          id TEXT PRIMARY KEY,
+          profile_id TEXT NOT NULL,
+          model_id TEXT,
+          model_name TEXT NOT NULL,
+          provider_type TEXT,
+          failure_kind TEXT NOT NULL,
+          adaptation_rule_json TEXT NOT NULL,
+          source_type TEXT NOT NULL DEFAULT 'manual',
+          source_eval_run_id TEXT,
+          source_eval_result_id TEXT,
+          source_usage_event_id TEXT,
+          source_task_outcome_id TEXT,
+          source_tool_execution_id TEXT,
+          failure_id TEXT,
+          confidence REAL NOT NULL DEFAULT 0.5,
+          applicable_harness_version TEXT,
+          enabled INTEGER NOT NULL DEFAULT 0,
+          suggested_at TEXT NOT NULL DEFAULT (datetime('now')),
+          approved_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_profile_events_profile ON model_harness_profile_events(profile_id, failure_kind)",
+      );
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_profile_events_failure_kind ON model_harness_profile_events(failure_kind, enabled)",
+      );
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_profile_events_enabled ON model_harness_profile_events(enabled) WHERE enabled = 1",
+      );
+    },
+  },
+  {
+    version: "202607160003-model-perf-stats-4-indicators",
+    description:
+      "阶段6：把 model_performance_stats 的混合 success_rate 拆为 4 类独立指标（transport_success_rate / " +
+      "task_success_rate / verifier_pass_rate / cost_per_success）+ failure_count_by_kind_json 失败直方图。" +
+      "老 success_rate 保留但 deprecated（不写），DAO 读时 fallback 到 transport_success_rate。",
+    up: async (db) => {
+      await addColumnIfMissing(db, "model_performance_stats", "transport_success_rate", "REAL NOT NULL DEFAULT 0");
+      await addColumnIfMissing(db, "model_performance_stats", "task_success_rate", "REAL NOT NULL DEFAULT 0");
+      await addColumnIfMissing(db, "model_performance_stats", "verifier_pass_rate", "REAL NOT NULL DEFAULT 0");
+      await addColumnIfMissing(db, "model_performance_stats", "cost_per_success", "REAL NOT NULL DEFAULT 0");
+      await addColumnIfMissing(db, "model_performance_stats", "failure_count_by_kind_json", "TEXT NOT NULL DEFAULT '{}'");
+      // 数据回填：老 success_rate 复用为 3 类独立指标默认起步值
+      await db.execute(
+        "UPDATE model_performance_stats SET transport_success_rate = success_rate WHERE transport_success_rate = 0 AND success_rate > 0",
+      );
+      await db.execute(
+        "UPDATE model_performance_stats SET task_success_rate = success_rate WHERE task_success_rate = 0 AND success_rate > 0",
+      );
+      await db.execute(
+        "UPDATE model_performance_stats SET verifier_pass_rate = success_rate WHERE verifier_pass_rate = 0 AND success_rate > 0",
+      );
+    },
+  },
+  {
+    version: "202607170001-agent-jobs",
+    description:
+      "阶段7 Agent Job：agent_jobs / agent_job_events / agent_job_artifacts。用于可观察、可取消、可恢复的后台子任务。",
+    up: async (db) => {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS agent_jobs (
+          id TEXT PRIMARY KEY,
+          parent_job_id TEXT,
+          workflow_run_id TEXT,
+          role TEXT NOT NULL,
+          model_id TEXT,
+          status TEXT NOT NULL DEFAULT 'queued',
+          objective TEXT NOT NULL,
+          input_context_refs_json TEXT NOT NULL DEFAULT '[]',
+          output_artifact_refs_json TEXT NOT NULL DEFAULT '[]',
+          started_at TEXT,
+          completed_at TEXT,
+          failure_code TEXT,
+          retry_count INTEGER NOT NULL DEFAULT 0,
+          cancellation_reason TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute("CREATE INDEX IF NOT EXISTS idx_agent_jobs_workflow ON agent_jobs(workflow_run_id, created_at)");
+      await db.execute("CREATE INDEX IF NOT EXISTS idx_agent_jobs_parent ON agent_jobs(parent_job_id)");
+      await db.execute("CREATE INDEX IF NOT EXISTS idx_agent_jobs_status ON agent_jobs(status)");
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS agent_job_events (
+          id TEXT PRIMARY KEY,
+          job_id TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute("CREATE INDEX IF NOT EXISTS idx_agent_job_events_job ON agent_job_events(job_id, created_at)");
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS agent_job_artifacts (
+          id TEXT PRIMARY KEY,
+          job_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          uri TEXT NOT NULL,
+          summary TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute("CREATE INDEX IF NOT EXISTS idx_agent_job_artifacts_job ON agent_job_artifacts(job_id, created_at)");
+    },
+  },
+  {
+    version: "202607180001-harness-candidates",
+    description:
+      "阶段8 受控 Harness 候选优化：harness_versions / harness_candidates / harness_candidate_edits / harness_candidate_eval_results。",
+    up: async (db) => {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS harness_versions (
+          id TEXT PRIMARY KEY,
+          version TEXT NOT NULL,
+          parent_version_id TEXT,
+          active INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute("CREATE INDEX IF NOT EXISTS idx_harness_versions_active ON harness_versions(active) WHERE active = 1");
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS harness_candidates (
+          id TEXT PRIMARY KEY,
+          parent_version_id TEXT NOT NULL,
+          target_failure_kind TEXT NOT NULL,
+          expected_improvement TEXT NOT NULL,
+          risk_summary TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'proposed',
+          held_in_result_json TEXT,
+          held_out_result_json TEXT,
+          cost_delta_json TEXT,
+          decision_reason TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute("CREATE INDEX IF NOT EXISTS idx_harness_candidates_parent ON harness_candidates(parent_version_id, status)");
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS harness_candidate_edits (
+          id TEXT PRIMARY KEY,
+          candidate_id TEXT NOT NULL,
+          surface TEXT NOT NULL,
+          diff TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute("CREATE INDEX IF NOT EXISTS idx_harness_candidate_edits_candidate ON harness_candidate_edits(candidate_id)");
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS harness_candidate_eval_results (
+          id TEXT PRIMARY KEY,
+          candidate_id TEXT NOT NULL,
+          eval_run_id TEXT,
+          split TEXT NOT NULL,
+          passed INTEGER NOT NULL DEFAULT 0,
+          metrics_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute("CREATE INDEX IF NOT EXISTS idx_harness_candidate_eval_candidate ON harness_candidate_eval_results(candidate_id, split)");
+    },
+  },
 ];

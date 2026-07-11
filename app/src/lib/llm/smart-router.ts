@@ -15,9 +15,10 @@ import { isScoreEligible, shrinkSuccessRate } from "./model-performance-stats";
 /** 配额将尽阈值：剩余 < 此比例时优先降级 */
 export const QUOTA_LOW_RATIO = 0.1;
 
-/** 评分权重（成功率优先，其次便宜，再次快） */
-const W_SUCCESS = 0.5;
-const W_COST = 0.4;
+/** 评分权重：阶段6 后分开看任务质量、验证通过、成功成本和延迟。 */
+const W_TASK_SUCCESS = 0.35;
+const W_VERIFIER = 0.25;
+const W_COST_PER_SUCCESS = 0.3;
 const W_LATENCY = 0.1;
 
 export interface RouterContext {
@@ -31,7 +32,10 @@ export interface ScoredCandidate {
   modelId: string;
   score: number;
   successRate: number;
+  taskSuccessRate: number;
+  verifierPassRate: number;
   avgCost: number;
+  costPerSuccess: number;
   avgLatencyMs: number;
 }
 
@@ -58,24 +62,35 @@ export function scoreCandidates(
   items: Array<{ modelId: string; stat: ModelPerformanceStatRow }>,
 ): ScoredCandidate[] {
   if (items.length === 0) return [];
-  const maxCost = Math.max(...items.map((i) => i.stat.avgCost), 1e-9);
+  const maxCostPerSuccess = Math.max(
+    ...items.map((i) => i.stat.costPerSuccess > 0 ? i.stat.costPerSuccess : i.stat.avgCost),
+    1e-9,
+  );
   const maxLatency = Math.max(...items.map((i) => i.stat.avgLatencyMs), 1e-9);
 
   return items
     .map(({ modelId, stat }) => {
-      const normCost = stat.avgCost / maxCost;
+      const rawTaskSuccess = stat.taskSuccessRate || stat.successRate;
+      const rawVerifierPass = stat.verifierPassRate || stat.successRate;
+      const costPerSuccess = stat.costPerSuccess > 0 ? stat.costPerSuccess : stat.avgCost;
+      const normCostPerSuccess = costPerSuccess / maxCostPerSuccess;
       const normLatency = stat.avgLatencyMs / maxLatency;
-      // 成功率用贝叶斯收缩：小样本拉向先验，避免"1 次成功就满分"。成本/延迟用原始均值（较客观）。
-      const shrunkSuccess = shrinkSuccessRate(stat.successRate, stat.sampleCount);
+      // 任务成功和验证通过分别收缩，避免把“正常输出但任务没完成”算成高成功率。
+      const shrunkTaskSuccess = shrinkSuccessRate(rawTaskSuccess, stat.sampleCount);
+      const shrunkVerifierPass = shrinkSuccessRate(rawVerifierPass, stat.sampleCount);
       const score =
-        W_SUCCESS * shrunkSuccess +
-        W_COST * (1 - normCost) +
+        W_TASK_SUCCESS * shrunkTaskSuccess +
+        W_VERIFIER * shrunkVerifierPass +
+        W_COST_PER_SUCCESS * (1 - normCostPerSuccess) +
         W_LATENCY * (1 - normLatency);
       return {
         modelId,
         score,
-        successRate: shrunkSuccess,
+        successRate: shrunkTaskSuccess,
+        taskSuccessRate: shrunkTaskSuccess,
+        verifierPassRate: shrunkVerifierPass,
         avgCost: stat.avgCost,
+        costPerSuccess,
         avgLatencyMs: stat.avgLatencyMs,
       };
     })
@@ -157,7 +172,7 @@ export async function routeMessage<T extends RoutableModel & { id?: string }>(
       strategy: "scored",
       reasons: [
         `按真实表现评分最高（${top.score.toFixed(3)}）`,
-        `成功率 ${(top.successRate * 100).toFixed(0)}% · 均价 $${top.avgCost.toFixed(4)} · 延迟 ${Math.round(top.avgLatencyMs)}ms`,
+        `任务成功率 ${(top.taskSuccessRate * 100).toFixed(0)}% · 验证通过率 ${(top.verifierPassRate * 100).toFixed(0)}% · 成功成本 $${top.costPerSuccess.toFixed(4)} · 延迟 ${Math.round(top.avgLatencyMs)}ms`,
       ],
       scores,
     },
