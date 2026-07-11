@@ -229,9 +229,13 @@ export async function retrieveProjectMemoriesForPrompt(
     projectMemories.searchWithinProject(projectId, userText, { limit }),
     projectMemories.listByProject(projectId),
   ]);
-  const seen = new Set(relevant.map((m) => m.id));
-  const merged = [...relevant];
-  for (const m of all) {
+  // 阶段5 上下文 Playbook：默认只取 status='active' 的条目（disputed / superseded / archived 排除）
+  // 保留向后兼容：旧调用方传 status 不为 active 的条目仍会出现在 relevant（searchWithinProject 走原始 list），
+  // 这里做后置过滤兜底——老 user 在 searchWithinProject 阶段已经默认 status='active'（阶段5 之后所有 listByProject 都过滤）。
+  const isActive = (m: ProjectMemory) => !m.status || m.status === "active";
+  const seen = new Set(relevant.filter(isActive).map((m) => m.id));
+  const merged = relevant.filter(isActive);
+  for (const m of all.filter(isActive)) {
     if (merged.length >= limit) break;
     if (seen.has(m.id)) continue;
     merged.push(m);

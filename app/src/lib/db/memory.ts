@@ -26,6 +26,16 @@ export interface ProjectMemory {
   content: string;
   importance: number;
   tags: string | null;
+  // 阶段5 Playbook 新增字段（老 row 取出来时这些字段为空字符串 / 0 / null）
+  sourceKind?: "message" | "tool_output" | "checkpoint" | "summary" | "manual" | "legacy";
+  sourceRef?: string | null;
+  confidence?: number;
+  status?: "active" | "candidate" | "disputed" | "superseded" | "archived";
+  helpfulCount?: number;
+  harmfulCount?: number;
+  lastUsedAt?: string | null;
+  supersedesId?: string | null;
+  evidenceRefsJson?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -286,6 +296,77 @@ export const projectMemories = {
       if (filtered.length >= limit) break;
     }
     return filtered;
+  },
+
+  // ============ 阶段5 Playbook 扩展方法 ============
+  // 8 个方法覆盖：markSuperseded / markDisputed / markArchived / incrementHelpful /
+  // incrementHarmful / touchLastUsed / listActiveByProject / getSupersedes
+
+  async markSuperseded(targetId: string, newId: string): Promise<void> {
+    const db = await getDb();
+    await db.execute(
+      "UPDATE project_memories SET status = 'superseded', supersedes_id = $1, updated_at = $2 WHERE id = $3",
+      [newId, now(), targetId],
+    );
+  },
+
+  async markDisputed(targetId: string): Promise<void> {
+    const db = await getDb();
+    await db.execute(
+      "UPDATE project_memories SET status = 'disputed', updated_at = $1 WHERE id = $2",
+      [now(), targetId],
+    );
+  },
+
+  async markArchived(targetId: string): Promise<void> {
+    // harmful_count 高的条目降权 → archived 但不删，保留 row + supersede 链
+    const db = await getDb();
+    await db.execute(
+      "UPDATE project_memories SET status = 'archived', updated_at = $1 WHERE id = $2",
+      [now(), targetId],
+    );
+  },
+
+  async incrementHelpful(memoryId: string): Promise<void> {
+    const db = await getDb();
+    await db.execute(
+      "UPDATE project_memories SET helpful_count = helpful_count + 1, updated_at = $1 WHERE id = $2",
+      [now(), memoryId],
+    );
+  },
+
+  async incrementHarmful(memoryId: string): Promise<void> {
+    const db = await getDb();
+    await db.execute(
+      "UPDATE project_memories SET harmful_count = harmful_count + 1, updated_at = $1 WHERE id = $2",
+      [now(), memoryId],
+    );
+  },
+
+  async touchLastUsed(memoryId: string): Promise<void> {
+    const db = await getDb();
+    await db.execute(
+      "UPDATE project_memories SET last_used_at = $1, updated_at = $1 WHERE id = $2",
+      [now(), memoryId],
+    );
+  },
+
+  async listActiveByProject(projectId: string, limit = 50): Promise<ProjectMemory[]> {
+    const db = await getDb();
+    const rows = await db.select<ProjectMemoryRow[]>(
+      "SELECT * FROM project_memories WHERE project_id = $1 AND status = 'active' ORDER BY helpful_count DESC, importance DESC, updated_at DESC LIMIT $2",
+      [projectId, limit],
+    );
+    return rows.map(rowToProjectMemory);
+  },
+
+  async getSupersedes(supersededId: string): Promise<ProjectMemory | null> {
+    const db = await getDb();
+    const rows = await db.select<ProjectMemoryRow[]>(
+      "SELECT * FROM project_memories WHERE supersedes_id = $1 LIMIT 1",
+      [supersededId],
+    );
+    return rows.length > 0 ? rowToProjectMemory(rows[0]!) : null;
   },
 };
 

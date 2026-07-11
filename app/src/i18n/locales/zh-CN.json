@@ -299,6 +299,14 @@
           "passRate": "通过率",
           "costSpike": "成本 / 重试"
         }
+      },
+      "playbook": {
+        "title": "上下文 Playbook",
+        "curator": {
+          "confirm": "确认 Playbook 候选条目",
+          "superseded": "已 superseded 老条目",
+          "archived": "已 archived 降权条目"
+        }
       }
     },
     "workflow": {

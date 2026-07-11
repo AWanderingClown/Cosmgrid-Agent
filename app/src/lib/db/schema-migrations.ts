@@ -263,4 +263,55 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       await addColumnIfMissing(db, "usage_events", "latency_ms", "INTEGER NOT NULL DEFAULT 0");
     },
   },
+  {
+    version: "202607120002-project-memories-playbook-fields",
+    description:
+      "阶段5 上下文 Playbook：project_memories 表加 9 字段（source_kind / source_ref / confidence / " +
+      "status / helpful_count / harmful_count / last_used_at / supersedes_id / evidence_refs_json），" +
+      "3 索引（status / last_used / supersedes），并把现有行回填 status='active' source_kind='legacy'。",
+    up: async (db) => {
+      await addColumnIfMissing(db, "project_memories", "source_kind", "TEXT NOT NULL DEFAULT 'legacy'");
+      await addColumnIfMissing(db, "project_memories", "source_ref", "TEXT");
+      await addColumnIfMissing(db, "project_memories", "confidence", "REAL NOT NULL DEFAULT 0.5");
+      await addColumnIfMissing(db, "project_memories", "status", "TEXT NOT NULL DEFAULT 'active'");
+      await addColumnIfMissing(db, "project_memories", "helpful_count", "INTEGER NOT NULL DEFAULT 0");
+      await addColumnIfMissing(db, "project_memories", "harmful_count", "INTEGER NOT NULL DEFAULT 0");
+      await addColumnIfMissing(db, "project_memories", "last_used_at", "TEXT");
+      await addColumnIfMissing(db, "project_memories", "supersedes_id", "TEXT");
+      await addColumnIfMissing(db, "project_memories", "evidence_refs_json", "TEXT");
+      await db.execute("CREATE INDEX IF NOT EXISTS idx_project_memories_status ON project_memories(project_id, status)");
+      await db.execute("CREATE INDEX IF NOT EXISTS idx_project_memories_last_used ON project_memories(last_used_at) WHERE last_used_at IS NOT NULL");
+      await db.execute("CREATE INDEX IF NOT EXISTS idx_project_memories_supersedes ON project_memories(supersedes_id) WHERE supersedes_id IS NOT NULL");
+      // 数据回填：现有行 status='active' source_kind='legacy'，避免老条目全消失在 active 过滤下
+      await db.execute("UPDATE project_memories SET status = 'active' WHERE status IS NULL OR status = ''");
+      await db.execute("UPDATE project_memories SET source_kind = 'legacy' WHERE source_kind IS NULL OR source_kind = ''");
+    },
+  },
+  {
+    version: "202607120003-memory-playbook-events",
+    description:
+      "阶段5 上下文 Playbook：新建 memory_playbook_events 事件流表（event sourcing 模式）。" +
+      "记录 checkpoint_failed / summary_dropped / outcome_failed / outcome_needs_user 等轨迹事件，" +
+      "Reflector 周期消费转化为 PlaybookItem candidate。",
+    up: async (db) => {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS memory_playbook_events (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          conversation_id TEXT,
+          message_id TEXT,
+          kind TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          occurred_at TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_playbook_events_project ON memory_playbook_events(project_id, occurred_at DESC)",
+      );
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_playbook_events_conversation ON memory_playbook_events(conversation_id, occurred_at DESC) WHERE conversation_id IS NOT NULL",
+      );
+    },
+  },
 ];

@@ -73,6 +73,8 @@ export {
 export type {
   EvalCaseRow, EvalRunRow, EvalResultRow, TaskOutcomeRow, TaskOutcomeValue,
 } from "./db/evals";
+export { playbookEvents } from "./db/playbook-events";
+export type { PlaybookEventRow } from "./db/playbook-events";
 export { mcpServers, mcpServerApprovals } from "./db/mcp";
 export type {
   CreateMcpServerInput,

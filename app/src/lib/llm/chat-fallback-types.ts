@@ -44,6 +44,13 @@ export interface StreamCallbacks {
    * 失败原因带出来，UI 直接拼进同一条提示里，不需要用户会用任何调试工具。
    */
   onRecovered?: (mode: "native_resume" | "context_replay" | "fallback_handoff", detail?: string) => void;
+  // 阶段5 上下文 Playbook：context-assembler 注入的 memory id 列表，给调用方写 recordMemoryUsed。
+  // 默认实现是 no-op（保持向后兼容；调用方按需传 callback 即可）。
+  onMemoryUsed?: (memoryIds: string[]) => void;
+  // 用户标记某条 memory 有帮助（helpfulCount +1）。
+  onMemoryHelpful?: (memoryId: string) => void;
+  // 用户标记某条 memory 有误导（harmfulCount +1，harmful 多次触发 archived）。
+  onMemoryHarmful?: (memoryId: string) => void;
   /** CLI/agent 中间状态，不计入最终回答正文 */
   onStatus?: (status: string) => void;
   /** CLI 官方输出的实际模型名，例如 sonnet 别名会解析成 claude-sonnet-4-6 */

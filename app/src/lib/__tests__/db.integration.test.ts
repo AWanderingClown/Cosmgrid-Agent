@@ -100,6 +100,9 @@ describe("initSchema", () => {
       "202607110003-tool-execution-msg-error-index",
       // 阶段3（2026-07-11）：证据链 workflow_evidence 表 schema 预留
       "202607120001-evidence-store",
+      // 阶段5（2026-07-11）：上下文 Playbook 9 字段 + memory_playbook_events 表
+      "202607120002-project-memories-playbook-fields",
+      "202607120003-memory-playbook-events",
       // 阶段4（2026-07-11）：任务级 Eval Harness（4 表 + usage_events.latency_ms）
       "202607130001-eval-cases",
       "202607130002-eval-runs",

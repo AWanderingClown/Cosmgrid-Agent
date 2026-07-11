@@ -299,6 +299,14 @@
           "passRate": "Pass Rate",
           "costSpike": "Cost / Retries"
         }
+      },
+      "playbook": {
+        "title": "Context Playbook",
+        "curator": {
+          "confirm": "Confirm Playbook candidate",
+          "superseded": "Superseded old entry",
+          "archived": "Archived (down-ranked) entry"
+        }
       }
     },
     "workflow": {

@@ -81,6 +81,13 @@ module.exports = {
       to: { path: "^src/(pages|components)", dependencyTypesNot: ["type-only"] },
     },
     {
+      name: "l10-playbook-no-ui-runtime",
+      severity: "error",
+      comment: "lib/llm/playbook (L10 上下文层) 不允许反向依赖 UI 运行时。Reflector / Curator / context-assembler 只消费结构化事实（project_memories / tool_executions / summary），不调用 UI / 工具。",
+      from: { path: "^src/lib/llm/playbook" },
+      to: { path: "^src/(pages|components)", dependencyTypesNot: ["type-only"] },
+    },
+    {
       name: "l6-tools-no-upstack-runtime",
       severity: "error",
       comment: "lib/llm/tools (L6 工具层) 不允许依赖 UI、workflow、skills 的运行时值。",
