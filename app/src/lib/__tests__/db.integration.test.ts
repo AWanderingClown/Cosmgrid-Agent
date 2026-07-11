@@ -100,6 +100,12 @@ describe("initSchema", () => {
       "202607110003-tool-execution-msg-error-index",
       // 阶段3（2026-07-11）：证据链 workflow_evidence 表 schema 预留
       "202607120001-evidence-store",
+      // 阶段4（2026-07-11）：任务级 Eval Harness（4 表 + usage_events.latency_ms）
+      "202607130001-eval-cases",
+      "202607130002-eval-runs",
+      "202607130003-eval-results",
+      "202607130004-task-outcomes",
+      "202607130005-usage-events-latency",
     ]);
 
     const usageColumns = await adapter.select<Array<{ name: string }>>("PRAGMA table_info(usage_events)");

@@ -1,0 +1,14 @@
+{
+  "_comment": "S1-S9 真机剧本 → 手动 case 映射。CI 不跑这些（pnpm eval:real-machine 单独触发）。",
+  "cases": [
+    { "id": "manual-s1-plan-generation", "scriptId": "S1", "name": "方案生成与执行" },
+    { "id": "manual-s2-degraded-debate", "scriptId": "S2", "name": "博弈失败降级后执行" },
+    { "id": "manual-s3-no-redo-debate", "scriptId": "S3", "name": "执行不能再次触发博弈" },
+    { "id": "manual-s4-restart-recovery", "scriptId": "S4", "name": "重启恢复" },
+    { "id": "manual-s5-model-cooldown", "scriptId": "S5", "name": "模型失败冷却" },
+    { "id": "manual-s6-tool-authenticity", "scriptId": "S6", "name": "工具执行真实性" },
+    { "id": "manual-s7-chat-selection", "scriptId": "S7", "name": "对话选择与可复制" },
+    { "id": "manual-s8-mcp-setup", "scriptId": "S8", "name": "MCP 设置页真机" },
+    { "id": "manual-s9-lsp-real", "scriptId": "S9", "name": "LSP 真机" }
+  ]
+}

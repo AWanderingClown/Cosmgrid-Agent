@@ -5,6 +5,7 @@ import type { StreamUsage } from "@/lib/llm/chat-fallback";
 import { completeCurrentWorkflowNode, failCurrentWorkflowNode, repairCurrentWorkflowNode } from "@/lib/workflow/reducer";
 import { verifyNodeOutcome } from "@/lib/workflow/node-verifier";
 import { verifyTask } from "@/lib/llm/evidence/task-verifier";
+import { reportTaskOutcome, nodeOutcomeToTaskOutcome } from "@/lib/evals/task-outcome-reporter";
 import type { VerificationResult } from "@/lib/llm/evidence/types";
 import type { WorkflowSnapshot } from "@/lib/workflow/types";
 import type { ChatMessage } from "@/pages/chat/types";
@@ -194,6 +195,19 @@ export async function finalizeStreamedChatTurn(
         args.applyWorkflowSnapshot(nextWorkflow);
       }
       // needs_user：节点保持原状，不落新事件——等用户下一步指示（拒绝权限/主动取消场景）。
+
+      // 阶段4：上报 task_outcomes（Eval Harness 11 指标聚合的源）
+      if (args.conversationId && currentNode) {
+        const taskOutcomeStatus = outcome?.status ?? "passed";  // outcome 为 null 时按 passed 兜底
+        const mapped = nodeOutcomeToTaskOutcome(taskOutcomeStatus);
+        void reportTaskOutcome({
+          conversationId: args.conversationId,
+          nodeId: currentNode.id,
+          outcome: mapped.outcome,
+          interventionKind: mapped.interventionKind ?? undefined,
+          finalSummary: finalContent.slice(0, 200),
+        });
+      }
     } catch {
       // workflow 状态更新失败不影响正常回答
     }

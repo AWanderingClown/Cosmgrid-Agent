@@ -11,6 +11,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:eval": "vitest run src/lib/evals",
+    "eval:fast": "tsx scripts/run-eval.ts --held-in",
+    "eval:full": "tsx scripts/run-eval.ts --held-in --held-out",
+    "eval:real-machine": "tsx scripts/run-eval.ts --real-machine",
     "depcruise": "depcruise src --config .dependency-cruiser.cjs"
   },
   "dependencies": {

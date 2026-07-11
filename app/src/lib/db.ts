@@ -67,6 +67,12 @@ export { semanticCache } from "./db/semantic-cache";
 export type { SemanticCacheRow } from "./db/semantic-cache";
 export { debateSessions, toolExecutions, workspaceConfigs } from "./db/workspace";
 export type { DebateRoundData, DebateSessionRow, ToolExecutionRow } from "./db/workspace";
+export {
+  evalCases, evalRuns, evalResults, taskOutcomes,
+} from "./db/evals";
+export type {
+  EvalCaseRow, EvalRunRow, EvalResultRow, TaskOutcomeRow, TaskOutcomeValue,
+} from "./db/evals";
 export { mcpServers, mcpServerApprovals } from "./db/mcp";
 export type {
   CreateMcpServerInput,

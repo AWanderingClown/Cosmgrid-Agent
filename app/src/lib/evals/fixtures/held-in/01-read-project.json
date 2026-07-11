@@ -1,0 +1,14 @@
+{
+  "id": "01-read-project",
+  "taskSetId": "held-in",
+  "name": "读取项目并给出事实清单",
+  "fixturePath": "src/lib/evals/fixtures/held-in/fixtures/01-read-project",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "tool-execution",
+      "expected": { "toolName": "read", "minCount": 1 }
+    }
+  ],
+  "tags": ["smoke", "s1"]
+}

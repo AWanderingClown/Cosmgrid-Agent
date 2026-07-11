@@ -1,0 +1,18 @@
+{
+  "id": "02-generate-plan",
+  "taskSetId": "held-in",
+  "name": "生成方案并绑定来源",
+  "fixturePath": "src/lib/evals/fixtures/held-in/fixtures/02-generate-plan",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "tool-execution",
+      "expected": { "toolName": "write" }
+    },
+    {
+      "grader": "filesystem",
+      "expected": { "path": "docs/plan.md", "minBytes": 10 }
+    }
+  ],
+  "tags": ["smoke", "s1"]
+}

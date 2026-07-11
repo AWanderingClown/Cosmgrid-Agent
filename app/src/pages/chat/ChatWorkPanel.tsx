@@ -7,6 +7,7 @@ import { ChainNodeGraph } from "@/components/work-panel/ChainNodeGraph";
 import type { ChainNodeView } from "@/components/work-panel/derive-chain-node-graph";
 import { WorkflowDiagnostics } from "@/components/work-panel/WorkflowDiagnostics";
 import { EvidencePanel } from "@/components/work-panel/EvidencePanel";
+import { EvalPanel } from "@/components/work-panel/EvalPanel";
 import { IntentDiagnostics } from "@/components/work-panel/IntentDiagnostics";
 import { WorkArtifacts } from "@/components/work-panel/WorkArtifacts";
 import { DebateHistory } from "@/components/work-panel/DebateHistory";
@@ -47,6 +48,8 @@ interface ChatWorkPanelProps {
   workspacePath: string | null;
   artifacts: WorkArtifact[];
   toolCalls: ToolCallView[];
+  evalRuns?: import("@/lib/db").EvalRunRow[];
+  evalResults?: import("@/lib/db").EvalResultRow[];
   running: boolean;
   streamActivityPhase: StreamActivityPhase;
   streamElapsedMs: number;
@@ -69,6 +72,8 @@ export function ChatWorkPanel({
   workspacePath,
   artifacts,
   toolCalls,
+  evalRuns = [],
+  evalResults = [],
   running,
   streamActivityPhase,
   streamElapsedMs,
@@ -190,6 +195,7 @@ export function ChatWorkPanel({
             <>
               <WorkflowDiagnostics workflowEvents={workflowEvents} workflowSnapshot={workflowSnapshot} toolCalls={toolCalls} messages={messages} />
               <EvidencePanel workflowSnapshot={workflowSnapshot} devMode={true} />
+              <EvalPanel runs={evalRuns} results={evalResults} devMode={true} />
               <IntentDiagnostics />
             </>
           )}

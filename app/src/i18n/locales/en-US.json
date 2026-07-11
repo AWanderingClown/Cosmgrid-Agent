@@ -292,6 +292,13 @@
           "conflicts": "Conflicts",
           "decision": "Verification Decision"
         }
+      },
+      "eval": {
+        "title": "Eval Harness",
+        "sections": {
+          "passRate": "Pass Rate",
+          "costSpike": "Cost / Retries"
+        }
       }
     },
     "workflow": {

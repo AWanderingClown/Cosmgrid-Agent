@@ -144,4 +144,123 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       );
     },
   },
+  {
+    version: "202607130001-eval-cases",
+    description:
+      "Create harness_eval_cases table for the Eval Harness dashboard (阶段4). " +
+      "Stores EvalCase definitions (id / task_set_id / fixture path / permission profile / allowed models / acceptance criteria / budget / tags).",
+    up: async (db) => {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS harness_eval_cases (
+          id TEXT PRIMARY KEY,
+          task_set_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          fixture_path TEXT NOT NULL,
+          permission_profile TEXT NOT NULL DEFAULT 'default',
+          allowed_models TEXT NOT NULL DEFAULT '[]',
+          acceptance_criteria TEXT NOT NULL DEFAULT '[]',
+          budget_usd REAL NOT NULL DEFAULT 1.0,
+          timeout_seconds INTEGER NOT NULL DEFAULT 300,
+          tags TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_eval_cases_task_set ON harness_eval_cases(task_set_id)",
+      );
+    },
+  },
+  {
+    version: "202607130002-eval-runs",
+    description:
+      "Create harness_eval_runs table — one row per eval run (harness_version / model_id / task_set_id / cost / retry / status / failure_kinds_json).",
+    up: async (db) => {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS harness_eval_runs (
+          id TEXT PRIMARY KEY,
+          harness_version TEXT NOT NULL,
+          model_id TEXT NOT NULL,
+          task_set_id TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          finished_at TEXT,
+          total_cost_usd REAL NOT NULL DEFAULT 0,
+          retry_count INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'running',
+          artifact_json TEXT,
+          failure_kinds_json TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_eval_runs_task_set ON harness_eval_runs(task_set_id, started_at DESC)",
+      );
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_eval_runs_harness_version ON harness_eval_runs(harness_version)",
+      );
+    },
+  },
+  {
+    version: "202607130003-eval-results",
+    description:
+      "Create harness_eval_results table — one row per (task × attempt) with passed / cost / latency / failure_code / graded_json.",
+    up: async (db) => {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS harness_eval_results (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          task_id TEXT NOT NULL,
+          attempt_index INTEGER NOT NULL DEFAULT 0,
+          passed INTEGER,
+          attempt_cost_usd REAL NOT NULL DEFAULT 0,
+          attempt_latency_ms INTEGER NOT NULL DEFAULT 0,
+          interventions_count INTEGER NOT NULL DEFAULT 0,
+          failure_code TEXT,
+          graded_json TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (run_id) REFERENCES harness_eval_runs(id) ON DELETE CASCADE
+        )
+      `);
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_eval_results_run ON harness_eval_results(run_id)",
+      );
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_eval_results_task ON harness_eval_results(task_id, attempt_index)",
+      );
+    },
+  },
+  {
+    version: "202607130004-task-outcomes",
+    description:
+      "Create task_outcomes table — production task final outcome (passed / failed / blocked / needs_user / cancelled) per conversation. " +
+      "阶段4 11 个指标的 human_interventions / recovery_rate 直接从这张表聚合。",
+    up: async (db) => {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS task_outcomes (
+          id TEXT PRIMARY KEY,
+          conversation_id TEXT NOT NULL,
+          node_id TEXT,
+          outcome TEXT NOT NULL,
+          final_summary TEXT,
+          intervention_kind TEXT,
+          evidence_refs_json TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_outcomes_conv ON task_outcomes(conversation_id, created_at DESC)",
+      );
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_outcomes_outcome ON task_outcomes(outcome)",
+      );
+    },
+  },
+  {
+    version: "202607130005-usage-events-latency",
+    description:
+      "Add latency_ms column to usage_events so latency_per_success metric is computable. " +
+      "Reuses existing addColumnIfMissing pattern.",
+    up: async (db) => {
+      await addColumnIfMissing(db, "usage_events", "latency_ms", "INTEGER NOT NULL DEFAULT 0");
+    },
+  },
 ];

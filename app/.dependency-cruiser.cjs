@@ -74,6 +74,13 @@ module.exports = {
       },
     },
     {
+      name: "l9-evals-no-ui-runtime",
+      severity: "error",
+      comment: "lib/evals (L9 评估层) 不允许反向依赖 UI 运行时。Grader 只消费结构化事实（tool_executions / workflow_runs / verifyTask），不调用 UI / 工具。",
+      from: { path: "^src/lib/evals" },
+      to: { path: "^src/(pages|components)", dependencyTypesNot: ["type-only"] },
+    },
+    {
       name: "l6-tools-no-upstack-runtime",
       severity: "error",
       comment: "lib/llm/tools (L6 工具层) 不允许依赖 UI、workflow、skills 的运行时值。",

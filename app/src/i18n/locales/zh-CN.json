@@ -292,6 +292,13 @@
           "conflicts": "冲突",
           "decision": "验收决定"
         }
+      },
+      "eval": {
+        "title": "Eval Harness",
+        "sections": {
+          "passRate": "通过率",
+          "costSpike": "成本 / 重试"
+        }
       }
     },
     "workflow": {
