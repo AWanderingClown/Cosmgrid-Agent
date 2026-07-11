@@ -98,6 +98,8 @@ describe("initSchema", () => {
       "202607110002-tool-execution-error-code",
       // 阶段2 code-review-loop：listByMessage 全表扫补索引
       "202607110003-tool-execution-msg-error-index",
+      // 阶段3（2026-07-11）：证据链 workflow_evidence 表 schema 预留
+      "202607120001-evidence-store",
     ]);
 
     const usageColumns = await adapter.select<Array<{ name: string }>>("PRAGMA table_info(usage_events)");

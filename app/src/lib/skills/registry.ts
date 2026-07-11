@@ -49,10 +49,15 @@ export const CORE_SKILLS: SkillDefinition[] = [
       "优先跑与本轮改动直接相关的测试，再跑类型检查或构建。",
       "发现失败时先定位原因，不要直接宣布完成。",
     ],
+    // 阶段3（2026-07-11）：acceptanceCriteria 从 string[] 升级为结构化数组。
+    // Task Verifier（lib/llm/evidence/task-verifier.ts）按 kind 调度具体 check 实现
+    // （lib/llm/evidence/structured-criteria.ts）。registry.ts 只需声明 id+description+kind，
+    // 不需要反向依赖 evidence 模块的运行时。
     acceptanceCriteria: [
-      "列出已通过的检查。",
-      "列出未运行或失败的检查及原因。",
-      "最终结论必须和真实检查结果一致。",
+      { id: "tests_pass", description: "运行测试套件全部通过", kind: "test_run" },
+      { id: "typecheck_pass", description: "tsc --noEmit 通过", kind: "typecheck" },
+      { id: "lint_pass", description: "ESLint 无 error", kind: "lint" },
+      { id: "build_pass", description: "构建无 error", kind: "build" },
     ],
   },
 ];

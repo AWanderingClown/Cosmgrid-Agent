@@ -119,10 +119,15 @@ describe("finalizeStreamedChatTurn", () => {
       applyWorkflowSnapshot,
     });
 
-    expect(mocks.completeCurrentWorkflowNode).toHaveBeenCalledWith({
-      snapshot: workflowSnapshot,
-      summary: "final answer",
-    });
+    // 阶段3（2026-07-11）：completeCurrentWorkflowNode 现在额外接收 evidenceIds / verification
+    // 参数（兼容可选）；这里用 toMatchObject 而非 toHaveBeenCalledWith——避免新增 evidenceIds 空数组
+    // 之类参数触发误报。
+    expect(mocks.completeCurrentWorkflowNode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshot: workflowSnapshot,
+        summary: "final answer",
+      }),
+    );
     expect(mocks.failCurrentWorkflowNode).not.toHaveBeenCalled();
     expect(mocks.saveSnapshot).toHaveBeenCalledWith(expect.objectContaining({
       runId: "run-1",

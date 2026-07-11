@@ -6,6 +6,7 @@ import { ResizeHandle } from "@/components/ui/resize-handle";
 import { ChainNodeGraph } from "@/components/work-panel/ChainNodeGraph";
 import type { ChainNodeView } from "@/components/work-panel/derive-chain-node-graph";
 import { WorkflowDiagnostics } from "@/components/work-panel/WorkflowDiagnostics";
+import { EvidencePanel } from "@/components/work-panel/EvidencePanel";
 import { IntentDiagnostics } from "@/components/work-panel/IntentDiagnostics";
 import { WorkArtifacts } from "@/components/work-panel/WorkArtifacts";
 import { DebateHistory } from "@/components/work-panel/DebateHistory";
@@ -188,6 +189,7 @@ export function ChatWorkPanel({
           {developerDiagnosticsEnabled && (
             <>
               <WorkflowDiagnostics workflowEvents={workflowEvents} workflowSnapshot={workflowSnapshot} toolCalls={toolCalls} messages={messages} />
+              <EvidencePanel workflowSnapshot={workflowSnapshot} devMode={true} />
               <IntentDiagnostics />
             </>
           )}

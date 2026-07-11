@@ -278,6 +278,20 @@
         "title": "意图识别细节",
         "empty": "本会话还没有记录。先发一条消息让意图识别跑一轮。",
         "clear": "清空记录"
+      },
+      "evidence": {
+        "title": "证据链",
+        "status": {
+          "passes": "通过",
+          "fails": "失败",
+          "inconclusive": "证据不足"
+        },
+        "sections": {
+          "claims": "声明",
+          "evidence": "证据",
+          "conflicts": "冲突",
+          "decision": "验收决定"
+        }
       }
     },
     "workflow": {

@@ -62,6 +62,18 @@ module.exports = {
       to: { path: "^src/(pages|components)|^src/lib/(workflow|skills)|^src/lib/llm/tools", dependencyTypesNot: ["type-only"] },
     },
     {
+      name: "l8-evidence-no-workflow-tools-runtime",
+      severity: "error",
+      comment: "lib/llm/evidence (L8 证据链层) 不允许反向依赖 workflow 或 tools 的运行时值。" +
+        " 需要类型时用 import type，需要函数时通过回调注入或参数传递。",
+      from: { path: "^src/lib/llm/evidence" },
+      to: {
+        path: "^src/lib/(workflow|llm/tools)",
+        pathNot: "^src/lib/llm/tools/result-contract$",
+        dependencyTypesNot: ["type-only"],
+      },
+    },
+    {
       name: "l6-tools-no-upstack-runtime",
       severity: "error",
       comment: "lib/llm/tools (L6 工具层) 不允许依赖 UI、workflow、skills 的运行时值。",

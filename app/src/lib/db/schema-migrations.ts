@@ -115,4 +115,33 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       );
     },
   },
+  {
+    version: "202607120001-evidence-store",
+    description:
+      "Create workflow_evidence table for storing EvidenceRef entries (阶段3 evidence chain). " +
+      "阶段3 UI 只读 WorkflowSnapshot.outputs.verification（已通过 saveSnapshot 序列化），" +
+      "workflow_evidence 表是 schema 预留，给未来的证据回放 UI 用；阶段3 不强制写入。",
+    up: async (db) => {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS workflow_evidence (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          node_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('tool_execution','artifact','user_confirmation','structured_criterion')),
+          source TEXT NOT NULL,
+          summary TEXT NOT NULL,
+          occurred_at TEXT NOT NULL,
+          tool_execution_id TEXT,
+          truncated INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workflow_evidence_run ON workflow_evidence(run_id, node_id)",
+      );
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workflow_evidence_tool ON workflow_evidence(tool_execution_id)",
+      );
+    },
+  },
 ];

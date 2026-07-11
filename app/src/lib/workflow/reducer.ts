@@ -1,6 +1,7 @@
 import { defaultNextActionsForPhase } from "./code-task-template";
 import type { NodeOutcome } from "./node-outcome";
 import type { TurnIntentDecision, WorkflowActiveSkill, WorkflowNode, WorkflowPhase, WorkflowPlanSource, WorkflowSnapshot } from "./types";
+import type { VerificationResult } from "@/lib/llm/evidence/types";
 
 function updateNode(snapshot: WorkflowSnapshot, nodeId: string, patch: Partial<WorkflowNode>): WorkflowSnapshot {
   return {
@@ -31,6 +32,10 @@ export function completeCurrentWorkflowNode(args: {
   planSource?: WorkflowPlanSource;
   artifactIds?: string[];
   toolExecutionIds?: string[];
+  /** 阶段3（2026-07-11）：Task Verifier 产生的 EvidenceRef.id 列表，透传到 outputs.evidenceIds。 */
+  evidenceIds?: string[];
+  /** 阶段3：Task Verifier 结构化结果，透传到 outputs.verification。 */
+  verification?: VerificationResult;
 }): WorkflowSnapshot {
   const node = args.snapshot.nodes.find((n) => n.id === args.snapshot.currentNodeId);
   if (!node) return args.snapshot;
@@ -61,6 +66,10 @@ export function completeCurrentWorkflowNode(args: {
       };
     } else if (node.phase === "verify") {
       context.verificationSummary = summary;
+      // 阶段3：把人类可读的对账摘要塞进 context，普通用户 UI 默认折叠时直接显示这一行
+      if (args.verification) {
+        context.lastVerificationSummary = args.verification.humanSummary;
+      }
     }
   }
 
@@ -71,6 +80,8 @@ export function completeCurrentWorkflowNode(args: {
       ...(summary ? { summary } : {}),
       ...(args.artifactIds ? { artifactIds: args.artifactIds } : {}),
       ...(args.toolExecutionIds ? { toolExecutionIds: args.toolExecutionIds } : {}),
+      ...(args.evidenceIds && args.evidenceIds.length > 0 ? { evidenceIds: args.evidenceIds } : {}),
+      ...(args.verification ? { verification: args.verification } : {}),
     },
   });
 
@@ -111,11 +122,19 @@ export function failCurrentWorkflowNode(args: {
       summary: args.outcome.summary,
       ...(args.outcome.artifactIds.length > 0 ? { artifactIds: args.outcome.artifactIds } : {}),
       ...(args.outcome.toolExecutionIds.length > 0 ? { toolExecutionIds: args.outcome.toolExecutionIds } : {}),
+      // 阶段3：NodeOutcome 已预留 evidenceIds 字段，透传即可（不破接口）。
+      ...(args.outcome.evidenceIds.length > 0 ? { evidenceIds: args.outcome.evidenceIds } : {}),
     },
   });
 
   return {
     ...next,
+    context: {
+      ...args.snapshot.context,
+      // 阶段3：失败也把失败原因里挂的 evidence id 落到 context.lastVerificationSummary
+      // （同一字段，UI 复用），便于用户在 UI 里直接看到"缺哪条证据"。
+      lastVerificationSummary: args.outcome.summary,
+    },
     status: "waiting_user",
     nextActions: [],
     pendingDecision: undefined,

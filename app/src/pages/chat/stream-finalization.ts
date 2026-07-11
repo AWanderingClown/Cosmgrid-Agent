@@ -4,6 +4,8 @@ import { writeCache } from "@/lib/llm/semantic-cache";
 import type { StreamUsage } from "@/lib/llm/chat-fallback";
 import { completeCurrentWorkflowNode, failCurrentWorkflowNode, repairCurrentWorkflowNode } from "@/lib/workflow/reducer";
 import { verifyNodeOutcome } from "@/lib/workflow/node-verifier";
+import { verifyTask } from "@/lib/llm/evidence/task-verifier";
+import type { VerificationResult } from "@/lib/llm/evidence/types";
 import type { WorkflowSnapshot } from "@/lib/workflow/types";
 import type { ChatMessage } from "@/pages/chat/types";
 
@@ -99,10 +101,54 @@ export async function finalizeStreamedChatTurn(
           })
         : null;
 
+      // 阶段3：粗筛（verifyNodeOutcome）通过后再跑细对账（verifyTask）。
+      // 错误降级策略：任何抛错都返回 status='inconclusive' + humanSummary 提示
+      // "证据加载失败"——绝不因证据系统故障让用户回答"失败"。
+      // 关键不变量：粗筛和细对账 failureCode 命名空间区分（粗筛：harness_dirty /
+      // no_tool_evidence / empty_output；细对账：evidence_contradicts /
+      // evidence_insufficient / evidence_truncated）。
+      let verification: VerificationResult | undefined;
+      let evidenceIds: string[] = [];
+      if (currentNode && outcome?.status === "passed") {
+        try {
+          const allRows = await toolExecutions.listByConversation(args.conversationId ?? "");
+          // StreamingFinalizationResult 暂未带 turnStartedAt；用"5 分钟前"作 sinceIso
+          // 兜底窗口——同 selectRowsForMessage 默认窗口一致。
+          const sinceIso = new Date(Date.now() - 5 * 60_000).toISOString();
+          // 阶段3 第一版：所有验收标准都过，但实际无法在最终化层拉起 verification_closure skill 的
+          // 结构化 criteria（这要 skill registry 配合，阶段 3-H UI 完工后再串）。
+          // 现在传空数组：verifyTask 会跑声明 ↔ 证据对账，但不跑结构化验收——这样 status 不会
+          // 被 failedCriteria 拉成 fails，但 conflicts 仍能捕获模型自报数字与 bash 输出的不一致。
+          verification = verifyTask({
+            finalContent,
+            execRows: allRows,
+            assistantMessageId: args.assistantId,
+            sinceIso,
+            acceptanceCriteria: [],
+            workflowRef: { runId: args.workflowRunId, nodeId: currentNode.id },
+          });
+          evidenceIds = verification.decisionEvidenceIds;
+        } catch {
+          // 证据加载失败降级 inconclusive（不阻塞主流程）
+          verification = {
+            status: "inconclusive",
+            metCriteria: [],
+            failedCriteria: [],
+            linkedClaims: [],
+            conflicts: [],
+            decidedAt: new Date().toISOString(),
+            decisionEvidenceIds: [],
+            humanSummary: "证据加载失败，请人工复核。",
+          };
+        }
+      }
+
       if (!outcome || outcome.status === "passed") {
         const nextWorkflow = completeCurrentWorkflowNode({
           snapshot: args.workflowSnapshot,
           summary: finalContent.slice(0, 1200),
+          evidenceIds,
+          verification,
         });
         await workflowRuns.saveSnapshot({
           runId: args.workflowRunId,
@@ -115,6 +161,7 @@ export async function finalizeStreamedChatTurn(
             // outcome 在没有 currentNode 时兜底为 null（极端边界），此时事件仍然落地，
             // 只是没有 outcome 字段可附。
             ...(outcome ? { outcome } : {}),
+            ...(verification ? { verificationSummary: verification.humanSummary } : {}),
           },
         });
         args.applyWorkflowSnapshot(nextWorkflow);

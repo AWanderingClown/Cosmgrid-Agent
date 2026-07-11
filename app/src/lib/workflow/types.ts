@@ -117,6 +117,19 @@ export interface WorkflowNode {
     summary?: string;
     artifactIds?: string[];
     toolExecutionIds?: string[];
+    /**
+     * 阶段3（2026-07-11）：证据链 ID 列表。EvidenceRef.id 集合（存在
+     * `app/src/lib/llm/evidence/types.ts`），用于声明 ↔ 证据对账。UI EvidencePanel
+     * 通过这个 ID 列表从 WorkflowSnapshot.outputs.verification.conflicts[*].evidenceIds
+     * 反查渲染。
+     */
+    evidenceIds?: string[];
+    /**
+     * 阶段3：Task Verifier 结构化结果（声明对账 + 验收标准判定）。
+     * failureCode 区分阶段1 粗筛（harness_dirty / no_tool_evidence / empty_output）
+     * vs 阶段3 细对账（evidence_contradicts / evidence_insufficient / evidence_truncated）。
+     */
+    verification?: import("@/lib/llm/evidence/types").VerificationResult;
   };
 }
 
@@ -150,6 +163,11 @@ export interface WorkflowSnapshot {
     debateSummary?: string;
     changedFiles: string[];
     verificationSummary?: string;
+    /**
+     * 阶段3（2026-07-11）：上一次 Task Verifier 决策的人类可读摘要，1 行 ≤ 200 字符。
+     * 由 stream-finalization 写入，用于普通用户 UI（不展开 dev 模式时直接显示这行）。
+     */
+    lastVerificationSummary?: string;
     riskLevel: "low" | "medium" | "high";
   };
   pendingDecision?: {

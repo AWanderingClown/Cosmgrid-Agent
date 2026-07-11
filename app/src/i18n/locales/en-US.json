@@ -278,6 +278,20 @@
         "title": "Intent Recognition Detail",
         "empty": "No records in this session yet. Send a message to trigger intent recognition.",
         "clear": "Clear records"
+      },
+      "evidence": {
+        "title": "Evidence Chain",
+        "status": {
+          "passes": "Passes",
+          "fails": "Fails",
+          "inconclusive": "Insufficient evidence"
+        },
+        "sections": {
+          "claims": "Claims",
+          "evidence": "Evidence",
+          "conflicts": "Conflicts",
+          "decision": "Verification Decision"
+        }
       }
     },
     "workflow": {
