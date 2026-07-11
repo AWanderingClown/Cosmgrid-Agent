@@ -1,7 +1,7 @@
 // SettingsPage - 设置页 (v0.7.5: 移除缺失的 RadioGroup 依赖，采用自定义稳定实现)
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap, FolderKanban, Brain, Bug, Search, Terminal, RefreshCw, Loader2, Plug, Trash2 } from "lucide-react";
+import { Settings, Moon, Sun, Languages, Monitor, ShieldCheck, Database, Info, Check, Zap, FolderKanban, Brain, Bug, Search, Terminal, RefreshCw, Loader2 } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
 import { quote as quoteShellCommand } from "shell-quote";
 import { Button } from "@/components/ui/button";
@@ -10,16 +10,10 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { McpSettingsSection } from "@/pages/settings/McpSettingsSection";
 import { useTheme, type Theme } from "@/lib/theme";
 import { useDeveloperDiagnosticsSetting, useMemoryEmbeddingSetting, usePureSingleModelModeSetting, useSmartRoutingSetting } from "@/lib/app-settings";
-import { apiCredentials, mcpServers, type ApiCredential, type McpServerRow, type McpTransport } from "@/lib/db";
-import { deleteMcpServerSecrets, saveMcpServerSecrets } from "@/lib/mcp/secret-store";
-import { disposeMcpServerSessions } from "@/lib/mcp/client";
-import { listMcpTools } from "@/lib/mcp/client";
-import { hydrateMcpServerSecrets } from "@/lib/mcp/secret-store";
-import { buildLocalMcpSessionScope, formatLocalMcpLaunch } from "@/lib/mcp/session-scope";
-import { mcpServerApprovals } from "@/lib/db";
-import { useConfirm } from "@/components/ui/confirm-dialog";
+import { apiCredentials, type ApiCredential } from "@/lib/db";
 import { backfillProjectMemoryVectors } from "@/lib/memory/retrieval";
 import { SUPPORTED_LANGUAGES, LANGUAGE_LABELS, type SupportedLanguage } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -35,7 +29,6 @@ export interface SettingsPageProps {
 
 export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
   const { t, i18n } = useTranslation();
-  const { confirm } = useConfirm();
   const { theme, setTheme } = useTheme();
   const [smartRouting, setSmartRouting] = useSmartRoutingSetting();
   const [pureSingleModelMode, setPureSingleModelMode] = usePureSingleModelModeSetting();
@@ -47,17 +40,6 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
   const [tavilyKeyConfigured, setTavilyKeyConfigured] = useState(false);
   const [tavilyKeyInput, setTavilyKeyInput] = useState("");
   const [tavilyMessage, setTavilyMessage] = useState<string | null>(null);
-  const [mcpServerList, setMcpServerList] = useState<McpServerRow[]>([]);
-  const [mcpMessage, setMcpMessage] = useState<string | null>(null);
-  const [mcpForm, setMcpForm] = useState({
-    name: "",
-    transport: "remote_http" as McpTransport,
-    url: "",
-    command: "",
-    argsJson: "[]",
-    headersJson: "{}",
-    envJson: "{}",
-  });
   const [cliUpdateState, setCliUpdateState] = useState<
     Record<string, { checking: boolean; message: string | null }>
   >({});
@@ -91,18 +73,6 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
       .catch(() => setTavilyKeyConfigured(false));
   }, []);
 
-  async function reloadMcpServers() {
-    try {
-      setMcpServerList(await mcpServers.list());
-    } catch {
-      setMcpServerList([]);
-    }
-  }
-
-  useEffect(() => {
-    void reloadMcpServers();
-  }, []);
-
   async function handleSaveTavilyKey() {
     const trimmed = tavilyKeyInput.trim();
     if (!trimmed) return;
@@ -116,105 +86,6 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
     await deleteApiKey(TAVILY_SEARCH_CREDENTIAL_ID);
     setTavilyKeyConfigured(false);
     setTavilyMessage(t("settings.webSearch.cleared"));
-  }
-
-  async function handleAddMcpServer() {
-    setMcpMessage(null);
-    let args: string[];
-    let headers: Record<string, string>;
-    let env: Record<string, string>;
-    try {
-      const parsed = JSON.parse(mcpForm.argsJson || "[]");
-      if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) {
-        throw new Error("args must be a string array");
-      }
-      args = parsed;
-      const parseStringRecord = (raw: string) => {
-        const value = JSON.parse(raw || "{}");
-        if (!value || typeof value !== "object" || Array.isArray(value)
-          || Object.values(value).some((item) => typeof item !== "string")) {
-          throw new Error("record values must be strings");
-        }
-        return value as Record<string, string>;
-      };
-      headers = parseStringRecord(mcpForm.headersJson);
-      env = parseStringRecord(mcpForm.envJson);
-    } catch {
-      setMcpMessage(t("settings.mcp.invalidArgs"));
-      return;
-    }
-    try {
-      const created = await mcpServers.create({
-        name: mcpForm.name,
-        transport: mcpForm.transport,
-        url: mcpForm.transport === "remote_http" ? mcpForm.url : null,
-        command: mcpForm.transport === "local_stdio" ? mcpForm.command : null,
-        args,
-        enabled: mcpForm.transport === "remote_http",
-      });
-      if (Object.keys(headers).length > 0 || Object.keys(env).length > 0) {
-        await saveMcpServerSecrets(created.id, { headers, env });
-      }
-      setMcpForm({
-        name: "",
-        transport: "remote_http",
-        url: "",
-        command: "",
-        argsJson: "[]",
-        headersJson: "{}",
-        envJson: "{}",
-      });
-      setMcpMessage(t("settings.mcp.saved"));
-      await reloadMcpServers();
-    } catch (err) {
-      setMcpMessage(err instanceof Error ? err.message : t("settings.mcp.saveFailed"));
-    }
-  }
-
-  async function handleToggleMcpServer(server: McpServerRow) {
-    if (server.enabled) {
-      await disposeMcpServerSessions(server.id);
-    }
-    await mcpServers.setEnabled(server.id, !server.enabled);
-    await reloadMcpServers();
-  }
-
-  async function handleDeleteMcpServer(server: McpServerRow) {
-    await disposeMcpServerSessions(server.id);
-    await deleteMcpServerSecrets(server);
-    await mcpServers.delete(server.id);
-    await reloadMcpServers();
-  }
-
-  async function handleTestMcpServer(storedServer: McpServerRow) {
-    setMcpMessage(null);
-    try {
-      const server = await hydrateMcpServerSecrets(storedServer);
-      if (server.transport === "local_stdio") {
-        const scope = buildLocalMcpSessionScope(server);
-        const approval = {
-          serverId: server.id,
-          workspacePath: "",
-          configFingerprint: scope.configFingerprint,
-        };
-        if (!(await mcpServerApprovals.isApproved(approval))) {
-          const approved = await confirm({
-            title: t("settings.mcp.launchConfirmTitle"),
-            description: formatLocalMcpLaunch(server),
-            confirmText: t("settings.mcp.launchConfirm"),
-            destructive: true,
-          });
-          if (!approved) return;
-          await mcpServerApprovals.approve(approval);
-        }
-      }
-      const tools = await listMcpTools(server);
-      setMcpMessage(t("settings.mcp.testSuccess", { count: tools.length }));
-    } catch (error) {
-      setMcpMessage(t("settings.mcp.testFailed", {
-        error: error instanceof Error ? error.message : String(error),
-      }));
-    }
   }
 
   async function handleSyncMemoryIndex() {
@@ -552,158 +423,7 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
             </div>
           </Card>
 
-          {/* MCP 工具服务器 */}
-          <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-8 shadow-xl">
-            <div className="flex items-center gap-3 pb-4 border-b border-white/10">
-              <Plug className="w-5 h-5 text-primary" />
-              <h2 className="text-xl font-bold dark:text-white">{t("settings.mcp.title")}</h2>
-            </div>
-            <div className="space-y-4">
-              <p className="text-xs text-muted-foreground leading-relaxed">{t("settings.mcp.desc")}</p>
-              <div className="grid gap-3 lg:grid-cols-2 p-5 bg-white/5 rounded-2xl border border-white/5">
-                <div className="space-y-2">
-                  <Label className="text-xs font-bold opacity-60">{t("settings.mcp.name")}</Label>
-                  <Input
-                    value={mcpForm.name}
-                    onChange={(event) => setMcpForm((prev) => ({ ...prev, name: event.target.value }))}
-                    placeholder={t("settings.mcp.namePlaceholder")}
-                    className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm dark:text-white"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs font-bold opacity-60">{t("settings.mcp.transport")}</Label>
-                  <Select
-                    value={mcpForm.transport}
-                    onValueChange={(value) => {
-                      if (value === "remote_http" || value === "local_stdio") {
-                        setMcpForm((prev) => ({ ...prev, transport: value }));
-                      }
-                    }}
-                  >
-                    <SelectTrigger className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm dark:text-white">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="glass border-white/10 rounded-xl">
-                      <SelectItem value="remote_http">{t("settings.mcp.remoteHttp")}</SelectItem>
-                      <SelectItem value="local_stdio">{t("settings.mcp.localStdio")}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs font-bold opacity-60">
-                    {mcpForm.transport === "remote_http" ? t("settings.mcp.url") : t("settings.mcp.command")}
-                  </Label>
-                  <Input
-                    value={mcpForm.transport === "remote_http" ? mcpForm.url : mcpForm.command}
-                    onChange={(event) => {
-                      const key = mcpForm.transport === "remote_http" ? "url" : "command";
-                      setMcpForm((prev) => ({ ...prev, [key]: event.target.value }));
-                    }}
-                    placeholder={mcpForm.transport === "remote_http" ? "http://127.0.0.1:3000/mcp" : "npx"}
-                    className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm dark:text-white"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs font-bold opacity-60">{t("settings.mcp.args")}</Label>
-                  <Input
-                    value={mcpForm.argsJson}
-                    onChange={(event) => setMcpForm((prev) => ({ ...prev, argsJson: event.target.value }))}
-                    placeholder='["-y","@modelcontextprotocol/server-filesystem"]'
-                    className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm dark:text-white font-mono"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs font-bold opacity-60">{t("settings.mcp.headers")}</Label>
-                  <Input
-                    value={mcpForm.headersJson}
-                    onChange={(event) => setMcpForm((prev) => ({ ...prev, headersJson: event.target.value }))}
-                    placeholder='{"Authorization":"Bearer ..."}'
-                    className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm dark:text-white font-mono"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs font-bold opacity-60">{t("settings.mcp.env")}</Label>
-                  <Input
-                    value={mcpForm.envJson}
-                    onChange={(event) => setMcpForm((prev) => ({ ...prev, envJson: event.target.value }))}
-                    placeholder='{"TOKEN":"..."}'
-                    className="rounded-xl border-white/10 bg-white/5 dark:bg-black/20 h-11 text-sm dark:text-white font-mono"
-                  />
-                </div>
-                <div className="flex items-end">
-                  <Button
-                    type="button"
-                    onClick={() => void handleAddMcpServer()}
-                    disabled={!mcpForm.name.trim()}
-                    className="rounded-xl whitespace-nowrap"
-                  >
-                    {t("settings.mcp.add")}
-                  </Button>
-                </div>
-              </div>
-
-              {mcpMessage && <p className="text-xs text-primary font-bold">{mcpMessage}</p>}
-
-              <div className="space-y-3">
-                {mcpServerList.length === 0 && (
-                  <p className="text-xs text-muted-foreground">{t("settings.mcp.empty")}</p>
-                )}
-                {mcpServerList.map((server) => (
-                  <div key={server.id} className="flex flex-col gap-3 p-5 bg-white/5 rounded-2xl border border-white/5">
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="space-y-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-bold truncate">{server.name}</span>
-                          <Badge className="border-none bg-white/10 text-muted-foreground px-2 py-0.5">
-                            {server.transport === "remote_http" ? t("settings.mcp.remoteHttp") : t("settings.mcp.localStdio")}
-                          </Badge>
-                        </div>
-                        <p className="text-xs text-muted-foreground font-mono truncate">
-                          {server.transport === "remote_http" ? server.url : [server.command, ...server.args].filter(Boolean).join(" ")}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => void handleTestMcpServer(server)}
-                          className="rounded-xl px-3"
-                        >
-                          {t("settings.mcp.test")}
-                        </Button>
-                        <button
-                          role="switch"
-                          aria-checked={server.enabled}
-                          onClick={() => void handleToggleMcpServer(server)}
-                          className={cn(
-                            "relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors duration-300",
-                            server.enabled ? "bg-primary" : "bg-white/15",
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform duration-300",
-                              server.enabled ? "translate-x-6" : "translate-x-1",
-                            )}
-                          />
-                        </button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => void handleDeleteMcpServer(server)}
-                          className="rounded-xl px-3"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </Card>
+          <McpSettingsSection />
 
           {/* 网页搜索（Tavily API Key） */}
           <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-8 shadow-xl">

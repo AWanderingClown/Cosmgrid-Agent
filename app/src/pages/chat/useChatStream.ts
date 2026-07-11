@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useRef,
   useState,
   type Dispatch,
@@ -35,12 +34,12 @@ import { buildSkillPreamble } from "@/lib/skills/preamble";
 import { selectSkillForTurn } from "@/lib/skills/selector";
 import { attachActiveSkillToWorkflow, attachPlanSourceToWorkflow } from "@/lib/workflow/reducer";
 import { buildWorkflowContextPreamble, readDesktopPlanForExecution } from "@/lib/workflow/execution-context";
-import { evaluateConversationHarness } from "@/lib/llm/harness/conversation-harness";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
 import { buildChatMemoryPreambles } from "@/lib/memory/chat-memory-preamble";
 import { createOptimisticUserTurn } from "@/pages/chat/optimistic-turn";
 import { runSemanticCacheRuntime } from "@/pages/chat/cache-runtime";
 import { runDebateRuntime } from "@/pages/chat/debate-runtime";
+import { evaluateChatTurnHarness } from "@/pages/chat/chat-harness-eval";
 import { buildMainChatModelChain } from "@/pages/chat/model-chain";
 import { prepareChatPromptRuntime } from "@/pages/chat/prompt-runtime";
 import { finalizeStreamedChatTurn } from "@/pages/chat/stream-finalization";
@@ -50,6 +49,11 @@ import { prepareTurnModels } from "@/pages/chat/turn-model-preparation";
 import { prepareTurnPersistence } from "@/pages/chat/turn-persistence";
 import { resolveWriteGuardRuntime } from "@/pages/chat/write-guard-runtime";
 import { prepareChatWorkspaceRuntime } from "@/pages/chat/workspace-runtime";
+import {
+  useAutoScrollOnMessages,
+  usePendingSendDrain,
+  useStreamingTimer,
+} from "@/pages/chat/chat-stream-effects";
 import type { StreamActivityPhase } from "@/pages/chat/streaming-status";
 import type { ChatMessage, PendingRoutingDecision, PendingSend } from "@/pages/chat/types";
 
@@ -118,7 +122,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
     setPanelOpen,
     isStreaming,
     setIsStreaming,
-  orchestrationRef,
+    orchestrationRef,
     workflowSnapshotRef,
     applyOrchestration,
     applyWorkflowSnapshot,
@@ -153,47 +157,8 @@ export function useChatStream(opts: UseChatStreamOptions) {
   /** 写权限升级弹窗只在同一个会话里问一次——记已经问过（不管用户同意与否）的会话 id */
   const escalationPromptedRef = useRef<Set<string>>(new Set());
 
-  // 流式计时 effect
-  useEffect(() => {
-    if (!isStreaming) {
-      setStreamElapsedMs(0);
-      return;
-    }
-    const start = Date.now();
-    setStreamElapsedMs(0);
-    const id = setInterval(() => setStreamElapsedMs(Date.now() - start), 200);
-    return () => clearInterval(id);
-  }, [isStreaming]);
-
-  // 新内容到达时自动滚底（只有用户仍贴在底部才滚，否则纹丝不动）
-  useEffect(() => {
-    if (scrollRef.current && stickToBottomRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages, scrollRef, stickToBottomRef]);
-
-  async function evalHarnessForConversation(
-    convId: string | null,
-    content: string,
-    sinceIso: string | null,
-    actualToolCallCount = 0,
-    opts: {
-      assistantMessageId?: string | null;
-      finishReason?: string | null;
-      judgeModel?: import("@/lib/llm/provider-factory").LanguageModel | null;
-    } = {},
-  ) {
-    return evaluateConversationHarness({
-      conversationId: convId,
-      content,
-      sinceIso,
-      actualToolCallCount,
-      assistantMessageId: opts.assistantMessageId ?? null,
-      finishReason: opts.finishReason ?? "stop",
-      judgeModel: opts.judgeModel ?? null,
-      onRowsLoaded: applyToolExecutionRows,
-    });
-  }
+  useStreamingTimer({ isStreaming, setStreamElapsedMs });
+  useAutoScrollOnMessages({ messages, scrollRef, stickToBottomRef });
 
   // handleSend 整体（含 5 段 helper）
   async function handleSend(text: string, attachments?: Attachment[]) {
@@ -250,9 +215,10 @@ export function useChatStream(opts: UseChatStreamOptions) {
       const prep = await prepareTurn();
       if (prep === null) return;
       if (await maybeRunDebate(prep)) return;
-      if (await tryCacheHit(prep)) return;
-      await runStreamLoop(prep);
-      await postStreamOrchestration(prep);
+      const cacheOutcome = await tryCacheHit(prep);
+      if (cacheOutcome.hit) return;
+      await runStreamLoop(cacheOutcome.prep);
+      await postStreamOrchestration(cacheOutcome.prep);
     } finally {
       cleanupStoppedTurn();
     }
@@ -396,8 +362,23 @@ export function useChatStream(opts: UseChatStreamOptions) {
       });
     }
 
-    async function tryCacheHit(prep: Awaited<ReturnType<typeof prepareTurn>>): Promise<boolean> {
-      if (!prep) return false;
+    type PreparedTurn = NonNullable<Awaited<ReturnType<typeof prepareTurn>>>;
+    type StreamReadyTurn = PreparedTurn & {
+      assistantId: string;
+      assistantMsg: ChatMessage;
+      taskRole: string;
+      turnStartedAt: string;
+      cacheIntent: TurnIntentDecision;
+      cacheEligible: boolean;
+      tools?: Awaited<ReturnType<typeof prepareChatWorkspaceRuntime>>["tools"];
+      finalContent?: string;
+      finalAssistantMsg?: ChatMessage;
+    };
+
+    async function tryCacheHit(prep: PreparedTurn): Promise<
+      | { hit: true }
+      | { hit: false; prep: StreamReadyTurn }
+    > {
       const cacheWorkspace = prep.folderAtt?.path ?? workspacePath;
       const cacheResult = await runSemanticCacheRuntime({
         text,
@@ -425,25 +406,31 @@ export function useChatStream(opts: UseChatStreamOptions) {
         onCacheHitDone: cleanupStoppedTurn,
       });
 
-      if (cacheResult.hit) return true;
+      if (cacheResult.hit) return { hit: true };
 
-      (prep as any).assistantId = cacheResult.assistantId;
-      (prep as any).assistantMsg = cacheResult.assistantMsg;
-      (prep as any).taskRole = cacheResult.taskRole;
-      (prep as any).turnStartedAt = cacheResult.turnStartedAt;
-      (prep as any).cacheIntent = cacheResult.cacheIntent;
-      (prep as any).cacheEligible = cacheResult.cacheEligible;
-      return false;
+      return {
+        hit: false,
+        prep: {
+          ...prep,
+          assistantId: cacheResult.assistantId,
+          assistantMsg: cacheResult.assistantMsg,
+          taskRole: cacheResult.taskRole,
+          turnStartedAt: cacheResult.turnStartedAt,
+          cacheIntent: cacheResult.cacheIntent,
+          cacheEligible: cacheResult.cacheEligible,
+        },
+      };
     }
 
-    async function runStreamLoop(prep: Awaited<ReturnType<typeof prepareTurn>>) {
-      if (!prep) return;
-      const assistantId = (prep as any).assistantId as string;
-      const assistantMsg = (prep as any).assistantMsg as ChatMessage;
-      const taskRole = (prep as any).taskRole;
-      const turnStartedAt = (prep as any).turnStartedAt as string;
-      const cacheIntent = (prep as any).cacheIntent as TurnIntentDecision;
-      const cacheEligible = (prep as any).cacheEligible as boolean;
+    async function runStreamLoop(prep: StreamReadyTurn) {
+      const {
+        assistantId,
+        assistantMsg,
+        taskRole,
+        turnStartedAt,
+        cacheIntent,
+        cacheEligible,
+      } = prep;
       const {
         cred,
         primaryIsCli,
@@ -517,6 +504,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
       });
       if (workspaceRuntime.aborted) return;
       tools = workspaceRuntime.tools;
+      prep.tools = tools;
       workspacePreamble = workspaceRuntime.workspacePreamble;
       const desktopPath = workspaceRuntime.desktopPath;
 
@@ -627,10 +615,15 @@ export function useChatStream(opts: UseChatStreamOptions) {
           turnImpliesWrite,
           turnStartedAt,
           evalHarness: ({ content, actualToolCallCount, assistantMessageId, finishReason }) =>
-            evalHarnessForConversation(convId, content, turnStartedAt, actualToolCallCount, {
+            evaluateChatTurnHarness({
+              conversationId: convId,
+              content,
+              sinceIso: turnStartedAt,
+              actualToolCallCount,
               assistantMessageId,
               finishReason,
               judgeModel: auxiliaryJudgeModel?.model ?? null,
+              onRowsLoaded: applyToolExecutionRows,
             }),
           labels: {
             harnessRetry: t("chat.harnessRetry"),
@@ -662,8 +655,8 @@ export function useChatStream(opts: UseChatStreamOptions) {
         });
         finalContent = finalized.finalContent;
         setHarnessNotice(null);
-        (prep as any).finalContent = finalContent;
-        (prep as any).finalAssistantMsg = finalized.finalAssistantMsg;
+        prep.finalContent = finalContent;
+        prep.finalAssistantMsg = finalized.finalAssistantMsg;
       } catch (err) {
         const partialContent = streamingResult?.fullContent ?? "";
         prep.persistAssistant(partialContent, model.id);
@@ -698,20 +691,17 @@ export function useChatStream(opts: UseChatStreamOptions) {
       }
     }
 
-    async function postStreamOrchestration(prep: Awaited<ReturnType<typeof prepareTurn>>) {
-      if (!prep) return;
-      const finalContent = (prep as any).finalContent as string | undefined;
-      const finalAssistantMsg = (prep as any).finalAssistantMsg as ChatMessage | undefined;
+    async function postStreamOrchestration(prep: StreamReadyTurn) {
+      const finalContent = prep.finalContent;
+      const finalAssistantMsg = prep.finalAssistantMsg;
       const {
         convId,
         effectiveWorkspace,
         turnIntentDecision,
         auxiliaryJudgeModel,
-      } = prep as Awaited<ReturnType<typeof prepareTurn>> & {
-        auxiliaryJudgeModel: import("@/lib/llm/auxiliary-model").AuxiliaryModelResolution | null;
-      };
-      const taskRole = (prep as any).taskRole;
-      const cacheIntent = (prep as any).cacheIntent as TurnIntentDecision;
+        taskRole,
+        cacheIntent,
+      } = prep;
       void runPostStreamOrchestrationRuntime({
         conversationId: convId,
         activeConversationId: conversationId,
@@ -732,14 +722,19 @@ export function useChatStream(opts: UseChatStreamOptions) {
         applyOrchestration,
         setSelectedModelId,
         setMessages,
-        tools: (prep as any).tools,
+        tools: prep.tools,
         userTask: text,
         judgeModel: auxiliaryJudgeModel?.model ?? null,
         evalHarness: ({ content, startedAt, toolCallCount, finishReason, assistantMessageId, judgeModel }) =>
-          evalHarnessForConversation(convId, content, startedAt, toolCallCount, {
+          evaluateChatTurnHarness({
+            conversationId: convId,
+            content,
+            sinceIso: startedAt,
+            actualToolCallCount: toolCallCount,
             assistantMessageId,
             finishReason,
             judgeModel,
+            onRowsLoaded: applyToolExecutionRows,
           }),
         applyToolExecutionRows,
         chainAbortRef,
@@ -768,16 +763,13 @@ export function useChatStream(opts: UseChatStreamOptions) {
   const handleSendRef = useRef(handleSend);
   handleSendRef.current = handleSend;
 
-  // 串行排空队列
-  useEffect(() => {
-    if (drainingRef.current || isStreaming || pendingQueue.length === 0) return;
-    const next = pendingQueue[0]!;
-    drainingRef.current = true;
-    setPendingQueue((q) => q.slice(1));
-    void handleSendRef.current(next.text, next.attachments).finally(() => {
-      drainingRef.current = false;
-    });
-  }, [isStreaming, pendingQueue]);
+  usePendingSendDrain({
+    drainingRef,
+    isStreaming,
+    pendingQueue,
+    sendRef: handleSendRef,
+    setPendingQueue,
+  });
 
   return {
     abortRef,
