@@ -7,6 +7,23 @@ vi.mock("../../../db", () => ({
   toolExecutions: { create: mocks.create },
 }));
 
+// 引擎化阶段 1a：executor-security 走 resolveAllowedPrograms；本测试不关心 override
+// 行为，把 PolicyStore mock 掉：所有 get 返回 null（resolveAllowedPrograms 直接回 builtin）。
+const policyStoreMocks = vi.hoisted(() => ({
+  get: vi.fn().mockResolvedValue(null),
+  set: vi.fn().mockResolvedValue(undefined),
+  clear: vi.fn().mockResolvedValue(false),
+  reset: vi.fn().mockResolvedValue(undefined),
+  listOverrides: vi.fn().mockResolvedValue([]),
+  listConfiguredKeys: vi.fn().mockResolvedValue([]),
+  history: vi.fn().mockResolvedValue([]),
+}));
+vi.mock("@/lib/policy/policy-store", () => ({
+  PolicyStore: class {},
+  PolicyStoreError: class extends Error {},
+  policyStore: policyStoreMocks,
+}));
+
 import { ToolRegistry } from "../registry";
 import { executeTool, MAX_OUTPUT_CHARS } from "../executor";
 import { setGitSnapshot } from "../git-snapshot";

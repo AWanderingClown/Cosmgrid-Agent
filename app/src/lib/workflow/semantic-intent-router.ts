@@ -1,5 +1,6 @@
 import { keywordEmbed } from "@/lib/llm/embedding";
 import { cosineSimilarity } from "@/lib/llm/similarity";
+import { BUILTIN_ACTION_MARKERS, resolveIntentActionMarkers } from "@/lib/policy/intent-action-markers";
 
 export type IntentRouteAction =
   | "answer_only"
@@ -194,24 +195,23 @@ export const BUILTIN_INTENT_EXAMPLES: IntentExample[] = [
   },
 ];
 
-const ACTION_MARKERS: Record<IntentRouteAction, string[]> = {
-  answer_only: ["解释", "说明", "润色", "改自然", "太硬", "继续写", "文案", "软文", "啥意思"],
-  start_run: ["盘查", "分析项目", "读取项目", "理解项目", "写一篇", "完整了解", "仓库"],
-  continue_run: ["继续", "下一步", "接着", "go on", "continue", "next"],
-  plan: ["方案", "计划", "规划", "路线", "架构", "proposal", "plan"],
-  review: ["评估", "评审", "审查", "复核", "挑问题", "另一个 ai", "另外一个 ai", "别的模型", "看看方案"],
-  debate: ["互相反驳", "裁判", "正方", "反方", "pk", "PK", "博弈", "对弈", "辩论", "多个模型"],
-  execute: ["改代码", "实现", "落地", "开始改", "按这个方案", "直接做", "执行"],
-  verify: ["测试", "验证", "构建", "检查", "build", "test", "verify", "typecheck"],
-  reject_node: ["不对", "不是这个", "重来", "打回", "改一下", "reject", "redo"],
-  pause_run: ["暂停", "先停", "等一下", "pause", "hold"],
-  cancel_run: ["取消", "算了", "不要继续", "cancel", "停止这个任务"],
-};
+// 引擎化阶段 2：关键词端默认走 builtin；hydrateIntentActionMarkers() 启动时从 PolicyStore
+// （distribution scope）resolve 一次覆盖。当前无 distribution 写入通道 → 运行时等于 builtin；
+// 形态与 command-allowlist 统一、resolve 不再是死代码，运营侧通道就绪后立即生效。
+let ACTION_MARKERS: Readonly<Record<string, ReadonlyArray<string>>> = BUILTIN_ACTION_MARKERS;
+let actionMarkersHydrated = false;
+
+/** 启动时调用一次（chat-fallback 入口）；幂等，distribution override 缺失时保持 builtin。 */
+export async function hydrateIntentActionMarkers(): Promise<void> {
+  if (actionMarkersHydrated) return;
+  ACTION_MARKERS = await resolveIntentActionMarkers();
+  actionMarkersHydrated = true;
+}
 
 function markerScore(text: string, action: IntentRouteAction): number {
   const lower = text.toLowerCase();
   let hits = 0;
-  for (const marker of ACTION_MARKERS[action]) {
+  for (const marker of ACTION_MARKERS[action] ?? []) {
     if (lower.includes(marker.toLowerCase())) hits += 1;
   }
   return Math.min(0.24, hits * 0.08);

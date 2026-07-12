@@ -11,26 +11,31 @@
 // 两者组合：本函数挑主模型 → rankFallbackModels 给它排备用链。
 
 import { detectModelTier, scoreModelForRole, type ModelTier, type ScorableModel } from "./model-capabilities";
+import {
+  BUILTIN_HARD_MARKERS,
+  BUILTIN_SIMPLE_MARKERS,
+  resolveMessageRouterMarkers,
+} from "@/lib/policy/message-router-markers";
 
 /** 消息难度档位 */
 export type MessageComplexity = "simple" | "standard" | "hard";
 
-// 难活信号：要深度推理 / 大改动的词（中英）
-const HARD_MARKERS = [
-  "架构", "设计", "重构", "调试", "排查", "为什么", "方案", "优化", "算法",
-  "分析", "审查", "规划", "梳理", "怎么实现", "如何实现", "性能",
-  "architecture", "design", "refactor", "debug", "optimize", "algorithm",
-  "analyze", "review", "why ", "how should", "trade-off", "tradeoff",
-];
+// 引擎化阶段 2：marker 表默认走 builtin；hydrateMessageRouterMarkers() 在启动时从
+// PolicyStore（distribution scope）resolve 一次覆盖。当前无 distribution 写入通道，故运行时
+// 实际等于 builtin——但形态与 command-allowlist 统一、resolve 不再是死代码，运营侧通道就绪
+// 后（K2 .policyoverrides.json 等）立即生效，无需再改这里。同步热路径读模块变量，零签名侵入。
+let HARD_MARKERS: ReadonlyArray<string> = BUILTIN_HARD_MARKERS;
+let SIMPLE_MARKERS: ReadonlyArray<string> = BUILTIN_SIMPLE_MARKERS;
+let markersHydrated = false;
 
-// 简单活信号：轻量、确定性高的词 + 寒暄（中英）
-const SIMPLE_MARKERS = [
-  "翻译", "改名", "重命名", "格式化", "标点", "总结一下", "什么意思", "改个", "润色", "纠错",
-  "translate", "rename", "format", "typo", "summarize", "what does", "what is the meaning",
-  // 寒暄 / 确认类
-  "你好", "您好", "嗨", "谢谢", "多谢", "好的", "在吗", "在不在",
-  "hi", "hello", "thanks", "thank you", "ok", "okay",
-];
+/** 启动时调用一次（chat-fallback 入口）；幂等，distribution override 缺失时保持 builtin。 */
+export async function hydrateMessageRouterMarkers(): Promise<void> {
+  if (markersHydrated) return;
+  const m = await resolveMessageRouterMarkers();
+  HARD_MARKERS = m.hard;
+  SIMPLE_MARKERS = m.simple;
+  markersHydrated = true;
+}
 
 // 极短消息兜底阈值：CJK 里短=信息密度高，编码请求往往也很短（"帮我写个组件"），
 // 所以不能"短就当简单"，只对极短（≤4 字）且无代码的兜底成简单，其余短消息默认 standard 更稳。
@@ -43,7 +48,7 @@ function countCodeFences(text: string): number {
   return m ? m.length : 0;
 }
 
-function includesAny(lower: string, markers: string[]): boolean {
+function includesAny(lower: string, markers: ReadonlyArray<string>): boolean {
   return markers.some((m) => lower.includes(m));
 }
 

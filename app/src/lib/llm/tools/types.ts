@@ -22,6 +22,10 @@ export interface ToolContext {
   confirm?: (preview: ToolConfirmRequest) => Promise<boolean>;
   /** 项目自定义的命令黑名单前缀（bash 工具用，叠加在内置危险拦截之上） */
   blockedCommands?: string[];
+  /** 引擎化阶段 1b（K7）：当前激活 skill 的 requiredCapabilities。
+   *  执行器在 runSecurityPrecheck 之后会做 enforceCapabilities(this, tool 提供 capability)。
+   *  不传 = 不做 K7 enforcement（保持老调用方行为不变）。 */
+  activeSkillCaps?: string[];
   /** ask_user_question 工具用：向用户提一个结构化问题，返回用户选中的 label 文本 */
   askUser?: (request: AskUserRequest) => Promise<string>;
   /**

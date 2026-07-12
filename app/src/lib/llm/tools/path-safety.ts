@@ -3,6 +3,7 @@
 // 规则（按 v2 方案的默认 deny 列表）：
 //   1. 解析后的绝对路径必须在 workspace 之下（防路径遍历 ../../）
 //   2. 默认拒绝敏感路径：.ssh / .aws / .gnupg / .env* / secrets.* / keystore.json
+//      （实际正则已搬到 lib/security-invariants/sensitive-paths.ts：阶段 3 R7 集中）
 //
 // 2.2 修复（2026-07-02）：可选 realpath 解析，避免符号链接逃逸。
 //   - 路径前缀全用字符串检查，但符号链接可以指向 workspace 之外的敏感路径（.ssh / .aws 等），
@@ -64,20 +65,10 @@ export function resolveInWorkspace(workspacePath: string, target: string): strin
   return normalizePath(`${ws}/${target}`);
 }
 
-// 敏感路径模式（命中即拒绝读写）
-const SENSITIVE_PATTERNS: RegExp[] = [
-  /(^|\/)\.ssh(\/|$)/,
-  /(^|\/)\.aws(\/|$)/,
-  /(^|\/)\.gnupg(\/|$)/,
-  /(^|\/)\.env(\.|$|\/)/,
-  /(^|\/)secrets?\.[^/]+$/i,
-  /(^|\/)keystore\.json$/,
-  /(^|\/)id_rsa(\.|$)/,
-];
+// 敏感路径模式（命中即拒绝读写）—— 实际正则已搬到 lib/security-invariants/sensitive-paths.ts（阶段 3 R7 集中）。
+import { isSensitivePath as isSensitivePathCore } from "@/lib/security-invariants/sensitive-paths";
 
-export function isSensitivePath(absPath: string): boolean {
-  return SENSITIVE_PATTERNS.some((re) => re.test(absPath));
-}
+export const isSensitivePath = isSensitivePathCore;
 
 export interface PathCheck {
   ok: boolean;

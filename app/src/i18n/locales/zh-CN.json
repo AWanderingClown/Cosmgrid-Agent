@@ -27,6 +27,7 @@
     "network": "网络连接失败，请检查网络或 Base URL 配置",
     "web_content_unavailable": "外部链接内容读取失败。微信文章这类页面经常需要登录或被防抓取，请把正文粘贴进来，或截图/导出后发给我，我再按参考文章重写。",
     "tool_budget_exhausted": "这轮任务需要的步骤比较多，没能在预算内跑完。建议把任务拆成更小的步骤分开说，或者换个模型试试",
+    "empty_response_exhausted": "模型这轮反复没有产出有效内容（可能思考到一半就停了），已自动重试多次仍未成功。建议换个问法，或切换其他模型试试",
     "unknown": "对话失败，请稍后重试"
   },
   "app": {
@@ -879,7 +880,31 @@
         "title": "API 密钥存储",
         "desc": "API 密钥存储在当前系统账户的安全凭据库中，不写入项目数据库。Linux 依赖 Secret Service（如 GNOME Keyring / KWallet）。"
       },
-      "encrypted": "系统凭据库"
+      "encrypted": "系统凭据库",
+      "commandAllowlist": {
+        "title": "命令白名单（AI 执行）",
+        "desc": "AI 可以执行哪些 shell 程序。内置白名单包含 pnpm / npm / git / tsc / python3 / pip3 等开发常用命令；下方是你额外允许的程序（每行一个，仅追加不会删减内建项）。修改会触发二次确认。",
+        "inputLabel": "额外允许的命令（每行一个）",
+        "inputPlaceholder": "例如：pip3",
+        "builtinNote": "内建白名单已含 pip3 等，添加前先确认；保存前系统会要求二次确认。",
+        "countNote": "共 {{count}} 项",
+        "emptyList": "列表为空时不写入 override，仍然走内建白名单。",
+        "save": "保存",
+        "reset": "重置为默认",
+        "saved": "已保存",
+        "saveError": "保存失败：{{msg}}",
+        "loadError": "读取失败：{{msg}}",
+        "parseError": "现存 override 解析失败，已重置为空。请重新填写后保存。",
+        "resetSuccess": "已重置为默认（清空全局 + 全部项目级 override）",
+        "resetError": "重置失败：{{msg}}",
+        "editConfirmTitle": "修改命令白名单",
+        "editConfirmBody": "你即将允许 AI 执行以下额外程序：\n\n{{programs}}\n\n这些命令一旦允许，AI 可直接在项目目录中运行。请确认这是你要做的修改。",
+        "editConfirmButton": "确认并保存",
+        "resetConfirmTitle": "重置命令白名单",
+        "resetConfirmBody": "重置会清空全局以及所有项目级额外命令，恢复到内建白名单。此操作不可撤销，但下次还能再加。",
+        "resetConfirmButton": "确认重置",
+        "cancel": "取消"
+      }
     },
     "about": {
       "title": "关于 CosmGrid",

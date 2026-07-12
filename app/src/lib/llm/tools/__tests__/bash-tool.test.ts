@@ -2,6 +2,11 @@
 //
 // L6 安全网收拢（2026-07-09）：checkCommand 现在由 executor 按 tool.security 声明统一跑，
 // 工具自己不再调用——测试改走 executeTool（跟生产路径一致）。
+//
+// 引擎化阶段 1a：executor-security 在调 checkCommand 前会先 await resolveAllowedPrograms
+// 从 PolicyStore 拿 builtin ∪ project/global override。本测试不关心 override 行为，
+// 只关心安全闸主路径，所以把 PolicyStore mock 掉：get 永远返回 null（无 override，
+// resolveAllowedPrograms 直接回 builtin）。
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { setShellAdapter, type ShellAdapter } from "../shell-adapter";
 import { bashTool } from "../bash-tool";
@@ -10,6 +15,21 @@ import type { ToolContext } from "../types";
 
 vi.mock("../../../db", () => ({
   toolExecutions: { create: vi.fn().mockResolvedValue("id") },
+}));
+
+const policyStoreMocks = vi.hoisted(() => ({
+  get: vi.fn().mockResolvedValue(null),
+  set: vi.fn().mockResolvedValue(undefined),
+  clear: vi.fn().mockResolvedValue(false),
+  reset: vi.fn().mockResolvedValue(undefined),
+  listOverrides: vi.fn().mockResolvedValue([]),
+  listConfiguredKeys: vi.fn().mockResolvedValue([]),
+  history: vi.fn().mockResolvedValue([]),
+}));
+vi.mock("@/lib/policy/policy-store", () => ({
+  PolicyStore: class {},
+  PolicyStoreError: class extends Error {},
+  policyStore: policyStoreMocks,
 }));
 
 let runSpy: ReturnType<typeof vi.fn>;

@@ -65,8 +65,17 @@ export async function executeTool(
       result = await runToolBody(tool, parsed, pre.security !== undefined ? { ...ctx, security: pre.security } : ctx);
 
       if (pre.security?.kind === "write-path" && result.status === "success") {
-        const reversible = await snapshotWrite(ctx.workspacePath, pre.security.resolved, tool.name);
-        void runPostWriteFormatter(pre.security.resolved);
+        const writePath = pre.security.resolved; // 抽常量让 .catch 闭包能拿到（narrowing 跨闭包丢）
+        const reversible = await snapshotWrite(ctx.workspacePath, writePath, tool.name);
+        void runPostWriteFormatter(writePath)
+          // review T-F-5（2026-07-13）：fire-and-forget 之前丢了失败——prettier 崩了用户看不到。
+          // 这里仍 fire-and-forget（不快进 tool latency）但错误落 console.error 显式有痕。
+          .catch((err: unknown) => {
+            console.error(
+              `[tools] post-write formatter 失败 (file=${writePath})：`,
+              err instanceof Error ? err.message : err,
+            );
+          });
         result = { ...result, reversible };
       }
 

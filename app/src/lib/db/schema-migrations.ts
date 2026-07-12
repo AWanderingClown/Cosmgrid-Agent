@@ -541,4 +541,115 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       );
     },
   },
+  // ============ 引擎化改造方案阶段 0（2026-07-12）：策略引擎抽象层 ============
+  // 提供通用 "builtin seed + 数据覆盖 + 缺数据时降级" 的引擎化范式，先抽 CRUD+scope，
+  // 不做统一 value 容器（value schema 由每条 PolicyDefinition.parse 负责）。
+  // 老用户 DB 靠 CREATE TABLE IF NOT EXISTS 自动补建，无需手写回填 SQL。
+  {
+    version: "202607120010-policy-overrides",
+    description:
+      "Engine-ification phase 0: policy_overrides table for runtime policy overrides. " +
+      "Three scope levels (project / global / distribution) — see lib/policy/types.ts PolicyScope. " +
+      "scope_id uses sentinel string '__global__' to avoid PK NULL edge cases (DAO uses '=' comparison). " +
+      "Storing raw value_json; per-policy schema validation lives in each PolicyDefinition.parse().",
+    up: async (db) => {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS policy_overrides (
+          policy_key TEXT NOT NULL,
+          scope_level TEXT NOT NULL CHECK (scope_level IN ('project','global','distribution')),
+          scope_id TEXT NOT NULL,
+          value_json TEXT NOT NULL,
+          builtin_version TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_by TEXT,
+          PRIMARY KEY (policy_key, scope_level, scope_id)
+        )
+      `);
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_policy_overrides_key ON policy_overrides(policy_key)",
+      );
+    },
+  },
+  {
+    version: "202607120011-policy-override-history",
+    description:
+      "Engine-ification phase 0: audit log for policy_overrides mutations. " +
+      "Records who/when/what for set / clear / bulk_clear. Read path: policyStore.history(policyKey). " +
+      "scope_id uses same sentinel as policy_overrides for join consistency.",
+    up: async (db) => {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS policy_override_history (
+          id TEXT PRIMARY KEY,
+          policy_key TEXT NOT NULL,
+          scope_level TEXT NOT NULL,
+          scope_id TEXT NOT NULL,
+          action TEXT NOT NULL CHECK (action IN ('set','clear','bulk_clear')),
+          old_value_json TEXT,
+          new_value_json TEXT,
+          actor TEXT,
+          at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_policy_override_history_key_at ON policy_override_history(policy_key, at DESC)",
+      );
+    },
+  },
+  // ============ 引擎化改造方案阶段 1b（2026-07-12）：Skill 引擎化 ============
+  // 开放 Skill 注册 + 审核流程。Skill 的作用是往 system prompt 注入 systemGuidance；
+  // 没有审核机制就 = 开放 prompt 注入口子（D2）。本表的 review_status + source 是
+  // §4.3 默认组合（审核层 + 来源标注）的落地。
+  {
+    version: "202607120020-skill-definitions",
+    description:
+      "Engine-ification phase 1b: skill_definitions table for runtime registered skills. " +
+      "Closed-union SkillId 类型放松为 string 后，DB 替代'修改源码+重编译'成为装新 skill 的路径。" +
+      "source ∈ {builtin,user,ops}：builtin rows 由 SKILL_BUILTIN_SEED 自动 seed，user/ops 受审核。" +
+      "review_status：pending→approved/rejected，selector 默认只装 approved。",
+    up: async (db) => {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS skill_definitions (
+          id TEXT PRIMARY KEY,
+          builtin_version TEXT,
+          label TEXT NOT NULL,
+          purpose TEXT NOT NULL,
+          trigger_phases TEXT NOT NULL DEFAULT '[]',
+          trigger_keywords TEXT NOT NULL DEFAULT '[]',
+          required_capabilities TEXT NOT NULL DEFAULT '[]',
+          system_guidance TEXT NOT NULL DEFAULT '[]',
+          acceptance_criteria TEXT NOT NULL DEFAULT '[]',
+          source TEXT NOT NULL CHECK (source IN ('builtin','user','ops')),
+          review_status TEXT NOT NULL CHECK (review_status IN ('approved','pending','rejected')),
+          reviewed_by TEXT,
+          reviewed_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute("CREATE INDEX IF NOT EXISTS idx_skill_definitions_source ON skill_definitions(source, review_status)");
+      await db.execute("CREATE INDEX IF NOT EXISTS idx_skill_definitions_status ON skill_definitions(review_status)");
+    },
+  },
+  {
+    version: "202607120021-skill-audit-log",
+    description:
+      "Engine-ification phase 1b: skill_audit_log table. Every register/approve/reject/update/retire " +
+      "writes one row for forensic reconstruction ('who registered this content-bearing skill').",
+    up: async (db) => {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS skill_audit_log (
+          id TEXT PRIMARY KEY,
+          skill_id TEXT NOT NULL,
+          action TEXT NOT NULL CHECK (action IN ('register','approve','reject','update','retire')),
+          actor TEXT,
+          notes TEXT,
+          diff_json TEXT,
+          at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_skill_audit_log_skill_at ON skill_audit_log(skill_id, at DESC)",
+      );
+    },
+  },
 ];

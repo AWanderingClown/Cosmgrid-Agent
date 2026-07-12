@@ -103,6 +103,12 @@ describe("initSchema", () => {
       // 阶段5（2026-07-11）：上下文 Playbook 9 字段 + memory_playbook_events 表
       "202607120002-project-memories-playbook-fields",
       "202607120003-memory-playbook-events",
+      // 引擎化改造方案阶段 0（2026-07-12）：策略引擎抽象层（2 表）
+      "202607120010-policy-overrides",
+      "202607120011-policy-override-history",
+      // 引擎化改造方案阶段 1b（2026-07-12）：Skill 引擎化（2 表）
+      "202607120020-skill-definitions",
+      "202607120021-skill-audit-log",
       // 阶段4（2026-07-11）：任务级 Eval Harness（4 表 + usage_events.latency_ms）
       "202607130001-eval-cases",
       "202607130002-eval-runs",

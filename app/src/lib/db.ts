@@ -101,6 +101,19 @@ export type {
   ConversationSummary,
   CreateConversationSummaryInput,
 } from "./db/conversation-summaries";
+// 引擎化改造方案阶段 0：策略覆盖 DAO
+export { policyOverrideHistory } from "./db/policy-override-history";
+export type {
+  HistoryAction as PolicyHistoryAction,
+  PolicyOverrideHistoryRow,
+} from "./db/policy-override-history";
+export { policyOverrides } from "./db/policy-overrides";
+export type { PolicyOverrideRow } from "./db/policy-overrides";
+// 引擎化改造方案阶段 1b：Skill 引擎化 DAO
+export { skillDefinitions } from "./db/skill-definitions";
+export type { SkillDefinitionRow } from "./db/skill-definitions";
+export { skillAuditLog } from "./db/skill-audit-log";
+export type { SkillAuditAction, SkillAuditRow } from "./db/skill-audit-log";
 export type {
   CreateProjectMemoryInput,
   MemoryKind,

@@ -27,6 +27,7 @@
     "network": "Network connection failed — check network or Base URL config",
     "web_content_unavailable": "External link content could not be loaded. WeChat articles often require login or block scraping. Paste the article text, send screenshots, or export the file, and I can rewrite from those references.",
     "tool_budget_exhausted": "This task needed more steps than the budget allowed. Try breaking it into smaller steps, or switch to a different model.",
+    "empty_response_exhausted": "The model repeatedly produced no usable content this turn (it may have stopped mid-thought). Automatic retries were exhausted — try rephrasing your question, or switch to a different model.",
     "unknown": "Conversation failed — please try again later"
   },
   "app": {
@@ -879,7 +880,31 @@
         "title": "API Key Storage",
         "desc": "API keys are stored in your operating system's secure credential store and are not written to the project database. Linux requires Secret Service, such as GNOME Keyring or KWallet."
       },
-      "encrypted": "System keychain"
+      "encrypted": "System keychain",
+      "commandAllowlist": {
+        "title": "Command Allowlist (AI Execution)",
+        "desc": "Which shell programs AI is allowed to run. Built-in allowlist covers pnpm / npm / git / tsc / python3 / pip3 and other dev-common commands; the field below is your extra allowlist (one program per line, append-only — never shrinks the builtin). Saving triggers a confirmation dialog.",
+        "inputLabel": "Extra allowed commands (one per line)",
+        "inputPlaceholder": "e.g. pip3",
+        "builtinNote": "Builtin already covers pip3 etc.; double-check before adding. Saving requires confirmation.",
+        "countNote": "{{count}} entries",
+        "emptyList": "Empty list means no override; AI only runs builtin allowlist.",
+        "save": "Save",
+        "reset": "Reset to default",
+        "saved": "Saved.",
+        "saveError": "Save failed: {{msg}}",
+        "loadError": "Load failed: {{msg}}",
+        "parseError": "Existing override failed to parse, reset to empty. Please refill and save.",
+        "resetSuccess": "Reset to default (cleared global + all project-level overrides)",
+        "resetError": "Reset failed: {{msg}}",
+        "editConfirmTitle": "Modify command allowlist",
+        "editConfirmBody": "AI will be allowed to run these additional programs:\n\n{{programs}}\n\nThese commands can be executed directly in the project directory once allowed. Confirm this is what you want.",
+        "editConfirmButton": "Confirm and save",
+        "resetConfirmTitle": "Reset command allowlist",
+        "resetConfirmBody": "Resetting clears global and all project-level overrides, returning to the builtin allowlist. This is irreversible, but you can always add commands again later.",
+        "resetConfirmButton": "Confirm reset",
+        "cancel": "Cancel"
+      }
     },
     "about": {
       "title": "About CosmGrid",

@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { McpSettingsSection } from "@/pages/settings/McpSettingsSection";
+import { CommandAllowlistSection } from "@/pages/settings/CommandAllowlistSection";
 import { useTheme, type Theme } from "@/lib/theme";
 import { useDeveloperDiagnosticsSetting, useMemoryEmbeddingSetting, usePureSingleModelModeSetting, useSmartRoutingSetting } from "@/lib/app-settings";
 import { apiCredentials, type ApiCredential } from "@/lib/db";
@@ -502,6 +503,9 @@ export function SettingsPage({ onOpenProjectAssets }: SettingsPageProps) {
               </div>
             </div>
           </Card>
+
+          {/* 引擎化阶段 1a：命令白名单（额外允许 + 全局重置） */}
+          <CommandAllowlistSection />
 
           {/* 项目资产（高级入口） */}
           <Card className="glass border-white/15 dark:border-white/5 rounded-[2rem] p-8 space-y-6 shadow-xl">

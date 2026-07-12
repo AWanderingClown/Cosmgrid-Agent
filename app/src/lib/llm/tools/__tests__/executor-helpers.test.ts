@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { maybeBuildDoomLoopResult } from "../executor-doom-loop";
 import { summarizePartsForAudit } from "../executor-parts-audit";
@@ -7,6 +7,25 @@ import { normalizeToV2 } from "../executor-result";
 import { runSecurityPrecheck } from "../executor-security";
 import { safeStringify, shapeOfInput } from "../executor-serialization";
 import type { AnyToolDefinition, ToolContext } from "../types";
+
+// 引擎化阶段 1a：runSecurityPrecheck 调 resolveAllowedPrograms → PolicyStore.get。
+// 本测试只关心 precheck 自身逻辑（denied / 透传 security）的 contract，
+// 不关心 override 行为，所以 mock PolicyStore.get 永远返回 null（无 override 时
+// resolveAllowedPrograms 直接回 builtin）。
+const policyStoreMocks = vi.hoisted(() => ({
+  get: vi.fn().mockResolvedValue(null),
+  set: vi.fn().mockResolvedValue(undefined),
+  clear: vi.fn().mockResolvedValue(false),
+  reset: vi.fn().mockResolvedValue(undefined),
+  listOverrides: vi.fn().mockResolvedValue([]),
+  listConfiguredKeys: vi.fn().mockResolvedValue([]),
+  history: vi.fn().mockResolvedValue([]),
+}));
+vi.mock("@/lib/policy/policy-store", () => ({
+  PolicyStore: class {},
+  PolicyStoreError: class extends Error {},
+  policyStore: policyStoreMocks,
+}));
 
 const baseCtx: ToolContext = {
   workspacePath: "/tmp/cosmgrid-test",

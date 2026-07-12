@@ -14,6 +14,8 @@
 // 保留为一个 token，不会被内部的 shell 元字符污染分段结果。
 
 import { parse as parseShellCommand } from "shell-quote";
+import { BUILTIN_ALLOWED_PROGRAMS } from "@/lib/policy/command-allowlist";
+import { DANGEROUS_COMMAND_PATTERNS } from "@/lib/security-invariants/dangerous-command-patterns";
 
 export type CommandVerdict = "allow" | "block";
 
@@ -21,37 +23,6 @@ export interface CommandCheck {
   verdict: CommandVerdict;
   reason: string;
 }
-
-// 危险模式（命中即 block，优先级最高）
-const DANGEROUS_PATTERNS: { re: RegExp; reason: string }[] = [
-  { re: /\brm\s+-[a-z]*r[a-z]*f|\brm\s+-[a-z]*f[a-z]*r/i, reason: "rm -rf 递归强删" },
-  { re: /\bsudo\b/i, reason: "sudo 提权" },
-  { re: /\bchmod\s+777\b/, reason: "chmod 777 放开全部权限" },
-  { re: /\bchown\b/i, reason: "chown 改属主" },
-  { re: /\bmkfs\b|\bdd\s+if=/i, reason: "磁盘级危险操作" },
-  { re: /:\(\)\s*\{.*\}\s*;/, reason: "fork 炸弹" },
-  { re: />\s*\/dev\/sd|>\s*\/dev\/disk/i, reason: "写裸设备" },
-  { re: /\bcurl\b[^|]*\|\s*(sh|bash|zsh)\b/i, reason: "curl 管道执行远程脚本" },
-  { re: /\bwget\b[^|]*\|\s*(sh|bash|zsh)\b/i, reason: "wget 管道执行远程脚本" },
-  { re: /\beval\b/i, reason: "eval 动态执行" },
-  { re: /\bshutdown\b|\breboot\b|\bhalt\b/i, reason: "关机/重启" },
-  { re: /\bgit\s+push\b/i, reason: "git push 推远端（需人工，禁止自动）" },
-  { re: /\b(npm|pnpm|yarn)\s+publish\b/i, reason: "发布包到 registry" },
-  { re: /\brm\s+-[a-z]*\s+\//, reason: "删除根级路径" },
-];
-
-// 允许的程序前缀（白名单；只允许开发常用 + 只读命令）
-const ALLOWED_PROGRAMS = new Set([
-  "pnpm", "npm", "yarn", "node", "npx",
-  "git", "ls", "cat", "echo", "pwd", "head", "tail", "wc", "grep", "rg", "find",
-  "tsc", "vitest", "jest", "eslint", "prettier", "python", "python3", "pip", "cargo", "go",
-  // 常用 shell 工具：切目录 + 文本处理 + 文件/路径工具。无网络、无提权、无破坏性；
-  // 危险用法（rm -rf / sudo / 重定向裸设备 / curl|sh 等）仍由上方黑名单拦截。
-  "cd", "which", "type", "date", "env", "printenv",
-  "sort", "uniq", "cut", "tr", "column", "comm", "paste", "seq", "nl",
-  "diff", "cmp", "file", "stat", "tree", "du", "basename", "dirname", "realpath", "readlink",
-  "sed", "awk", "mkdir", "touch", "cp", "mv", "jq",
-]);
 
 type ShellToken = string | { op: string; pattern?: string };
 
@@ -119,8 +90,18 @@ export function firstProgram(command: string): string {
 /**
  * 分类一条命令。block 优先于 allow。
  * 注意：含 shell 串联（; && || | ` $()）时，逐段都要过白名单，任一段不允许即 block。
+ *
+ * 引擎化改造方案阶段 1a：第三参数 `extraAllowed` 接 PolicyStore 已解析的允许程序集合。
+ * 默认值仍是 builtin（BUILTIN_ALLOWED_PROGRAMS，含 pip3 等）；调用方按需用
+ * `resolveAllowedPrograms(ctx.projectId)` 拿到 builtin ∪ 项目级 / 全局 override 后传入。
+ *
+ * 安全姿态不变：黑名单（DANGEROUS_PATTERNS / extraBlocked）优先级仍高于白名单。
  */
-export function checkCommand(command: string, extraBlocked: string[] = []): CommandCheck {
+export function checkCommand(
+  command: string,
+  extraBlocked: string[] = [],
+  extraAllowed: ReadonlySet<string> = BUILTIN_ALLOWED_PROGRAMS,
+): CommandCheck {
   const cmd = command.trim();
   if (!cmd) return { verdict: "block", reason: "空命令" };
 
@@ -132,7 +113,7 @@ export function checkCommand(command: string, extraBlocked: string[] = []): Comm
   }
 
   // 危险模式
-  for (const { re, reason } of DANGEROUS_PATTERNS) {
+  for (const { re, reason } of DANGEROUS_COMMAND_PATTERNS) {
     if (re.test(cmd)) return { verdict: "block", reason: `危险命令：${reason}` };
   }
 
@@ -145,7 +126,7 @@ export function checkCommand(command: string, extraBlocked: string[] = []): Comm
   const segments = tokenizeSegments(cmd);
   for (const seg of segments) {
     const prog = firstProgramFromTokens(seg);
-    if (!ALLOWED_PROGRAMS.has(prog)) {
+    if (!extraAllowed.has(prog)) {
       return { verdict: "block", reason: `程序 "${prog || seg.join(" ")}" 不在白名单` };
     }
   }

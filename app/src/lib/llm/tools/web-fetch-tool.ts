@@ -47,7 +47,9 @@ const paramsSchema = z.object({
 
 type WebFetchParams = z.infer<typeof paramsSchema>;
 
-const PRIVATE_HOSTNAMES = new Set(["localhost", "0.0.0.0"]);
+// 阶段 3 R7：黑名单常量已搬到 lib/security-invariants/ssrf-hosts.ts（PRIVATE hostnames 段）。
+// IPv4 段判断保留在此（数值范围不能塞 SET，得用算法）。
+import { isPrivateHost } from "@/lib/security-invariants/ssrf-hosts";
 
 /** IPv4 字面量是否落在内网/回环/链路本地/云 metadata 网段 */
 function isPrivateIPv4(host: string): boolean {
@@ -75,7 +77,7 @@ export function assertSafeUrl(rawUrl: string): { ok: true } | { ok: false; reaso
     return { ok: false, reason: `不支持的协议：${parsed.protocol}` };
   }
   const host = parsed.hostname.toLowerCase();
-  if (PRIVATE_HOSTNAMES.has(host) || host.endsWith(".local") || host === "::1") {
+  if (isPrivateHost(host)) {
     return { ok: false, reason: "拒绝访问本机/内网地址" };
   }
   if (isPrivateIPv4(host)) {

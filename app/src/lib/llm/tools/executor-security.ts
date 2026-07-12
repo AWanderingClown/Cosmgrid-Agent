@@ -1,20 +1,42 @@
 import type { AnyToolDefinition, ToolContext, ToolResult } from "./types";
 import { checkCommand } from "./command-safety";
 import { checkPath, checkWritePath } from "./path-safety";
+import { resolveAllowedPrograms } from "@/lib/policy/command-allowlist";
+import { capabilitiesForToolKind, enforceCapabilities } from "@/lib/llm/capability-registry";
 
 export type SecurityPrecheck =
-  | { denied: ToolResult }
+  | { denied: ToolResult; reasonCode?: "PATH_BLOCKED" | "COMMAND_BLOCKED" | "SKILL_CAPABILITY_DENIED" }
   | { security: ToolContext["security"] };
 
 /**
  * 按 tool.security 声明统一跑路径 / 命令安全检查。
  * 工具本体只声明安全类型，不再各自复制 checkPath/checkCommand。
+ *
+ * 引擎化阶段 1b（K7）：在 path/command 之外追加第 4 个判定——capability。
+ * 当前 active skill（如果 ctx.activeSkillCaps 有声明）必须可由本工具满足，缺少时直接 denied。
  */
 export async function runSecurityPrecheck(
   tool: AnyToolDefinition,
   parsed: any, // eslint-disable-line @typescript-eslint/no-explicit-any
   ctx: ToolContext,
 ): Promise<SecurityPrecheck> {
+  // K7 enforcement 入口：capability mismatch 也是硬阻断，与 path/command 同级。
+  // 注意：本检查放在 path/command 之前——capability 缺失意味着"这个 skill 不该调这类工具"，
+  // 是结构性错误，没必要再跑昂贵的 path/command 检查。
+  if (ctx.activeSkillCaps && ctx.activeSkillCaps.length > 0) {
+    const toolCaps = capabilitiesForToolKind(tool.security.kind);
+    const cap = enforceCapabilities(ctx.activeSkillCaps, toolCaps);
+    if (!cap.ok) {
+      return {
+        denied: {
+          status: "denied",
+          output: `已拦截：active skill 需要的能力 (${cap.missing.join(", ")}) 超出此工具 (${tool.security.kind}) 的能力范围`,
+        },
+        reasonCode: "SKILL_CAPABILITY_DENIED",
+      };
+    }
+  }
+
   const sec = tool.security;
 
   if (sec.kind === "read-path") {
@@ -36,8 +58,11 @@ export async function runSecurityPrecheck(
   if (sec.kind === "command") {
     const raw = parsed[sec.commandField];
     if (typeof raw !== "string") return { security: undefined };
-    const check = checkCommand(raw, ctx.blockedCommands ?? []);
-    if (check.verdict === "block") return { denied: { status: "denied", output: `已拦截：${check.reason}` } };
+    // 阶段 1a：用 PolicyStore 解析 builtin ∪ 项目级 / 全局 override。
+    // 拿不到项目上下文或 DB 异常时回退到 builtin（resolveAllowedPrograms 内部已经兜底）。
+    const allowedPrograms = await resolveAllowedPrograms(ctx.projectId);
+    const check = checkCommand(raw, ctx.blockedCommands ?? [], allowedPrograms);
+    if (check.verdict === "block") return { denied: { status: "denied", output: `已拦截：${check.reason}` }, reasonCode: "COMMAND_BLOCKED" };
     return { security: { kind: "command", verdict: check.verdict, reason: check.reason } };
   }
 

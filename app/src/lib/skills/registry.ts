@@ -1,5 +1,11 @@
 import type { SkillDefinition, SkillId } from "./types";
 
+/**
+ * 内置技能 seed（不修改）。阶段 1b 由 lib/db/skill-definitions.ts:seedBuiltinIfMissing
+ * 在项目启动 seed 进 DB 一次，selector 从 DB 读，不再直接读这个常量。
+ *
+ * 字段 source='builtin' / reviewStatus='approved' —— selector 只装 approved。
+ */
 export const CORE_SKILLS: SkillDefinition[] = [
   {
     id: "project_audit",
@@ -18,6 +24,8 @@ export const CORE_SKILLS: SkillDefinition[] = [
       "指出下一步最小可执行切入点。",
       "没有读取依据的内容必须标成未确认。",
     ],
+    source: "builtin",
+    reviewStatus: "approved",
   },
   {
     id: "plan_execution",
@@ -36,6 +44,8 @@ export const CORE_SKILLS: SkillDefinition[] = [
       "完成后运行相关测试或类型检查。",
       "如果验证失败，明确失败项和下一步修复点。",
     ],
+    source: "builtin",
+    reviewStatus: "approved",
   },
   {
     id: "verification_closure",
@@ -59,9 +69,19 @@ export const CORE_SKILLS: SkillDefinition[] = [
       { id: "lint_pass", description: "ESLint 无 error", kind: "lint" },
       { id: "build_pass", description: "构建无 error", kind: "build" },
     ],
+    source: "builtin",
+    reviewStatus: "approved",
   },
 ];
 
+/** 内置 seed 版本戳——seedBuiltinIfMissing 用它判断是否需要重 seed。 */
+export const SKILL_BUILTIN_VERSION = "builtin-2026-07-12";
+
+/**
+ * 同步查找。生产代码不要走这个（用 lib/db/skill-definitions.ts.listActive()）。
+ * 保留是为了让 selector.ts 这种"已 imports CORE_SKILLS"的快速路径不破。
+ */
 export function getSkillDefinition(id: SkillId): SkillDefinition | null {
   return CORE_SKILLS.find((skill) => skill.id === id) ?? null;
 }
+
