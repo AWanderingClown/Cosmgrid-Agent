@@ -28,6 +28,7 @@ import { policyOverrides } from "@/lib/db/policy-overrides";
 import { policyOverrideHistory, type PolicyOverrideHistoryRow } from "@/lib/db/policy-override-history";
 import type { PolicyScope } from "./types";
 import { scopeToKey } from "./scope-key";
+import { getDistributionOverrideJson } from "./distribution-overrides";
 
 export type PolicyStoreErrorCode =
   | "RESERVED_KEY"
@@ -75,6 +76,14 @@ export class PolicyStore {
    * 调用方负责 parse + 与 builtin 合并。
    */
   async get(policyKey: string, scope: PolicyScope): Promise<string | null> {
+    // distribution scope 的数据**唯一来源**是随构建带的 distribution-overrides.ts（发布方可编辑，
+    // 见 §5.2 K2），不落 DB、不写 audit，也不 fallback DB——distribution 是发布通道内置层，
+    // 不接受运行时 set（reset 已拒绝 distribution），故 DB 里不该、也不会有 distribution 行，
+    // 读 DB 只会引入误导性死路径。一处改动让全部 distribution 策略
+    // （markers/provider-error/user-tier/debate）都从这一个文件源取覆盖。
+    if (scope.level === "distribution") {
+      return getDistributionOverrideJson(policyKey);
+    }
     const row = await this.overrides.get(policyKey, scope);
     return row ? row.valueJson : null;
   }

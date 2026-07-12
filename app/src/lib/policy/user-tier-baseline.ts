@@ -114,12 +114,32 @@ export async function resolveUserTierBaseline(
 }
 
 /**
+ * 模块级生效缓存：默认 = builtin；hydrate 后并入 distribution override。
+ * scoreByUserBaseline（同步消费方）读它，保持同步签名。未 hydrate / 失败时兜底 builtin。
+ */
+let activeBaseline: ReadonlyArray<UserTierEntry> = BUILTIN_USER_TIER_BASELINE;
+let userTierHydrated = false;
+
+/** 启动时调用一次（chat-fallback 入口）；幂等，distribution override 缺失时保持 builtin。 */
+export async function hydrateUserTierBaseline(store: PolicyStore = policyStore): Promise<void> {
+  if (userTierHydrated) return;
+  activeBaseline = await resolveUserTierBaseline(store);
+  userTierHydrated = true;
+}
+
+/** 单测复位用。 */
+export function _resetUserTierHydration(): void {
+  activeBaseline = BUILTIN_USER_TIER_BASELINE;
+  userTierHydrated = false;
+}
+
+/**
  * 按 builtin 表给模型在某角色的分。
  * 兼容老 API 形态：null = 模型不在表，调用方 fallback 名字查表。
  */
 export function scoreByUserBaseline(modelName: string, role: string): number | null {
   const lower = modelName.toLowerCase();
-  const entry = BUILTIN_USER_TIER_BASELINE.find((e) => e.aliases.some((a) => lower.includes(a)));
+  const entry = activeBaseline.find((e) => e.aliases.some((a) => lower.includes(a)));
   if (!entry) return null;
   if (entry.strongRoles.length === 0) return Math.round(entry.score * 0.6);
   if (entry.strongRoles.includes(role)) return entry.score;

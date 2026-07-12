@@ -34,6 +34,9 @@ import { buildLlmInvocationAuditEvent } from "./invocation-audit";
 import { ensureModelLimitsLoaded } from "./model-limits";
 import { hydrateMessageRouterMarkers } from "./message-router";
 import { hydrateIntentActionMarkers } from "@/lib/workflow/semantic-intent-router";
+import { hydrateProviderErrorRules } from "@/lib/policy/provider-error-rules";
+import { hydrateUserTierBaseline } from "@/lib/policy/user-tier-baseline";
+import { hydrateDebateMarkers } from "@/lib/policy/debate-markers";
 import { isNormalFinishReason, isRecoverableTruncation } from "./finish-reason";
 import { hasEffectiveOutput } from "./response-completeness";
 import type { StepToolCall } from "./harness/doom-loop";
@@ -83,10 +86,14 @@ export async function streamWithFallback(
 
   // 预热 models.dev 输出上限表（幂等、不阻塞本轮）。首轮没拉到就用 CEILING 兜底，下轮起精确 clamp。
   void ensureModelLimitsLoaded();
-  // 预热引擎化 marker 表（幂等、不阻塞本轮）。builtin 是安全兜底，distribution override 缺失时行为不变。
-  // 必须 .catch：resolve 失败（如测试环境无 DB）时保持 builtin，不能冒泡成 unhandled rejection。
+  // 预热引擎化 marker 表 + provider 错误规则（幂等、不阻塞本轮）。builtin 是安全兜底，
+  // distribution override 缺失时行为不变。必须 .catch：resolve 失败（如测试环境无 DB）时保持
+  // builtin，不能冒泡成 unhandled rejection。
   void hydrateMessageRouterMarkers().catch(() => {});
   void hydrateIntentActionMarkers().catch(() => {});
+  void hydrateProviderErrorRules().catch(() => {});
+  void hydrateUserTierBaseline().catch(() => {});
+  void hydrateDebateMarkers().catch(() => {});
   await hydrateModelCooldowns(models.map((m) => m.modelId)).catch(() => {});
 
   // 跳过 cooldown 中的模型：从前往后找第一个不在 cooldown 的；前面被跳过的都触发 onSwitched("cooldown")

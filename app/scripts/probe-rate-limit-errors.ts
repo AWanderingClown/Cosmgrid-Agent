@@ -1,7 +1,7 @@
 // probe-rate-limit-errors.ts（1.2 真实验证入口 + 2026-07-02 多协议支持）
 //
 // 用途：探测各国产 / 主流 provider 的真实错误响应体（状态码 + body 结构 + 中文文案），
-// 把结果贴给 AI，AI 据此更新 app/src/lib/llm/provider-error-rules.ts 规则表。
+// 把结果贴给 AI，AI 据此更新 app/src/lib/policy/provider-error-rules.ts 规则表（引擎化后已搬到 policy 层）。
 //
 // ⚠️ 这个脚本只**读响应体**，不烧 token：故意触发 401/413/404 等"已确定会出错"的请求，
 // 不需要先耗尽真配额。

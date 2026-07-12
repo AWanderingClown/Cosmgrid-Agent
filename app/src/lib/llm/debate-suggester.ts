@@ -5,10 +5,10 @@
 // 只在"有多种方案 / 需要权衡取舍"的开放式问题上建议对弈（调试、翻译、改名这类有唯一正解
 // 的任务不该触发，否则提示变噪音）。
 //
-// 引擎化阶段 3：marker 列表搬到 lib/policy/debate-markers.ts（BUILTIN_DEBATE_MARKERS），
-// 同步路径优先走 builtin；async resolveDebateMarkers 留给"运营侧覆盖"未来入口使用。
+// 引擎化阶段 3：marker 列表搬到 lib/policy/debate-markers.ts，通过 getDebateMarkers() 读当前
+// 生效值——默认 builtin，hydrateDebateMarkers() 启动预热后含 distribution override（运营侧可调）。
 
-import { BUILTIN_DEBATE_MARKERS } from "@/lib/policy/debate-markers";
+import { getDebateMarkers } from "@/lib/policy/debate-markers";
 
 /** 太短的输入即便命中也不建议（避免"要不要"这种半句话误触发） */
 const MIN_LEN_FOR_SUGGEST = 8;
@@ -21,7 +21,7 @@ export function shouldSuggestDebate(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.length < MIN_LEN_FOR_SUGGEST) return false;
   const lower = trimmed.toLowerCase();
-  for (const m of BUILTIN_DEBATE_MARKERS) {
+  for (const m of getDebateMarkers()) {
     if (lower.includes(m)) return true;
   }
   return false;

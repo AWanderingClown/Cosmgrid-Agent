@@ -13,6 +13,15 @@
 //
 // 已知未实测：本表的中文关键词和自定义 code 是基于行业公开文档和经验值，
 // 真实响应体格式需要跑 probe 脚本回填。**先按公开信息写，实际不准的部分等 probe 数据回来再调整**。
+//
+// 引擎化改造方案 §6 阶段 2（2026-07-13 补齐，替换此前的空壳死代码）：
+// PROVIDER_ERROR_PATTERNS 是本策略的 builtin（真实规则，含 probe 实测）；distribution scope
+// override 可在不改代码/不发版的前提下新增 provider 或修正错误文案。getProviderPatterns 走
+// 模块级缓存（hydrateProviderErrorRules 启动预热 + builtin 兜底），保持同步签名零调用链侵入。
+
+import { z } from "zod";
+import type { PolicyDefinition, PolicyScope } from "./types";
+import { PolicyStore, policyStore } from "./policy-store";
 
 /** Provider 错误关键词模式集合 */
 export interface ProviderErrorPatterns {
@@ -279,14 +288,74 @@ export const PROVIDER_ERROR_PATTERNS: Record<string, ProviderErrorPatterns> = {
   },
 };
 
+// ——— 引擎化：PolicyDefinition + hydrate（阶段 2 补齐）———
+
+/** zod：override value_json 必须是 Record<providerType, ProviderErrorPatterns>（8 个字段全在）。 */
+const patternsShape = z.object({
+  rateLimitStatusCodes: z.array(z.number()),
+  authStatusCodes: z.array(z.number()),
+  contextOverflowStatusCodes: z.array(z.number()),
+  modelNotFoundStatusCodes: z.array(z.number()),
+  rateLimitKeywords: z.array(z.string()),
+  authKeywords: z.array(z.string()),
+  contextOverflowKeywords: z.array(z.string()),
+  modelNotFoundKeywords: z.array(z.string()),
+});
+const providerErrorOverrideSchema = z.record(z.string(), patternsShape);
+
+export const providerErrorRulesPolicy: PolicyDefinition<Record<string, ProviderErrorPatterns>> = {
+  key: "provider.error_patterns",
+  builtin: PROVIDER_ERROR_PATTERNS,
+  builtinVersion: "builtin-2026-07-13",
+  mergeKind: "override",
+  scopesAllowed: ["distribution"],
+
+  parse(raw: string): Record<string, ProviderErrorPatterns> {
+    return providerErrorOverrideSchema.parse(JSON.parse(raw));
+  },
+
+  // override 语义：按 provider 逐个合并——override 里出现的 provider 整条替换，
+  // 没出现的沿用 builtin（这样运营侧只需补一个新 provider，不必重列全部）。
+  merge(builtin, override): Record<string, ProviderErrorPatterns> {
+    return { ...builtin, ...override };
+  },
+};
+
 /**
- * 取出指定 provider 的错误规则。
+ * 模块级生效缓存：默认 = builtin（PROVIDER_ERROR_PATTERNS）；hydrate 后并入 distribution override。
+ * getProviderPatterns 读它保持同步，未 hydrate / resolve 失败时安全兜底到 builtin。
+ */
+let activePatterns: Record<string, ProviderErrorPatterns> = PROVIDER_ERROR_PATTERNS;
+let providerErrorHydrated = false;
+
+/** 启动时调用一次（chat-fallback 入口）；幂等，distribution override 缺失时保持 builtin。 */
+export async function hydrateProviderErrorRules(
+  store: PolicyStore = policyStore,
+): Promise<void> {
+  if (providerErrorHydrated) return;
+  const scope: PolicyScope = { level: "distribution", channel: "stable" };
+  const json = await store.get(providerErrorRulesPolicy.key, scope);
+  if (json) {
+    const override = providerErrorRulesPolicy.parse(json);
+    activePatterns = providerErrorRulesPolicy.merge(PROVIDER_ERROR_PATTERNS, override);
+  }
+  providerErrorHydrated = true;
+}
+
+/** 单测复位用：清掉 hydrate 状态 + 恢复 builtin。 */
+export function _resetProviderErrorHydration(): void {
+  activePatterns = PROVIDER_ERROR_PATTERNS;
+  providerErrorHydrated = false;
+}
+
+/**
+ * 取出指定 provider 的错误规则。读模块缓存 activePatterns（hydrate 后含 distribution override）。
  * - providerType 未传 / 未注册 → DEFAULT_ERROR_PATTERNS
  * - openai / openai-compatible → DEFAULT_ERROR_PATTERNS（这些 provider 走 OpenAI 协议标准错误体）
  */
 export function getProviderPatterns(providerType: string | undefined): ProviderErrorPatterns {
   if (!providerType) return DEFAULT_ERROR_PATTERNS;
-  const patterns = PROVIDER_ERROR_PATTERNS[providerType];
+  const patterns = activePatterns[providerType];
   if (patterns) return patterns;
   if (providerType.startsWith("openai")) return DEFAULT_ERROR_PATTERNS;
   return DEFAULT_ERROR_PATTERNS;

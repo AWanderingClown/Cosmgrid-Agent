@@ -77,4 +77,30 @@ export function builtinDebateMarkers(): ReadonlyArray<string> {
   return BUILTIN_DEBATE_MARKERS;
 }
 
+/**
+ * 模块级生效缓存：默认 = builtin；hydrate 后并入 distribution override。
+ * shouldSuggestDebate（同步消费方）通过 getDebateMarkers() 读它，保持同步。
+ */
+let activeDebateMarkers: ReadonlyArray<string> = BUILTIN_DEBATE_MARKERS;
+let debateHydrated = false;
+
+/** 启动时调用一次（chat-fallback 入口）；幂等，复用 resolveDebateMarkers 的 distribution 读取。 */
+export async function hydrateDebateMarkers(store: PolicyStore = policyStore): Promise<void> {
+  if (debateHydrated) return;
+  activeDebateMarkers = await resolveDebateMarkers(store);
+  debateHydrated = true;
+}
+
+/** 同步 getter：消费方读当前生效 marker（hydrate 后含 distribution override，否则 builtin）。 */
+export function getDebateMarkers(): ReadonlyArray<string> {
+  return activeDebateMarkers;
+}
+
+/** 单测复位用。 */
+export function _resetDebateHydration(): void {
+  activeDebateMarkers = BUILTIN_DEBATE_MARKERS;
+  debateHydrated = false;
+  invalidateDebateMarkersCache();
+}
+
 export const DEBATE_MARKERS_KEY = debateMarkersPolicy.key;

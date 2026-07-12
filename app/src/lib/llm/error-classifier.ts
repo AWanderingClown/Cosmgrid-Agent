@@ -13,7 +13,7 @@
 // 1.4 修复（2026-07-02）：新增 cli_not_installed / cli_not_logged_in 分类，
 //   专门给"本机 CLI 没装 / 没登录"用，UI 引导用户去安装而不是重试。
 
-import { getProviderPatterns, type ProviderErrorPatterns } from "./provider-error-rules";
+import { getProviderPatterns, type ProviderErrorPatterns } from "@/lib/policy/provider-error-rules";
 import { redactApiKeys } from "@/lib/security-invariants/api-key-patterns";
 
 /**
