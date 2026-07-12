@@ -32,7 +32,10 @@ import { runModelAttempt } from "./chat-fallback-attempt";
 import { buildRecoveryMessages, getPartialTextFromError, inferRole } from "./chat-fallback-recovery";
 import { buildLlmInvocationAuditEvent } from "./invocation-audit";
 import { ensureModelLimitsLoaded } from "./model-limits";
+import { hydrateMessageRouterMarkers } from "./message-router";
+import { hydrateIntentActionMarkers } from "@/lib/workflow/semantic-intent-router";
 import { isNormalFinishReason, isRecoverableTruncation } from "./finish-reason";
+import { hasEffectiveOutput } from "./response-completeness";
 import type { StepToolCall } from "./harness/doom-loop";
 import type { ChatMsg } from "./context-compressor";
 import {
@@ -48,6 +51,15 @@ export { toModelEndpoint };
 export type { ModelEndpoint, StreamCallbacks, StreamUsage, StreamWithFallbackOptions, SwitchReason };
 
 const MAX_AUTO_CONTINUATIONS = 2;
+
+function formatCooldownRemainingMs(ms: number): string {
+  const totalSeconds = Math.max(1, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0 && seconds > 0) return `${minutes} 分 ${seconds} 秒`;
+  if (minutes > 0) return `${minutes} 分钟`;
+  return `${seconds} 秒`;
+}
 
 /**
  * 流式对话，按顺序尝试 models 中的每一个端点。
@@ -71,6 +83,10 @@ export async function streamWithFallback(
 
   // 预热 models.dev 输出上限表（幂等、不阻塞本轮）。首轮没拉到就用 CEILING 兜底，下轮起精确 clamp。
   void ensureModelLimitsLoaded();
+  // 预热引擎化 marker 表（幂等、不阻塞本轮）。builtin 是安全兜底，distribution override 缺失时行为不变。
+  // 必须 .catch：resolve 失败（如测试环境无 DB）时保持 builtin，不能冒泡成 unhandled rejection。
+  void hydrateMessageRouterMarkers().catch(() => {});
+  void hydrateIntentActionMarkers().catch(() => {});
   await hydrateModelCooldowns(models.map((m) => m.modelId)).catch(() => {});
 
   // 跳过 cooldown 中的模型：从前往后找第一个不在 cooldown 的；前面被跳过的都触发 onSwitched("cooldown")
@@ -98,8 +114,8 @@ export async function streamWithFallback(
     // 这里把每个模型的剩余冷却时间拼进消息，error-classifier.ts 按前缀识别后原样透出。
     const detail = models
       .map((m) => {
-        const mins = Math.max(1, Math.ceil(getCooldownRemainingMs(m.modelId) / 60_000));
-        return `${m.displayLabel ?? m.modelName}（还需 ${mins} 分钟）`;
+        const remaining = formatCooldownRemainingMs(getCooldownRemainingMs(m.modelId));
+        return `${m.displayLabel ?? m.modelName}（还需 ${remaining}）`;
       })
       .join("、");
     throw new Error(`All models are cooling down: ${detail}`);
@@ -189,29 +205,48 @@ export async function streamWithFallback(
           return { usedModelId: target.modelId, switched: usedIndex !== 0 };
         }
 
-        if (!isNormalFinishReason(attempt.finishReason) &&
-          isRecoverableTruncation(attempt.finishReason)) {
+        // C 档第1/3步（2026-07-12）：finishReason 只回答"流断了没"，不回答"有没有真正的
+        // 正文"——MiniMax-M3 等模型会出现 finishReason=stop 但内容其实卡在未闭合 <think>
+        // 块里、思考写一半就提前收尾的情况（用户实测复现：界面冻结在"进行中"，无任何提示，
+        // 落库 success=1）。对齐 opencode/gemini-cli/OMO 的共同做法：把"结束了"和"有有效
+        // 内容"拆成两条独立判据，reasoning/思考内容不计入"有效正文"（见 response-completeness.ts）。
+        // "空/未闭合思考"和"length 等常规截断"复用同一条续跑通路，不新造机制。
+        const contentIncomplete =
+          isNormalFinishReason(attempt.finishReason) &&
+          !hasEffectiveOutput(attempt.partialText, attempt.streamUsage.toolCallCount);
+        const truncationReason = contentIncomplete ? "empty_response" : attempt.finishReason;
+
+        if (
+          contentIncomplete ||
+          (!isNormalFinishReason(attempt.finishReason) && isRecoverableTruncation(attempt.finishReason))
+        ) {
           if (continuationsForThisModel < MAX_AUTO_CONTINUATIONS) {
             callbacks.onRecovered?.("context_replay");
-            activeMessages = buildRecoveryMessages(activeMessages, attempt.partialText, attempt.finishReason);
+            activeMessages = buildRecoveryMessages(activeMessages, attempt.partialText, truncationReason);
             continuationsForThisModel++;
             continue;
           }
 
-          markModelFailed(target.modelId);
+          markModelFailed(target.modelId, "abnormal_finish");
           recordUsageEventOnly({
             target,
             usage: aggregateUsage,
-            finishReason: attempt.finishReason,
+            finishReason: truncationReason,
             startedAt: modelStartedAt,
           });
           if (usedIndex >= models.length - 1) {
-            throw new Error(`Model output was truncated after ${MAX_AUTO_CONTINUATIONS} automatic continuations`);
+            // C 档第5步（2026-07-12）：把 truncationReason 带进错误信息里，让
+            // error-classifier.ts 能区分"内容为空反复重试仍失败"和"length/步数截断反复
+            // 重试仍失败"——这两种对用户该说的话不一样（前者提示"换个问法"，后者提示
+            // "任务拆小"），之前两者共用同一句裸英文，词不达意。
+            throw new Error(
+              `Model output was truncated after ${MAX_AUTO_CONTINUATIONS} automatic continuations (reason: ${truncationReason})`,
+            );
           }
           const next = models[usedIndex + 1]!;
-          callbacks.onSwitched?.(target, next, { kind: "recovery", reason: attempt.finishReason });
+          callbacks.onSwitched?.(target, next, { kind: "recovery", reason: truncationReason });
           callbacks.onRecovered?.("fallback_handoff");
-          activeMessages = buildRecoveryMessages(activeMessages, attempt.partialText, attempt.finishReason);
+          activeMessages = buildRecoveryMessages(activeMessages, attempt.partialText, truncationReason);
           aggregateUsage = {
             inputTokens: 0,
             outputTokens: 0,
@@ -225,7 +260,7 @@ export async function streamWithFallback(
         }
 
         if (!isNormalFinishReason(attempt.finishReason)) {
-          markModelFailed(target.modelId);
+          markModelFailed(target.modelId, "abnormal_finish");
           recordUsageEventOnly({
             target,
             usage: aggregateUsage,
@@ -294,12 +329,12 @@ export async function streamWithFallback(
         // 是否尝试下一个模型？
         if (!classified.shouldFallback || usedIndex >= models.length - 1) {
           // 不可恢复 或 已是最后一个：标 failed，抛错
-          markModelFailed(target.modelId);
+          markModelFailed(target.modelId, classified.category);
           throw err;
         }
 
         // 标记 failed（确认要切才标，避免不该切的也进 cooldown）
-        markModelFailed(target.modelId);
+        markModelFailed(target.modelId, classified.category);
 
         // 触发 onSwitched（cooldown 跳过的已经在上面触发过）
         const next = models[usedIndex + 1]!;

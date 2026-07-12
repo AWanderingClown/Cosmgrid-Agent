@@ -2,17 +2,19 @@
 // 防止对一个刚失败的模型反复重试——失败次数越多，cooldown 越长
 //
 // 规则（窗口内连续失败 N 次）：
-//   1 次失败 → 1 分钟冷却
-//   2 次连续 → 5 分钟冷却
-//   3+ 次连续 → 30 分钟冷却
+//   限流/额度类：30 秒 → 1 分钟 → 2 分钟
+//   网络/超时/服务端抖动：10 秒 → 30 秒 → 1 分钟
+//   配置/上下文/权限类：不进入冷却，直接给用户看真实错误
 // 成功一次就清空
 //
 // 为什么这样：用户最痛的是"卡在某个坏模型上一直重试"，先快速熔断让 fallback 有机会接管；
-// 30 分钟是兜底——真要是模型下线了也不会频繁打扰。
+// 但冷却不能盖过真实错误，也不能把一次短暂抖动放大成 5 分钟不可用。
 
 import { modelCooldowns } from "@/lib/db/model-cooldowns";
+import type { LlmErrorCategory } from "./error-classifier";
 
-const COOLDOWN_MS = [60_000, 300_000, 1_800_000]; // 1m / 5m / 30m
+const RATE_LIMIT_COOLDOWN_MS = [30_000, 60_000, 120_000];
+const TRANSIENT_COOLDOWN_MS = [10_000, 30_000, 60_000];
 
 interface CooldownState {
   failures: number; // 连续失败次数（成功后清零）
@@ -31,6 +33,19 @@ function persist(modelId: string, next: CooldownState): void {
 
 function clearPersisted(modelId: string): void {
   void modelCooldowns.clear(modelId).catch(() => {});
+}
+
+function cooldownWindowsFor(reason: LlmErrorCategory | "abnormal_finish"): readonly number[] | null {
+  if (reason === "rate_limit") return RATE_LIMIT_COOLDOWN_MS;
+  if (
+    reason === "timeout" ||
+    reason === "network" ||
+    reason === "server_error" ||
+    reason === "abnormal_finish"
+  ) {
+    return TRANSIENT_COOLDOWN_MS;
+  }
+  return null;
 }
 
 export async function hydrateModelCooldowns(modelIds: readonly string[]): Promise<void> {
@@ -59,16 +74,19 @@ export function isInCooldown(modelId: string): boolean {
   return true;
 }
 
-/** 记录一次失败，下一次失败冷却时间会更长 */
-export function markModelFailed(modelId: string): void {
+/** 记录一次可恢复失败，下一次失败冷却时间会更长。返回 false 表示该错误不应进入冷却。 */
+export function markModelFailed(modelId: string, reason: LlmErrorCategory | "abnormal_finish" = "server_error"): boolean {
+  const windows = cooldownWindowsFor(reason);
+  if (!windows) return false;
   const prev = state.get(modelId) ?? { failures: 0, cooldownUntil: null };
   const nextFailures = prev.failures + 1;
-  const idx = Math.min(nextFailures - 1, COOLDOWN_MS.length - 1);
+  const idx = Math.min(nextFailures - 1, windows.length - 1);
   state.set(modelId, {
     failures: nextFailures,
-    cooldownUntil: Date.now() + COOLDOWN_MS[idx]!,
+    cooldownUntil: Date.now() + windows[idx]!,
   });
   persist(modelId, state.get(modelId)!);
+  return true;
 }
 
 /** 成功一次 → 清空该模型的失败计数 */

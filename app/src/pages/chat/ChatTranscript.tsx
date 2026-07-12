@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import type { ToolCallView } from "@/lib/work-artifact-views";
+import { CooldownErrorDescription } from "./CooldownErrorDescription";
 import { MessageItem, ReceiptItem } from "./ChatMessageItem";
 import { QueuedMessageItem } from "./QueuedMessageItem";
 import { formatElapsed, type StreamActivityPhase } from "./streaming-status";
@@ -20,6 +21,7 @@ export function ChatTranscript({
   toolCallsByMessage,
   streamError,
   onEnableWorkspaceProtection,
+  onStreamErrorClear,
 }: {
   availableModelCount: number;
   messages: ChatMessage[];
@@ -32,6 +34,7 @@ export function ChatTranscript({
   streamError: string | null;
   /** 2.1 步骤2/3 修复：非 git 工作文件夹时，工具卡片上"开启修改保护"按钮的回调 */
   onEnableWorkspaceProtection?: () => Promise<void>;
+  onStreamErrorClear?: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -100,7 +103,9 @@ export function ChatTranscript({
         // 补上同样的底部留白，跟消息列表的可见区域对齐。
         <div className="px-6 py-4" style={{ paddingBottom: inputAreaH + 16 }}>
           <Alert variant="destructive" className="bg-red-500/10 border-red-500/20">
-            <AlertDescription className="text-xs font-medium">{streamError}</AlertDescription>
+            <AlertDescription className="text-xs font-medium">
+              <CooldownErrorDescription message={streamError} onExpired={onStreamErrorClear} />
+            </AlertDescription>
           </Alert>
         </div>
       )}

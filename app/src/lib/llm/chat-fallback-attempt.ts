@@ -213,9 +213,46 @@ export async function runModelAttempt(
       abortSignal: localAbort.signal,
     });
 
-    for await (const delta of result.textStream) {
-      partialText += delta;
-      callbacks.onDelta(delta);
+    // C 档第2步（2026-07-12）：改读 fullStream 而不是只读 textStream。
+    // 关键发现：AI SDK 的 textStream getter 只过滤 part.type==="text-delta"
+    // （node_modules/ai/dist/index.mjs:8102-8114），reasoning-delta 会被直接丢弃——
+    // 对走结构化 reasoning 通道的 provider（如 DeepSeek 的 reasoning_content 映射），
+    // 旧代码不是"思考没显示"，是思考内容彻底丢失、完全不落 partialText，
+    // response-completeness.ts 的完整性判定也看不到它。
+    // 这里把 reasoning-delta 重新包一层 <think> 标签喂给 onDelta，跟现有
+    // parse-thinking.ts 的折叠渲染、response-completeness.ts 的可见正文判定无缝衔接，
+    // 不用改 UI 渲染层或消息持久化层。MiniMax-M3 这类把 <think> 内联在纯文本里发的
+    // 模型走的仍是 text-delta，不受影响（标签已经在文本里，原样透传）。
+    let reasoningOpen = false;
+    for await (const part of result.fullStream) {
+      if (part.type === "text-delta") {
+        let chunk = part.text;
+        if (reasoningOpen) {
+          // 防御性收尾：正常情况下 provider 会先发 reasoning-end 再发 text-delta，
+          // 这里兜底万一 provider 没规规矩矩发 reasoning-end 就直接开始吐正文。
+          chunk = `</think>${chunk}`;
+          reasoningOpen = false;
+        }
+        partialText += chunk;
+        callbacks.onDelta(chunk);
+      } else if (part.type === "reasoning-delta") {
+        if (!part.text) continue; // 部分 provider 会吐空字符串占位，不产出可见内容
+        const chunk = reasoningOpen ? part.text : `<think>${part.text}`;
+        reasoningOpen = true;
+        partialText += chunk;
+        callbacks.onDelta(chunk);
+      } else if (part.type === "reasoning-end") {
+        if (reasoningOpen) {
+          partialText += "</think>";
+          callbacks.onDelta("</think>");
+          reasoningOpen = false;
+        }
+      } else if (part.type === "error") {
+        // fullStream 用专门的 "error" part 传递流内错误（不像 textStream 那样直接让
+        // for-await 抛异常）——原样 throw，交给下面既有的 catch 分支处理，
+        // 保持 classifyLlmError/__partialText 兜底逻辑完全不变。
+        throw part.error;
+      }
     }
 
     const usage = await result.usage;

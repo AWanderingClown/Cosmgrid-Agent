@@ -577,3 +577,36 @@ describe("usage-tracker 分支覆盖：flush / options / savings / errors", () =
     expect(perfArg.latencyMs).toBe(1234);
   });
 });
+
+describe("recordUsageEvent — success 字段随 finishReason 联动（C 档第1/4步，2026-07-12）", () => {
+  // 这个联动本身是既有逻辑（success = isNormalFinishReason(finishReason)），没有改代码；
+  // 加这组测试是为了锁死它——chat-fallback.ts 现在会在"内容不完整"时改传
+  // finishReason="empty_response" 而不是模型原始报的 "stop"，落库的 success 必须
+  // 跟着变成 false，这张表才不会继续把"思考写一半就停"的假成功记成成功。
+  beforeEach(() => {
+    mocks.create.mockClear();
+    mocks.create.mockResolvedValue("usage-1");
+    mocks.savingsCreate.mockClear();
+    mocks.savingsCreate.mockResolvedValue(undefined);
+  });
+
+  it("finishReason='empty_response'（内容不完整判定）→ success=false", async () => {
+    await recordUsageEvent({ ...baseParams, finishReason: "empty_response" }, { awaitWrite: true });
+    expect(mocks.create.mock.calls[0]![0]).toMatchObject({ success: false });
+  });
+
+  it("finishReason='stop'（真正说完了）→ success=true", async () => {
+    await recordUsageEvent({ ...baseParams, finishReason: "stop" }, { awaitWrite: true });
+    expect(mocks.create.mock.calls[0]![0]).toMatchObject({ success: true });
+  });
+
+  it("finishReason='end_turn' → success=true", async () => {
+    await recordUsageEvent({ ...baseParams, finishReason: "end_turn" }, { awaitWrite: true });
+    expect(mocks.create.mock.calls[0]![0]).toMatchObject({ success: true });
+  });
+
+  it("finishReason='length'（截断）→ success=false", async () => {
+    await recordUsageEvent({ ...baseParams, finishReason: "length" }, { awaitWrite: true });
+    expect(mocks.create.mock.calls[0]![0]).toMatchObject({ success: false });
+  });
+});

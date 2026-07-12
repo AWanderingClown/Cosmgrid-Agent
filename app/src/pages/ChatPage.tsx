@@ -579,6 +579,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           streamElapsedMs={streamElapsedMs}
           toolCallsByMessage={toolCallsByMessage}
           streamError={streamError}
+          onStreamErrorClear={() => setStreamError(null)}
           onEnableWorkspaceProtection={
             workspacePath && !protectedWorkspaces.has(workspacePath)
               ? async () => {

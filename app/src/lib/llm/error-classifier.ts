@@ -14,6 +14,7 @@
 //   专门给"本机 CLI 没装 / 没登录"用，UI 引导用户去安装而不是重试。
 
 import { getProviderPatterns, type ProviderErrorPatterns } from "./provider-error-rules";
+import { redactApiKeys } from "@/lib/security-invariants/api-key-patterns";
 
 /**
  * LLM 错误分类
@@ -72,30 +73,12 @@ export interface ClassifiedLlmError {
 /**
  * 已知 API Key 模式（用于从错误信息里剥离）
  * 覆盖：OpenAI / Anthropic / Google / DeepSeek / GLM
- */
-const API_KEY_PATTERNS = [
-  /sk-ant-(?:api03-)?[A-Za-z0-9_\-]+/g, // Anthropic
-  /sk-proj-[A-Za-z0-9_\-]+/g, // OpenAI project
-  /sk-[A-Za-z0-9]{20,}/g, // OpenAI legacy
-  /AIza[A-Za-z0-9_\-]+/g, // Google
-  /gsk_[A-Za-z0-9_\-]+/g, // Grok
-];
-
-/** 统一的脱敏占位符（不暴露"被脱敏了"的事实，避免反向探测） */
-const REDACTED = "[REDACTED]";
-
-/**
- * 从任意错误信息里剥离 API Key 前缀（防御性）
- * @param raw - 原始错误信息
- * @returns 脱敏后的字符串
+ *
+ * 实现已搬到 lib/security-invariants/api-key-patterns.ts（阶段 3 R7 集中）。
+ * 本函数保留为稳定 API 入口（兼容所有 call sites），内部委托 redactApiKeys。
  */
 export function sanitizeError(raw: unknown): string {
-  if (raw == null) return "";
-  let text = String(raw);
-  for (const pattern of API_KEY_PATTERNS) {
-    text = text.replace(pattern, REDACTED);
-  }
-  return text;
+  return redactApiKeys(raw);
 }
 
 /**
@@ -499,11 +482,16 @@ export function classifyLlmError(
     // 注意：detail 里含运行时才知道的模型名/剩余分钟，天生没法走 msg() 那套"静态 zh
     // 兜底 + i18n key"模式（key 查回来的是写死的静态文案，会把这些动态信息盖掉）——
     // 这里直接拼接返回，不接 t()。
-    const detail = rawMessage.slice(rawMessage.indexOf(":") + 1).trim();
+    //
+    // review F-15 修复（2026-07-13 审查）：之前用 rawMessage.slice(...) 切片 →
+    // 未走 sanitize 的 rawMessage 文本会进 userMessage,理论上有 API key 泄漏窗口。
+    // 修法：先 sanitize rawMessage，再从 sanitized 文本里取 detail 分段。
+    const idx = sanitized.indexOf(":");
+    const detail = idx >= 0 ? sanitized.slice(idx + 1).trim() : sanitized;
     return {
       category: "all_models_cooling",
       httpStatus: 503,
-      userMessage: `所有可用模型目前都在冷却中：${detail}。重启应用可立即清空冷却状态后重试，或稍等冷却结束`,
+      userMessage: `所有可用模型目前都在冷却中：${detail}。倒计时结束后可以继续发送`,
       technicalMessage: sanitized,
       shouldFallback: false,
     };
@@ -512,6 +500,21 @@ export function classifyLlmError(
   // 修复（2026-07-02）：chat-fallback.ts 撞到自动续跑上限/finishReason异常时抛的裸错误，
   // 只有在链上最后一个模型也失败时才会抛出（前面的模型已经全部试过），所以不用 shouldFallback。
   if (lower.includes("truncated after") && lower.includes("automatic continuations")) {
+    // C 档第1/5步（2026-07-12）：finishReason 正常（stop/end_turn）但可见正文为空/只有
+    // 未闭合思考块，反复重试仍拿不到内容——这跟"length/步数截断反复重试仍失败"是两种
+    // 不同的故事，该给用户的建议也不一样（换问法 vs 拆任务），所以单独识别。
+    if (lower.includes("reason: empty_response")) {
+      return {
+        category: "tool_budget_exhausted",
+        httpStatus: 500,
+        userMessage: msg(
+          "模型这轮反复没有产出有效内容（可能思考到一半就停了），已自动重试多次仍未成功。建议换个问法，或切换其他模型试试",
+          "errorClassifier.empty_response_exhausted",
+        ),
+        technicalMessage: sanitized,
+        shouldFallback: false,
+      };
+    }
     return {
       category: "tool_budget_exhausted",
       httpStatus: 500,
@@ -534,6 +537,17 @@ export function classifyLlmError(
       technicalMessage: sanitized,
       shouldFallback: false,
     };
+  }
+
+  // C 档第5步（2026-07-12）：落到 unknown 说明现有 provider 规则表（provider-error-rules.ts）
+  // 没识别出这条错误——之前这种情况原始报文直接丢失，只能靠用户截图反馈才知道要补规则，
+  // 跟本文件开头写的"probe 脚本探测后回填"工作流对不上（没有报文就没法回填）。这里只是
+  // 留痕，不代表分类结果本身变了（分类仍然是 unknown/shouldFallback:false，行为不变）。
+  if (providerType) {
+    console.warn(
+      `[error-classifier] 未识别的 provider 错误（可作为 probe 数据回填 provider-error-rules.ts）: ` +
+        `provider=${providerType} statusCode=${statusCode ?? "N/A"} message=${sanitized}`,
+    );
   }
 
   return {

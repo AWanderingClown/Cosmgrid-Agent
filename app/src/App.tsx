@@ -16,6 +16,7 @@ import {
   usageEvents,
   type TokenPlan,
 } from "@/lib/db";
+import { seedBuiltinSkills } from "@/lib/skills/seed";
 import { planUsageLevel, type UsageLevel } from "@/lib/llm/plan-thresholds";
 import { computeTokenPlanUsageMap } from "@/lib/llm/token-plan-usage";
 import { migrateLegacyApiKeys } from "@/lib/keystore";
@@ -153,6 +154,17 @@ function App() {
   useEffect(() => {
     void initSchema()
       .then(() => seedBuiltInTemplates())
+      .then(() => seedBuiltinSkills())
+      // 阶段 3 review F-02 修复：skill seed 失败不应让应用进入 dbError 状态。
+      // 选 上 selector 有 CORE_SKILLS 兜底，缺 seed 只意味着"少 3 条 builtin"，
+      // 不影响主聊天/工具流。降级为 warn + 仍 setDbReady，让用户进 UI 才能手动修复。
+      .catch((err: unknown) => {
+        console.warn(
+          "[seedBuiltinSkills] 失败；selector 会用 CORE_SKILLS 常量兜底，" +
+          "功能可用但 skill 列在 DB 侧未登记。重启重试。err =",
+          err,
+        );
+      })
       .then(() => setDbReady(true))
       .catch((err: unknown) => setDbError(err instanceof Error ? err.message : String(err)));
   }, []);

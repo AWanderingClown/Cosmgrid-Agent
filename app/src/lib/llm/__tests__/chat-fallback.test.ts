@@ -53,6 +53,10 @@ beforeEach(() => {
   vi.mocked(recordUsageEvent).mockReset();
 });
 
+// C 档第2步（2026-07-12）：生产代码改读 result.fullStream（text-delta/reasoning-delta
+// 分轨），不再只读 textStream——mock 也要跟着提供 fullStream，否则
+// `for await (const part of result.fullStream)` 直接报 undefined 不可迭代。
+// 仍然保留 textStream 字段（没有消费方读它了，留着无害，避免要改全部调用点类型）。
 function makeSuccessStream(
   deltas: string[],
   usage = { inputTokens: 10, outputTokens: 5 },
@@ -61,6 +65,31 @@ function makeSuccessStream(
   return {
     textStream: (async function* () {
       for (const d of deltas) yield d;
+    })(),
+    fullStream: (async function* () {
+      for (const d of deltas) yield { type: "text-delta" as const, id: "0", text: d };
+    })(),
+    usage: Promise.resolve(usage),
+    finishReason: Promise.resolve(finishReason),
+  };
+}
+
+/** 模拟走结构化 reasoning 通道（如 DeepSeek reasoning_content）的模型：先吐若干
+ *  reasoning-delta，再吐若干 text-delta。用于验证 fullStream 分轨改造真的生效。 */
+function makeReasoningStream(
+  reasoningDeltas: string[],
+  textDeltas: string[],
+  usage = { inputTokens: 10, outputTokens: 5 },
+  finishReason = "stop",
+) {
+  return {
+    textStream: (async function* () {
+      for (const d of textDeltas) yield d;
+    })(),
+    fullStream: (async function* () {
+      for (const d of reasoningDeltas) yield { type: "reasoning-delta" as const, id: "r0", text: d };
+      yield { type: "reasoning-end" as const, id: "r0" };
+      for (const d of textDeltas) yield { type: "text-delta" as const, id: "t0", text: d };
     })(),
     usage: Promise.resolve(usage),
     finishReason: Promise.resolve(finishReason),
@@ -72,6 +101,9 @@ function makeFailingStream(error: unknown) {
     textStream: (async function* () {
       throw error;
     })(),
+    fullStream: (async function* () {
+      throw error;
+    })(),
     usage: Promise.resolve(undefined),
     finishReason: Promise.resolve(undefined),
   };
@@ -81,6 +113,10 @@ function makePartialFailingStream(deltas: string[], error: unknown) {
   return {
     textStream: (async function* () {
       for (const d of deltas) yield d;
+      throw error;
+    })(),
+    fullStream: (async function* () {
+      for (const d of deltas) yield { type: "text-delta" as const, id: "0", text: d };
       throw error;
     })(),
     usage: Promise.resolve(undefined),
@@ -457,6 +493,126 @@ describe("streamWithFallback - 非用户中断自动恢复", () => {
   });
 });
 
+describe("streamWithFallback - fullStream 分轨 reasoning/text（C 档第2步，2026-07-12）", () => {
+  // 关键发现：AI SDK 的 textStream getter 只过滤 text-delta，reasoning-delta 会被
+  // 直接丢弃（见 chat-fallback-attempt.ts 里的源码引用）——对走结构化 reasoning
+  // 通道的 provider（DeepSeek 等），旧代码根本不会把思考内容纳入 partialText，
+  // 既不显示也不参与完整性判定。这组测试证明 fullStream 改造后思考内容被正确
+  // 包装成 <think> 标签、完整流入 onDelta 和最终落库内容。
+  it("reasoning-delta 被包装成 <think> 标签，与 text-delta 正确拼接", async () => {
+    mocks.streamText.mockReturnValueOnce(
+      makeReasoningStream(["先想一下，", "今天是星期几"], ["星期日，2026 年 7 月 12 日。"]),
+    );
+
+    const deltas: string[] = [];
+    const cbs: StreamCallbacks = { onDelta: (d) => deltas.push(d) };
+
+    const result = await streamWithFallback([primary], [{ role: "user", content: "今天星期几" }], cbs);
+
+    expect(result).toEqual({ usedModelId: "m-primary", switched: false });
+    const full = deltas.join("");
+    expect(full).toBe("<think>先想一下，今天是星期几</think>星期日，2026 年 7 月 12 日。");
+  });
+
+  it("只有 reasoning-delta 没有 text-delta（纯思考无正文）→ 当截断自动续写", async () => {
+    // 对齐第1步的完整性判定：reasoning 永远不算"可见正文"，哪怕它被完整包好 <think> 标签。
+    mocks.streamText
+      .mockReturnValueOnce(makeReasoningStream(["想了很久但没有结论"], []))
+      .mockReturnValueOnce(makeSuccessStream(["这是真正的正文"]));
+
+    const result = await streamWithFallback([primary], [{ role: "user", content: "x" }], { onDelta: () => {} });
+
+    expect(result).toEqual({ usedModelId: "m-primary", switched: false });
+    expect(mocks.streamText).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("streamWithFallback - 内容完整性校验（C 档第1/3步，2026-07-12）", () => {
+  // 用户实测复现：MiniMax-M3 finishReason=stop，但内容卡在未闭合的 <think> 块里，
+  // 没有任何可见正文。旧逻辑只信 finishReason=stop → 直接当成功落库，界面冻结在
+  // "进行中"、无提示。新逻辑：finishReason 正常但可见正文为空 → 当截断处理，自动续跑。
+  it("finishReason=stop 但只有未闭合的 <think>（无正文）→ 当截断自动续写，不当成功", async () => {
+    mocks.streamText
+      .mockReturnValueOnce(
+        makeSuccessStream(
+          ["<think>用户问今天星期几，我需要想一下"],
+          { inputTokens: 10, outputTokens: 20 },
+          "stop",
+        ),
+      )
+      .mockReturnValueOnce(
+        makeSuccessStream(["</think>星期日，2026 年 7 月 12 日。"], { inputTokens: 5, outputTokens: 10 }, "stop"),
+      );
+
+    const deltas: string[] = [];
+    const recovered: Array<{ mode: string }> = [];
+    const cbs: StreamCallbacks = {
+      onDelta: (d) => deltas.push(d),
+      onRecovered: (mode) => recovered.push({ mode }),
+    };
+
+    const result = await streamWithFallback([primary], [{ role: "user", content: "今天星期几" }], cbs);
+
+    expect(result).toEqual({ usedModelId: "m-primary", switched: false });
+    expect(mocks.streamText).toHaveBeenCalledTimes(2);
+    expect(recovered).toEqual([{ mode: "context_replay" }]);
+    // 最终 usage 落库时用的是"最后一次真正成功"的 finishReason，不是 empty_response
+    expect(recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ finishReason: "stop" }),
+    );
+    const secondCall = mocks.streamText.mock.calls[1]![0] as { messages: Array<{ role: string; content: string }> };
+    expect(secondCall.messages.at(-1)?.content).toContain("从刚才中断处继续");
+  });
+
+  it("finishReason=stop 且正文完全为空 → 当截断自动续写", async () => {
+    mocks.streamText
+      .mockReturnValueOnce(makeSuccessStream([""], { inputTokens: 10, outputTokens: 0 }, "stop"))
+      .mockReturnValueOnce(makeSuccessStream(["实际的回答内容"], { inputTokens: 5, outputTokens: 10 }, "stop"));
+
+    const deltas: string[] = [];
+    const result = await streamWithFallback(
+      [primary],
+      [{ role: "user", content: "x" }],
+      { onDelta: (d) => deltas.push(d) },
+    );
+
+    expect(result).toEqual({ usedModelId: "m-primary", switched: false });
+    expect(mocks.streamText).toHaveBeenCalledTimes(2);
+    expect(deltas.join("")).toBe("实际的回答内容");
+  });
+
+  it("连续多次空内容超过续写预算后切 fallback，不会无限重试同一模型", async () => {
+    mocks.streamText
+      .mockReturnValueOnce(makeSuccessStream(["<think>想"], { inputTokens: 1, outputTokens: 1 }, "stop"))
+      .mockReturnValueOnce(makeSuccessStream(["<think>又想"], { inputTokens: 1, outputTokens: 1 }, "stop"))
+      .mockReturnValueOnce(makeSuccessStream(["<think>还在想"], { inputTokens: 1, outputTokens: 1 }, "stop"))
+      .mockReturnValueOnce(makeSuccessStream(["fallback 给出了正文"], { inputTokens: 1, outputTokens: 1 }, "stop"));
+
+    const result = await streamWithFallback(
+      [primary, fallback],
+      [{ role: "user", content: "x" }],
+      { onDelta: () => {} },
+    );
+
+    expect(result).toEqual({ usedModelId: "m-fallback", switched: true });
+    // primary 最多重试 MAX_AUTO_CONTINUATIONS(2) 次后放弃切 fallback：共 3 次 primary + 1 次 fallback
+    expect(mocks.streamText).toHaveBeenCalledTimes(4);
+    expect(recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: "m-primary", finishReason: "empty_response" }),
+    );
+  });
+
+  it("正文非空即使很短也不触发截断逻辑（不误伤正常简短回答）", async () => {
+    mocks.streamText.mockReturnValueOnce(makeSuccessStream(["好的"], { inputTokens: 5, outputTokens: 2 }, "stop"));
+
+    const result = await streamWithFallback([primary], [{ role: "user", content: "x" }], { onDelta: () => {} });
+
+    expect(result).toEqual({ usedModelId: "m-primary", switched: false });
+    expect(mocks.streamText).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("streamWithFallback - 无 fallback", () => {
   it("主模型失败直接抛错（没有 fallback）", async () => {
     mocks.streamText.mockReturnValueOnce(
@@ -519,14 +675,14 @@ describe("streamWithFallback - cooldown 行为", () => {
 
   // 真实事故（2026-07-05）：链上所有模型都在冷却中时，之前抛的是一句生硬英文
   // "All models are cooling down — please try again later"，用户不知道具体哪个模型、
-  // 还要等多久。现在报错里要带上每个模型的显示名 + 剩余分钟，交给 error-classifier.ts 翻译。
-  it("链上所有模型都在冷却中 → 抛错带上每个模型的名字和剩余分钟数", async () => {
+  // 还要等多久。现在报错里要带上每个模型的显示名 + 剩余时间，交给 error-classifier.ts 翻译。
+  it("链上所有模型都在冷却中 → 抛错带上每个模型的名字和剩余时间", async () => {
     markModelFailed(primary.modelId);
     markModelFailed(fallback.modelId);
     const cbs: StreamCallbacks = { onDelta: () => {} };
 
     await expect(streamWithFallback([primary, fallback], [{ role: "user", content: "x" }], cbs)).rejects.toThrow(
-      /All models are cooling down: Primary（还需 \d+ 分钟）、Fallback（还需 \d+ 分钟）/,
+      /All models are cooling down: Primary（还需 \d+(?: 分 \d+ 秒| 分钟| 秒)）、Fallback（还需 \d+(?: 分 \d+ 秒| 分钟| 秒)）/,
     );
   });
 });

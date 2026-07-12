@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   sanitizeError,
   classifyLlmError,
@@ -107,6 +107,26 @@ describe("classifyLlmError", () => {
     expect(result.httpStatus).toBe(500);
   });
 
+  // C 档第5步（2026-07-12）：unknown 兜底时如果带了 providerType，留一条 console.warn
+  // 痕迹（provider + statusCode + 脱敏后的报文），给以后手动跑 probe 脚本回填
+  // provider-error-rules.ts 提供依据——不代表分类结果本身变化，纯粹是留痕基础设施。
+  it("未知错误 + 传了 providerType → console.warn 留痕（供以后 probe 回填规则），分类结果不变", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = classifyLlmError(new Error("某种从没见过的错误文案"), undefined, "MiniMax");
+    expect(result.category).toBe("unknown");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]![0]).toContain("MiniMax");
+    expect(warnSpy.mock.calls[0]![0]).toContain("某种从没见过的错误文案");
+    warnSpy.mockRestore();
+  });
+
+  it("未知错误但没传 providerType → 不留痕（没有 provider 上下文，留痕也没法回填规则表）", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    classifyLlmError(new Error("some weird error"));
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   // 修复（2026-07-02，用户实测发现）：chat-fallback.ts 撞续跑/步数预算上限时抛的裸错误，
   // 之前落进 unknown 变成没有信息量的"对话失败，请稍后重试"，现在应该有专属分类和引导文案。
   it("续跑预算耗尽（chat-fallback.ts 裸错误）→ tool_budget_exhausted，不建议盲目重试", () => {
@@ -122,8 +142,54 @@ describe("classifyLlmError", () => {
     expect(result.shouldFallback).toBe(false);
   });
 
+  // C 档第1/5步（2026-07-12）：finishReason 正常但内容为空（思考写一半就停）反复重试仍
+  // 失败，跟"length/步数截断反复失败"该给用户的建议不一样（换问法 vs 拆任务），
+  // chat-fallback.ts 现在会把 reason 带进错误信息里，这里要能识别出来给专属文案。
+  it("内容为空反复重试耗尽（reason: empty_response）→ tool_budget_exhausted，提示换问法而不是拆任务", () => {
+    const result = classifyLlmError(
+      new Error("Model output was truncated after 2 automatic continuations (reason: empty_response)"),
+    );
+    expect(result.category).toBe("tool_budget_exhausted");
+    expect(result.userMessage).toContain("换个问法");
+    expect(result.userMessage).not.toContain("拆成更小的步骤");
+    expect(result.shouldFallback).toBe(false);
+  });
+
+  it("length 截断反复重试耗尽 → 仍是原来的'拆任务'文案，不受 empty_response 分支影响", () => {
+    const result = classifyLlmError(
+      new Error("Model output was truncated after 2 automatic continuations (reason: length)"),
+    );
+    expect(result.category).toBe("tool_budget_exhausted");
+    expect(result.userMessage).toContain("拆成更小的步骤");
+  });
+
+  // 回归锁定：msg() 的实现是 `t ? (t(key) || zh) : zh`。i18n/index.ts 配了
+  // fallbackLng: "zh-CN"（见该文件 77-82 行注释：查不到当前语言翻译会自动 fallback 到
+  // zh-CN），所以真正的安全网是"key 必须存在于 zh-CN.json"——如果连 zh-CN.json 都没有
+  // 这个 key，i18next 没有更下游的 fallback 了，会把裸 key 字符串显示给用户。第一次加
+  // empty_response_exhausted 分支时就忘了同步补两份 locale 文件，是可复现的真实用户可见
+  // bug（useChatStream.ts/StageChat.tsx 等真实调用方都会传 t），不是理论问题。这里直接读
+  // 真实的 zh-CN.json 资源文件（模拟 i18next 用 dot-path 在 resources 里查找的真实行为），
+  // 锁死"新增 errorClassifier.* 分类必须同步在 locale 文件里补 key"这条纪律。
+  it("errorClassifier.* 用到的每个 key 都必须存在于 zh-CN.json（fallbackLng，缺了就是裸 key 兜底）", async () => {
+    const zhCN = (await import("../../../i18n/locales/zh-CN.json")) as unknown as {
+      errorClassifier: Record<string, string>;
+    };
+    const lookupLikeI18next = (key: string): string => {
+      const [ns, leaf] = key.split(".");
+      if (ns !== "errorClassifier") return key;
+      return zhCN.errorClassifier[leaf!] ?? key; // 真实 i18next：找不到就返回裸 key
+    };
+    const result = classifyLlmError(
+      new Error("Model output was truncated after 2 automatic continuations (reason: empty_response)"),
+      lookupLikeI18next,
+    );
+    expect(result.userMessage).not.toBe("errorClassifier.empty_response_exhausted");
+    expect(result.userMessage).toContain("换个问法");
+  });
+
   // 真实事故（2026-07-05，用户实测发现）：链上所有模型都在冷却中时的裸错误，之前落进
-  // unknown，用户只看到一句生硬英文，不知道哪几个模型、还要等多久、也不知道重启能清空。
+  // unknown，用户只看到一句生硬英文，不知道哪几个模型、还要等多久。
   it("全员冷却（chat-fallback.ts 裸错误）→ all_models_cooling，带上具体模型和剩余时间", () => {
     const result = classifyLlmError(
       new Error("All models are cooling down: MiniMax-M3（还需 4 分钟）、agnes-2.0-flash（还需 12 分钟）"),
@@ -132,7 +198,7 @@ describe("classifyLlmError", () => {
     expect(result.shouldFallback).toBe(false);
     expect(result.userMessage).toContain("MiniMax-M3（还需 4 分钟）");
     expect(result.userMessage).toContain("agnes-2.0-flash（还需 12 分钟）");
-    expect(result.userMessage).toContain("重启应用");
+    expect(result.userMessage).toContain("倒计时结束后可以继续发送");
   });
 });
 

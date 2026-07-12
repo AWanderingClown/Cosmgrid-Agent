@@ -38,10 +38,14 @@ const apiFallback: ModelEndpoint = {
   displayLabel: "API",
 };
 
+// C 档第2步（2026-07-12）：生产代码改读 result.fullStream，mock 要跟着提供。
 function makeSuccessStream(deltas: string[]) {
   return {
     textStream: (async function* () {
       for (const d of deltas) yield d;
+    })(),
+    fullStream: (async function* () {
+      for (const d of deltas) yield { type: "text-delta" as const, id: "0", text: d };
     })(),
     usage: Promise.resolve({ inputTokens: 1, outputTokens: 2 }),
     finishReason: Promise.resolve("stop"),
@@ -84,6 +88,10 @@ describe("streamWithFallback - CLI 非用户中断恢复", () => {
     mocks.streamViaCli.mockImplementation(async (_endpoint, _messages, callbacks) => {
       cliCalls += 1;
       callbacks.onSession?.("sess-1");
+      // C 档第1步（2026-07-12）之后 chat-fallback.ts 会校验可见正文是否为空——真实 CLI
+      // 流一定会吐出实际文本，mock 也要跟着模拟，否则会被"内容为空"判定成截断触发
+      // 额外一轮重试，制造跟真实场景不符的调用次数。
+      callbacks.onDelta(cliCalls === 1 ? "第一段。" : "第二段。");
       return cliCalls === 1
         ? {
             inputTokens: 10,
@@ -114,7 +122,10 @@ describe("streamWithFallback - CLI 非用户中断恢复", () => {
     expect(mocks.streamViaCli).toHaveBeenCalledTimes(2);
     expect(mocks.streamText).not.toHaveBeenCalled();
     expect(recovered).toContain("native_resume");
-    expect(deltas.join("")).toBe("");
+    // 原来这里断言的是 ""——纯粹是旧 mock 从不调用 onDelta 的副产品，不是这个测试
+    // 真正要验证的行为（它验证的是"优先原生续跑、不切 API fallback"）。mock 补上真实
+    // delta 后，这里改成校验两段真实吐出的文本被正确拼接。
+    expect(deltas.join("")).toBe("第一段。第二段。");
     expect(result).toEqual({ usedModelId: "m-claude-cli", switched: false });
   });
 });
