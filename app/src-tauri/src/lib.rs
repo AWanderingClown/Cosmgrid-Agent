@@ -23,8 +23,18 @@ use commands::rpc::{kill_rpc_process, spawn_rpc_process, write_rpc_stdin, RpcChi
 use commands::shell::{git_commit_file, git_read, init_shadow_git_repo, run_shell_args, run_shell_command};
 use security::resolve_realpath;
 
+use std::time::Duration;
 use tauri::Emitter;
 use tauri::Manager;
+use tauri::WindowEvent;
+
+// 窗口关闭看门狗超时（2026-07-13 真实事故：点击关闭无响应，此前两次修复只给了 JS 侧
+// 清理阶段加超时，但清理完之后真正调用 destroy()/close() 那一步完全没有保护——如果这个
+// IPC 往返因为任何原因挂起，JS 层加多少 Promise.race 都没用，因为"不再等待"不等于
+// "窗口真的关闭了"。这里在 Rust 侧起一个独立于 webview/IPC 的 tokio 定时任务：无论 JS
+// 那边清理/关闭逻辑是否卡住，都保证收到关闭请求后固定时间内强制终止整个进程。多数情况下
+// JS 侧会在这之前就正常关闭，看门狗根本不会触发；只有在 JS/IPC 真的失控时才兜底。
+const WINDOW_CLOSE_WATCHDOG_SECS: u64 = 5;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -38,6 +48,15 @@ pub fn run() {
                 let _ = window.unminimize();
             }
         }))
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { .. } = event {
+                let app_handle = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(WINDOW_CLOSE_WATCHDOG_SECS)).await;
+                    app_handle.exit(0);
+                });
+            }
+        })
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_shell::init())
