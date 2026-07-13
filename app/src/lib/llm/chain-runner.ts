@@ -280,7 +280,7 @@ export interface ChainResult {
  *   1. controller.signal.aborted → 立即返 { stoppedAt: role }
  *   2. pickChainRoleModel(role, bindings, models) → 选模型；null 则跳过
  *   3. buildChainMessages(role, userTask, chainCtx, !!tools) → 构造 messages
- *   4. streamWithFallback([model], messages, callbacks, { signal, tools, maxToolSteps: 12 })
+ *   4. streamWithFallback([model], messages, callbacks, { signal, tools, maxToolSteps: 20 })
  *      ★ **tools 必传**——chain 角色能真干活，重演 M3 bug 防线
  *   5. **nudge 闭环**（H 阶段逻辑）：lastUsage.toolCallCount=0 + finishReason="stop" + 意图命中 → 回填 buildIntentNudgePrompt 重答一次
  *   6. executedRoles.push + onRoleDone → 继续下一跳
@@ -370,7 +370,7 @@ export async function runChain(args: ChainArgs): Promise<ChainResult> {
           {
             signal: args.controller.signal,
             // ★ 必传：chain 角色要有真工具；fallback 模型自己也有 confirm 回调（来自 ChatPage 透传）
-            ...(args.tools ? { tools: args.tools, maxToolSteps: 12 } : {}),
+            ...(args.tools ? { tools: args.tools, maxToolSteps: 20 } : {}),
             // conversationId 透传给 streamWithFallback 让 UsageEvent 关联
             ...(args.conversationId ? { conversationId: args.conversationId } : {}),
             ...(args.projectId ? { projectId: args.projectId } : {}),

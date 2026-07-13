@@ -103,7 +103,7 @@ export async function runChatStreamRuntime(
         ...(args.tools
           ? {
             tools: args.tools,
-            maxToolSteps: 12,
+            maxToolSteps: 20,
             ...(forceToolChoiceRequired ? { toolChoice: "required" as const } : {}),
           }
           : {}),

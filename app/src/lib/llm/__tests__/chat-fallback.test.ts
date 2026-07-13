@@ -396,6 +396,28 @@ describe("streamWithFallback - 非用户中断自动恢复", () => {
     expect(secondCall.messages.at(-1)?.content).toContain("从刚才中断处继续");
   });
 
+  it("finishReason=tool-calls 连续续接超过 MAX_AUTO_CONTINUATIONS(2) 次仍不报错（工具步数截断走总量红线，不占文字截断的续接批次数预算）", async () => {
+    // 4 批全是 tool-calls（撞步数上限），第 5 批才 stop——如果误用了文字截断的
+    // "续接2次" 上限，第 3 批就会被判定续接耗尽直接抛错；现在应该一路续到收尾。
+    mocks.streamText
+      .mockReturnValueOnce(makeSuccessStream(["第1批"], { inputTokens: 1, outputTokens: 1 }, "tool-calls"))
+      .mockReturnValueOnce(makeSuccessStream(["第2批"], { inputTokens: 1, outputTokens: 1 }, "tool-calls"))
+      .mockReturnValueOnce(makeSuccessStream(["第3批"], { inputTokens: 1, outputTokens: 1 }, "tool-calls"))
+      .mockReturnValueOnce(makeSuccessStream(["第4批"], { inputTokens: 1, outputTokens: 1 }, "tool-calls"))
+      .mockReturnValueOnce(makeSuccessStream(["收尾"], { inputTokens: 1, outputTokens: 1 }, "stop"));
+
+    const deltas: string[] = [];
+    const result = await streamWithFallback(
+      [primary],
+      [{ role: "user", content: "帮我改完整个项目的 30 个文件" }],
+      { onDelta: (d) => deltas.push(d) },
+    );
+
+    expect(result).toEqual({ usedModelId: "m-primary", switched: false });
+    expect(mocks.streamText).toHaveBeenCalledTimes(5);
+    expect(deltas.join("")).toBe("第1批第2批第3批第4批收尾");
+  });
+
   it("流式输出一半后网络断开时，切 fallback 并带上已输出片段继续", async () => {
     mocks.streamText
       .mockReturnValueOnce(makePartialFailingStream(["已经完成一半。"], new Error("fetch failed")))

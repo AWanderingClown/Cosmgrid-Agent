@@ -37,7 +37,7 @@ import { hydrateIntentActionMarkers } from "@/lib/workflow/semantic-intent-route
 import { hydrateProviderErrorRules } from "@/lib/policy/provider-error-rules";
 import { hydrateUserTierBaseline } from "@/lib/policy/user-tier-baseline";
 import { hydrateDebateMarkers } from "@/lib/policy/debate-markers";
-import { isNormalFinishReason, isRecoverableTruncation } from "./finish-reason";
+import { isNormalFinishReason, isRecoverableTruncation, isToolStepTruncation } from "./finish-reason";
 import { hasEffectiveOutput } from "./response-completeness";
 import type { StepToolCall } from "./harness/doom-loop";
 import type { ChatMsg } from "./context-compressor";
@@ -53,7 +53,16 @@ import {
 export { toModelEndpoint };
 export type { ModelEndpoint, StreamCallbacks, StreamUsage, StreamWithFallbackOptions, SwitchReason };
 
+// 文字截断（length/max_tokens/empty_response 等）专用：模型在这句话上就是卡住了，
+// 续接 2 次还写不完大概率是模型能力问题，继续放行没意义。
 const MAX_AUTO_CONTINUATIONS = 2;
+
+// 工具步数截断（finishReason=tool-calls，撞 stopWhen 步数上限）专用：这只是长任务的
+// 正常中途状态，不该占用给文字截断设计的"续接批次数"预算——真正防失控的是下面这两条
+// "总量"红线（总工具调用数 / 总耗时），而不是续接了几批。空转/死循环由 doom-loop 单独兜底
+// （见 chat-fallback-attempt.ts 的跨批 stepToolCalls 拼接）。
+const MAX_TOOL_STEP_TOTAL_CALLS = 150;
+const MAX_TOOL_STEP_TOTAL_DURATION_MS = 10 * 60 * 1000;
 
 function formatCooldownRemainingMs(ms: number): string {
   const totalSeconds = Math.max(1, Math.ceil(ms / 1000));
@@ -179,6 +188,8 @@ export async function streamWithFallback(
     toolCallCount: 0,
   };
   let aggregateToolCalls: StepToolCall[] = [];
+  // 整条链（含所有续接批次）的起始时间，用于工具步数截断的总耗时红线。
+  const chainStartedAt = Date.now();
 
   while (usedIndex < models.length) {
     const target = models[usedIndex]!;
@@ -189,9 +200,13 @@ export async function streamWithFallback(
     }
 
     let continuationsForThisModel = 0;
+    // 当前模型跨续接批次累积的工具调用历史，只喂给 doom-loop 判定用（见
+    // chat-fallback-attempt.ts 的 priorToolCalls 参数），换模型时清零。
+    let modelToolCallHistory: StepToolCall[] = [];
     while (true) {
       try {
-        const attempt = await runModelAttempt(target, activeMessages, callbacks, options);
+        const attempt = await runModelAttempt(target, activeMessages, callbacks, options, modelToolCallHistory);
+        modelToolCallHistory = [...modelToolCallHistory, ...attempt.toolCalls];
         aggregateUsage.inputTokens += attempt.streamUsage.inputTokens;
         aggregateUsage.outputTokens += attempt.streamUsage.outputTokens;
         aggregateUsage.cacheReadInputTokens =
@@ -227,10 +242,20 @@ export async function streamWithFallback(
           contentIncomplete ||
           (!isNormalFinishReason(attempt.finishReason) && isRecoverableTruncation(attempt.finishReason))
         ) {
-          if (continuationsForThisModel < MAX_AUTO_CONTINUATIONS) {
+          // 工具步数截断（撞 stopWhen 上限，模型还想继续干活）跟文字截断走不同的续接预算：
+          // 前者按"总工具调用数 / 总耗时"这两条总量红线控制，不消耗 continuationsForThisModel；
+          // 后者维持原有"续接 2 次"的批次数上限（模型在这句话上卡住了，续太多次没意义）。
+          const isToolStep = !contentIncomplete && isToolStepTruncation(attempt.finishReason);
+          const elapsedMs = Date.now() - chainStartedAt;
+          const toolStepWithinBudget =
+            isToolStep &&
+            aggregateUsage.toolCallCount < MAX_TOOL_STEP_TOTAL_CALLS &&
+            elapsedMs < MAX_TOOL_STEP_TOTAL_DURATION_MS;
+
+          if (toolStepWithinBudget || (!isToolStep && continuationsForThisModel < MAX_AUTO_CONTINUATIONS)) {
             callbacks.onRecovered?.("context_replay");
             activeMessages = buildRecoveryMessages(activeMessages, attempt.partialText, truncationReason);
-            continuationsForThisModel++;
+            if (!isToolStep) continuationsForThisModel++;
             continue;
           }
 
@@ -247,7 +272,9 @@ export async function streamWithFallback(
             // 重试仍失败"——这两种对用户该说的话不一样（前者提示"换个问法"，后者提示
             // "任务拆小"），之前两者共用同一句裸英文，词不达意。
             throw new Error(
-              `Model output was truncated after ${MAX_AUTO_CONTINUATIONS} automatic continuations (reason: ${truncationReason})`,
+              isToolStep
+                ? `Task exceeded tool-call budget (${aggregateUsage.toolCallCount} calls / ${Math.round(elapsedMs / 1000)}s, reason: ${truncationReason})`
+                : `Model output was truncated after ${MAX_AUTO_CONTINUATIONS} automatic continuations (reason: ${truncationReason})`,
             );
           }
           const next = models[usedIndex + 1]!;

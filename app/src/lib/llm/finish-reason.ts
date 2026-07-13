@@ -15,3 +15,14 @@ export function isRecoverableTruncation(reason: string): boolean {
     normalized === "tool-calls" ||
     normalized === "tool_calls";
 }
+
+/**
+ * 撞 stopWhen 步数上限（多步 agent 循环中途状态），区别于"正文被 token 上限截断"。
+ * 这两种截断的容忍策略不同：前者应该按总工具调用数/总耗时控制，不该占用给
+ * 文字截断设计的"续接批次数"预算（见 chat-fallback.ts 的 MAX_AUTO_CONTINUATIONS
+ * vs 工具步数总量红线拆分）。
+ */
+export function isToolStepTruncation(reason: string): boolean {
+  const normalized = reason.toLowerCase();
+  return normalized === "tool-calls" || normalized === "tool_calls";
+}

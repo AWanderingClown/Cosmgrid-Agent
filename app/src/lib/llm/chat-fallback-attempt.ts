@@ -38,6 +38,10 @@ export async function runModelAttempt(
   attemptMessages: ChatMsg[],
   callbacks: AttemptCallbacks,
   options: StreamWithFallbackOptions,
+  // 同一模型跨续接批次累积的工具调用历史，只用于 doom-loop 判定（不计入本次返回的
+  // toolCalls/streamUsage，避免外层 aggregateUsage 重复计数）。不传时默认空数组，
+  // doom-loop 退化成"仅本批内检测"，跟改造前行为一致。
+  priorToolCalls: StepToolCall[] = [],
 ): Promise<ModelAttemptResult> {
   let partialText = "";
 
@@ -201,13 +205,17 @@ export async function runModelAttempt(
       ...(options.tools ? {
         tools: options.tools,
         toolChoice: options.toolChoice ?? "auto",
-        stopWhen: stepCountIs(options.maxToolSteps ?? 8),
+        stopWhen: stepCountIs(options.maxToolSteps ?? 20),
         onStepFinish: (event) => {
           const calls = (event.toolCalls ?? []) as { toolName: string; input: unknown }[];
           for (const tc of calls) {
             stepToolCalls.push({ toolName: tc.toolName, input: tc.input });
           }
-          if (detectDoomLoop(stepToolCalls)) localAbort.abort();
+          // 修复（doom-loop 跨批失明）：stepToolCalls 只是本批（单次 runModelAttempt）内的
+          // 调用记录，撞 stepCountIs 上限续接后会重新调用 runModelAttempt、本地数组清零重来
+          // ——原来的写法会让 doom-loop 只在单批 12 步以内生效，续接之后完全失去空转检测能力。
+          // 拼上调用方传入的跨批历史，让判定覆盖整个模型调用链，不受续接边界影响。
+          if (detectDoomLoop([...priorToolCalls, ...stepToolCalls])) localAbort.abort();
         },
       } : {}),
       abortSignal: localAbort.signal,

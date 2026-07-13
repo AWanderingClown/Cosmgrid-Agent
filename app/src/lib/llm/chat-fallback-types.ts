@@ -81,7 +81,8 @@ export interface StreamWithFallbackOptions {
   actorRole?: string | null;
   /** v0.7 阶段4：工具集（read/glob/grep 等）。传了才开启工具调用 + 多步 agentic 循环 */
   tools?: ToolSet;
-  /** 工具调用最大步数（防死循环），默认 8 */
+  /** 单批工具调用最大步数（撞上限后交给 chat-fallback.ts 的总量红线控制续接，不是死循环防线——
+   *  死循环防线是 doom-loop），默认 20 */
   maxToolSteps?: number;
   /** 强制本轮必须真调用工具（"required"）。用于 harness nudge 重答——模型上一次
    *  嘴上说了要做却 0 工具调用，文字提醒不够硬，直接在 API 层锁死它这次必须调用，
