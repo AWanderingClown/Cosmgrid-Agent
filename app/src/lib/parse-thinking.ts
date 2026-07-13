@@ -13,7 +13,7 @@
 import { PSEUDO_TOOL_TAGS } from "@/lib/llm/harness/detect-pseudo-tools";
 
 export type SegmentType = "think" | "tool" | "debate" | "text";
-export type ContentSegment = { type: SegmentType; content: string; closed: boolean };
+export type ContentSegment = { type: SegmentType; content: string; closed: boolean; steps?: number };
 
 // 思考类标签
 const THINK_TAGS = ["think", "thinking"] as const;
@@ -131,6 +131,26 @@ function mergeAdjacentCollapsedSegments(segments: ContentSegment[]): ContentSegm
   return merged;
 }
 
+// 阶段三：一条消息里所有 think 段聚合成一个「思考过程 · N 步」，提到最前。
+// MiniMax 把内联 <think> 和正文交替吐（think/正文/think/正文…），中间隔着正文的
+// think 段不会被 mergeAdjacentCollapsedSegments 合并，一条回复就碎成几十个折叠块。
+// 这里把它们收拢成一个块、按步骤分隔符拼接，对齐 Claude Code / opencode 的渲染范式。
+function aggregateThinkSegments(segments: ContentSegment[]): ContentSegment[] {
+  const thinkSegs = segments.filter((s) => s.type === "think");
+  if (thinkSegs.length <= 1) return segments;
+
+  const content = thinkSegs
+    .map((s, i) => (i === 0 ? s.content : `\n\n─── 步骤 ${i + 1} ───\n\n${s.content}`))
+    .join("");
+  const merged: ContentSegment = {
+    type: "think",
+    content,
+    closed: thinkSegs.every((s) => s.closed),
+    steps: thinkSegs.length,
+  };
+  return [merged, ...segments.filter((s) => s.type !== "think")];
+}
+
 export function parseThinking(text: string): ContentSegment[] {
   // 先按标签切粗段，再把 text 粗段里的裸 JSON 工具调用切出来
   const raw = splitByThinkingTags(text);
@@ -142,5 +162,5 @@ export function parseThinking(text: string): ContentSegment[] {
       out.push(seg);
     }
   }
-  return mergeAdjacentCollapsedSegments(out);
+  return aggregateThinkSegments(mergeAdjacentCollapsedSegments(out));
 }

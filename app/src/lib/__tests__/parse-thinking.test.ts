@@ -104,13 +104,12 @@ describe("parseThinking", () => {
     ]);
   });
 
-  it("多个思考块交替", () => {
+  it("多个思考块交替 → 聚合成一个 think 段（steps:2）提到最前，正文顺序保持", () => {
     const segs = parseThinking("a<think>x</think>b<think>y</think>c");
     expect(segs).toEqual([
+      { type: "think", content: "x\n\n─── 步骤 2 ───\n\ny", closed: true, steps: 2 },
       { type: "text", content: "a", closed: true },
-      { type: "think", content: "x", closed: true },
       { type: "text", content: "b", closed: true },
-      { type: "think", content: "y", closed: true },
       { type: "text", content: "c", closed: true },
     ]);
   });
@@ -122,12 +121,31 @@ describe("parseThinking", () => {
     ]);
   });
 
-  it("中间有正文的思考块不合并，避免吞掉答案", () => {
+  // UI 修复（满屏思考折叠块反馈）：中间隔着正文的多个 think 段会聚合成一个块、
+  // 提到消息最前面，避免一条回复碎成几十个"思考过程"折叠块。正文顺序保持不变。
+  it("中间有正文的多个思考块聚合成一个，提到最前，正文顺序不变", () => {
     const segs = parseThinking("<think>先想</think>这是正文<think>再想</think>");
     expect(segs).toEqual([
-      { type: "think", content: "先想", closed: true },
+      { type: "think", content: "先想\n\n─── 步骤 2 ───\n\n再想", closed: true, steps: 2 },
       { type: "text", content: "这是正文", closed: true },
-      { type: "think", content: "再想", closed: true },
+    ]);
+  });
+
+  it("只有一个思考块时不聚合、不加 steps", () => {
+    const segs = parseThinking("引言<think>推理</think>结论");
+    expect(segs).toEqual([
+      { type: "text", content: "引言", closed: true },
+      { type: "think", content: "推理", closed: true },
+      { type: "text", content: "结论", closed: true },
+    ]);
+  });
+
+  it("多个思考块聚合时，只要有一段未闭合，合并块整体标记 closed=false（流式中仍显示思考中）", () => {
+    const segs = parseThinking("a<think>x</think>b<think>还在想");
+    expect(segs).toEqual([
+      { type: "think", content: "x\n\n─── 步骤 2 ───\n\n还在想", closed: false, steps: 2 },
+      { type: "text", content: "a", closed: true },
+      { type: "text", content: "b", closed: true },
     ]);
   });
 

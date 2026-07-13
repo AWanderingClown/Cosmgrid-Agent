@@ -352,6 +352,7 @@
     },
     "thinking": "思考中",
     "thinkingDone": "思考过程",
+    "thinkingDoneSteps": "思考过程 · {{count}} 步",
     "toolCall": "工具调用中",
     "toolCallDone": "工具调用片段",
     "jumpToBottom": "回到底部",

@@ -21,11 +21,13 @@ const CollapsibleBlock = memo(function CollapsibleBlock({
   closed,
   streaming,
   variant,
+  steps,
 }: {
   content: string;
   closed: boolean;
   streaming: boolean;
   variant: "think" | "tool" | "debate";
+  steps?: number;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -34,7 +36,14 @@ const CollapsibleBlock = memo(function CollapsibleBlock({
   const live = streaming && !closed;
   const Icon = COLLAPSIBLE_ICON[variant];
   const labelLive = variant === "think" ? t("chat.thinking") : variant === "debate" ? t("chat.debate.processLabel") : t("chat.toolCall");
-  const labelDone = variant === "think" ? t("chat.thinkingDone") : variant === "debate" ? t("chat.debate.processLabel") : t("chat.toolCallDone");
+  const labelDone =
+    variant === "think"
+      ? steps && steps > 1
+        ? t("chat.thinkingDoneSteps", { count: steps })
+        : t("chat.thinkingDone")
+      : variant === "debate"
+        ? t("chat.debate.processLabel")
+        : t("chat.toolCallDone");
   return (
     <div className="my-1">
       <button
@@ -192,6 +201,7 @@ export const MessageItem = memo(function MessageItem({
                       content={s.content}
                       closed={s.closed}
                       streaming={isStreaming}
+                      steps={s.type === "think" ? s.steps : undefined}
                     />
                   ),
                 )

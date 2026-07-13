@@ -352,6 +352,7 @@
     },
     "thinking": "Thinking",
     "thinkingDone": "Reasoning",
+    "thinkingDoneSteps": "Reasoning · {{count}} steps",
     "toolCall": "Calling tool",
     "toolCallDone": "Tool call",
     "jumpToBottom": "Jump to bottom",
