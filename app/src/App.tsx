@@ -24,7 +24,7 @@ import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 import { OnboardingModal } from "@/pages/OnboardingModal";
-import { disposeBackgroundSessionsForClose, hasBackgroundSessionsForClose } from "@/lib/app-close";
+import { disposeBackgroundSessionsForClose } from "@/lib/app-close";
 import { migrateLegacyMcpServerSecrets } from "@/lib/mcp/secret-store";
 
 const ChatPage = lazy(() => import("@/pages/ChatPage").then((m) => ({ default: m.ChatPage })));
@@ -124,7 +124,10 @@ function App() {
     const appWindow = getCurrentWindow();
     const unlisten = appWindow.onCloseRequested(async (event) => {
       if (closing) return;
-      if (!hasBackgroundSessionsForClose()) return;
+      // 不再先查"有没有后台会话"——清理本身在没有真实会话时是空 Map，几乎瞬间完成，
+      // 没必要为了"判断要不要清理"专门维护一个额外的信号源（真实事故：这个信号源自己
+      // 出过错，导致误判"永远有会话"，每次关闭都白白变慢）。无条件清理 + 有超时兜底
+      // （这里 1.5 秒 + Rust 侧看门狗 5 秒），比自己判断更简单也更不容易出错。
       event.preventDefault();
       closing = true;
       await disposeBackgroundSessionsForClose();

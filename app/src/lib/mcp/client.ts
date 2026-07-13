@@ -19,14 +19,27 @@ type RemoteClientModule = typeof import("./remote-client");
 const localSessions = new Map<string, Promise<LocalMcpSession>>();
 const MCP_PROTOCOL_VERSION = "2025-11-25";
 let remoteClientModulePromise: Promise<RemoteClientModule> | null = null;
+// 修复（2026-07-13 真实事故：什么都没做，只点了几个功能，退出还是卡顿一下）：不能用
+// "remote-client 模块有没有被 import 过"当作"现在是否还有真实远程会话"的信号——只要调用
+// 过一次 listMcpTools/callMcpTool（哪怕是本地 stdio 类型，第79行 listMcpTools 也会顺带
+// 触发 loadRemoteClient），remoteClientModulePromise 就永久不为 null（从没有代码把它
+// 重置回 null），导致 hasKnownMcpSessions() 对这个进程的余生永远返回 true，每次关闭都
+// 白白走一遍清理慢路径。这里改成记录已经 resolve 出来的模块引用，查它真实的
+// hasRemoteMcpSessions()（remote-client.ts 自己维护的会话 Map），而不是"模块加载过没有"
+// 这个错误的代理指标。模块还在加载中时天然返回 false——这个阶段真实会话必然还不存在，
+// 判 false 不会漏清理。
+let resolvedRemoteClientModule: RemoteClientModule | null = null;
 
 function loadRemoteClient(): Promise<RemoteClientModule> {
-  remoteClientModulePromise ??= import("./remote-client");
+  remoteClientModulePromise ??= import("./remote-client").then((mod) => {
+    resolvedRemoteClientModule = mod;
+    return mod;
+  });
   return remoteClientModulePromise;
 }
 
 export function hasKnownMcpSessions(): boolean {
-  return localSessions.size > 0 || remoteClientModulePromise !== null;
+  return localSessions.size > 0 || (resolvedRemoteClientModule?.hasRemoteMcpSessions() ?? false);
 }
 
 async function getLocalSession(server: McpServerRow, workspacePath?: string): Promise<LocalMcpSession> {
