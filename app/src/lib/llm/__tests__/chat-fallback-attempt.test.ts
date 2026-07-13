@@ -65,3 +65,46 @@ describe("runModelAttempt - doom-loop 跨续接批次判定（priorToolCalls）"
     expect(result.wasAborted).toBe(false);
   });
 });
+
+describe("runModelAttempt - stepCount 真实步数统计（假收尾判定用，见 chat-fallback.ts）", () => {
+  it("每次 onStepFinish 触发都计入 stepCount，不管这一步有没有工具调用", async () => {
+    mocks.streamText.mockImplementationOnce(
+      (args: { onStepFinish?: (e: { toolCalls: unknown[] }) => void }) => {
+        args.onStepFinish?.({ toolCalls: [{ toolName: "read", input: { path: "/a.ts" } }] });
+        args.onStepFinish?.({ toolCalls: [] }); // 纯文字步，没有工具调用，也要计入
+        args.onStepFinish?.({ toolCalls: [{ toolName: "grep", input: { pattern: "x" } }] });
+        return {
+          fullStream: (async function* () {})(),
+          usage: Promise.resolve({ inputTokens: 1, outputTokens: 1 }),
+          finishReason: Promise.resolve("stop"),
+        };
+      },
+    );
+
+    const result = await runModelAttempt(
+      target,
+      [{ role: "user", content: "帮我核对文档" }],
+      { onDelta: () => {} },
+      { tools: {} as never, maxToolSteps: 20 },
+    );
+
+    expect(result.stepCount).toBe(3);
+  });
+
+  it("没有工具（未开 tools）时不装 onStepFinish，stepCount 恒为 0", async () => {
+    mocks.streamText.mockReturnValueOnce({
+      fullStream: (async function* () {})(),
+      usage: Promise.resolve({ inputTokens: 1, outputTokens: 1 }),
+      finishReason: Promise.resolve("stop"),
+    });
+
+    const result = await runModelAttempt(
+      target,
+      [{ role: "user", content: "你好" }],
+      { onDelta: () => {} },
+      {},
+    );
+
+    expect(result.stepCount).toBe(0);
+  });
+});

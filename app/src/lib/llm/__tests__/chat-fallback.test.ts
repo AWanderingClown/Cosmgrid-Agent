@@ -418,6 +418,49 @@ describe("streamWithFallback - 非用户中断自动恢复", () => {
     expect(deltas.join("")).toBe("第1批第2批第3批第4批收尾");
   });
 
+  it("finishReason=stop 但真实 stepCount 已耗尽 maxToolSteps（假收尾）→ 视同工具步数截断自动续写，不当正常完成（2026-07-13 真实故障：19次工具调用后模型只写一句空话就收尾）", async () => {
+    // 第一批：streamText 内部跑满 3 步（maxToolSteps=3），边界第3步模型自己选择不调工具、
+    // 只写一句"我先去做，稍后继续"就正常 stop——AI SDK 不会把这种情况报成 finishReason=
+    // tool-calls，必须靠真实 stepCount 判定，不能信 finishReason 字符串。
+    mocks.streamText
+      .mockImplementationOnce((args: { onStepFinish?: (e: { toolCalls: unknown[] }) => void }) => {
+        for (let i = 0; i < 3; i++) args.onStepFinish?.({ toolCalls: [] });
+        return makeSuccessStream(["我先去做，稍后继续"], { inputTokens: 1, outputTokens: 1 }, "stop");
+      })
+      .mockReturnValueOnce(makeSuccessStream(["真正写完了结论"], { inputTokens: 1, outputTokens: 1 }, "stop"));
+
+    const deltas: string[] = [];
+    const result = await streamWithFallback(
+      [primary],
+      [{ role: "user", content: "帮我核对一堆文档" }],
+      { onDelta: (d) => deltas.push(d) },
+      { tools: {} as never, maxToolSteps: 3 },
+    );
+
+    expect(result).toEqual({ usedModelId: "m-primary", switched: false });
+    expect(mocks.streamText).toHaveBeenCalledTimes(2);
+    expect(deltas.join("")).toBe("我先去做，稍后继续真正写完了结论");
+    const secondCall = mocks.streamText.mock.calls[1]![0] as { messages: Array<{ role: string; content: string }> };
+    expect(secondCall.messages.at(-1)?.content).toContain("从刚才中断处继续");
+  });
+
+  it("finishReason=stop 且 stepCount 未耗尽 maxToolSteps → 正常完成，不触发假收尾续接（不误伤真正的短任务）", async () => {
+    mocks.streamText.mockImplementationOnce((args: { onStepFinish?: (e: { toolCalls: unknown[] }) => void }) => {
+      args.onStepFinish?.({ toolCalls: [] }); // 只跑 1 步，远没到 maxToolSteps=20
+      return makeSuccessStream(["答案是 42"], { inputTokens: 1, outputTokens: 1 }, "stop");
+    });
+
+    const result = await streamWithFallback(
+      [primary],
+      [{ role: "user", content: "1+41等于几" }],
+      { onDelta: () => {} },
+      { tools: {} as never },
+    );
+
+    expect(result).toEqual({ usedModelId: "m-primary", switched: false });
+    expect(mocks.streamText).toHaveBeenCalledTimes(1);
+  });
+
   it("流式输出一半后网络断开时，切 fallback 并带上已输出片段继续", async () => {
     mocks.streamText
       .mockReturnValueOnce(makePartialFailingStream(["已经完成一半。"], new Error("fetch failed")))

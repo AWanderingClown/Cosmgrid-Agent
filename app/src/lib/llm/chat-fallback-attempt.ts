@@ -26,6 +26,13 @@ export interface ModelAttemptResult {
   wasAborted: boolean;
   partialText: string;
   toolCalls: StepToolCall[];
+  /** 本次调用实际跑了多少个 AI SDK step（含没有工具调用的纯文字 step）。CLI 路径恒为 0
+   *  （不走 stepCountIs）。用于判断"是否把 maxToolSteps 步数预算耗尽"——注意 AI SDK 的
+   *  stopWhen: stepCountIs(N) 只有边界那一步恰好还在调工具时，finishReason 才会报
+   *  "tool-calls"；如果边界那一步模型自己选择只写文字，finishReason 会正常报 "stop"，
+   *  看起来跟真收尾一样。所以不能靠 finishReason 字符串判断是否撞了步数上限，必须
+   *  数真实 step 数（见 chat-fallback.ts 的 stepBudgetTruncated 判定）。 */
+  stepCount: number;
 }
 
 /**
@@ -146,6 +153,7 @@ export async function runModelAttempt(
         wasAborted,
         partialText,
         toolCalls: [],
+        stepCount: 0,
         streamUsage: {
           inputTokens: totalInputTokens,
           outputTokens: totalOutputTokens,
@@ -171,6 +179,7 @@ export async function runModelAttempt(
             wasAborted: resumed.wasAborted,
             partialText,
             toolCalls: [],
+            stepCount: 0,
             streamUsage: {
               inputTokens: resumed.inputTokens,
               outputTokens: resumed.outputTokens,
@@ -195,6 +204,7 @@ export async function runModelAttempt(
   const onParentAbort = () => localAbort.abort();
   options.signal?.addEventListener("abort", onParentAbort);
   const stepToolCalls: StepToolCall[] = [];
+  let stepCount = 0;
 
   try {
     const result = streamText({
@@ -207,6 +217,7 @@ export async function runModelAttempt(
         toolChoice: options.toolChoice ?? "auto",
         stopWhen: stepCountIs(options.maxToolSteps ?? 20),
         onStepFinish: (event) => {
+          stepCount++;
           const calls = (event.toolCalls ?? []) as { toolName: string; input: unknown }[];
           for (const tc of calls) {
             stepToolCalls.push({ toolName: tc.toolName, input: tc.input });
@@ -270,6 +281,7 @@ export async function runModelAttempt(
       wasAborted: localAbort.signal.aborted || (options.signal?.aborted ?? false),
       partialText,
       toolCalls: stepToolCalls,
+      stepCount,
       streamUsage: {
         inputTokens: usage?.inputTokens ?? 0,
         outputTokens: usage?.outputTokens ?? 0,

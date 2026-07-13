@@ -64,6 +64,11 @@ const MAX_AUTO_CONTINUATIONS = 2;
 const MAX_TOOL_STEP_TOTAL_CALLS = 150;
 const MAX_TOOL_STEP_TOTAL_DURATION_MS = 10 * 60 * 1000;
 
+// 假收尾（撞满 maxToolSteps 步数预算，但边界那一步模型自己选择只写文字）专用安全阀：
+// 这类续接批次可能 0 工具调用，不会推高 aggregateUsage.toolCallCount，光靠上面两条
+// 总量红线不够保险（2026-07-13 真实事故：真人复核方案时指出的漏洞），单独限最多续接几次。
+const MAX_STEP_BUDGET_CONTINUATIONS = 2;
+
 function formatCooldownRemainingMs(ms: number): string {
   const totalSeconds = Math.max(1, Math.ceil(ms / 1000));
   const minutes = Math.floor(totalSeconds / 60);
@@ -200,6 +205,9 @@ export async function streamWithFallback(
     }
 
     let continuationsForThisModel = 0;
+    // 假收尾续接次数（见下面 stepBudgetTruncated），独立于 continuationsForThisModel，
+    // 换模型时清零。
+    let stepBudgetContinuations = 0;
     // 当前模型跨续接批次累积的工具调用历史，只喂给 doom-loop 判定用（见
     // chat-fallback-attempt.ts 的 priorToolCalls 参数），换模型时清零。
     let modelToolCallHistory: StepToolCall[] = [];
@@ -236,26 +244,54 @@ export async function streamWithFallback(
         const contentIncomplete =
           isNormalFinishReason(attempt.finishReason) &&
           !hasEffectiveOutput(attempt.partialText, attempt.streamUsage.toolCallCount);
-        const truncationReason = contentIncomplete ? "empty_response" : attempt.finishReason;
+
+        // 假收尾判定（2026-07-13 真实故障，真人复核揪出前两版方案的漏洞后重做）：
+        // AI SDK 的 stopWhen: stepCountIs(N) 只有边界那一步恰好还在调工具时，finishReason
+        // 才会报成 "tool-calls"；如果边界步模型自己选择只写文字，finishReason 会正常报
+        // "stop"，看起来跟真收尾一模一样——但其实是步数预算耗尽逼出来的中途假收尾（真实
+        // 案例：19 次工具调用后模型写"我把剩下的段落读完再对账"就真的收尾，再无下文）。
+        // 不能信 finishReason 字符串，只认 runModelAttempt 回传的真实 stepCount 是否
+        // 把这次调用的 maxToolSteps 步数预算耗尽。
+        const maxToolSteps = options.maxToolSteps ?? 20;
+        const stepBudgetTruncated =
+          !contentIncomplete &&
+          isNormalFinishReason(attempt.finishReason) &&
+          attempt.stepCount >= maxToolSteps;
+
+        const truncationReason = contentIncomplete
+          ? "empty_response"
+          : stepBudgetTruncated
+            ? "tool_step_budget_exhausted"
+            : attempt.finishReason;
 
         if (
           contentIncomplete ||
+          stepBudgetTruncated ||
           (!isNormalFinishReason(attempt.finishReason) && isRecoverableTruncation(attempt.finishReason))
         ) {
-          // 工具步数截断（撞 stopWhen 上限，模型还想继续干活）跟文字截断走不同的续接预算：
-          // 前者按"总工具调用数 / 总耗时"这两条总量红线控制，不消耗 continuationsForThisModel；
-          // 后者维持原有"续接 2 次"的批次数上限（模型在这句话上卡住了，续太多次没意义）。
-          const isToolStep = !contentIncomplete && isToolStepTruncation(attempt.finishReason);
+          // 工具步数截断（撞 stopWhen 上限，模型还想继续干活；含上面新增的"假收尾"场景）
+          // 跟文字截断走不同的续接预算：前者按"总工具调用数 / 总耗时"这两条总量红线控制，
+          // 不消耗 continuationsForThisModel；后者维持原有"续接 2 次"的批次数上限（模型
+          // 在这句话上卡住了，续太多次没意义）。
+          const isToolStep =
+            !contentIncomplete && (isToolStepTruncation(attempt.finishReason) || stepBudgetTruncated);
           const elapsedMs = Date.now() - chainStartedAt;
           const toolStepWithinBudget =
             isToolStep &&
             aggregateUsage.toolCallCount < MAX_TOOL_STEP_TOTAL_CALLS &&
-            elapsedMs < MAX_TOOL_STEP_TOTAL_DURATION_MS;
+            elapsedMs < MAX_TOOL_STEP_TOTAL_DURATION_MS &&
+            // 假收尾续接批次可能 0 工具调用，不会推高 aggregateUsage.toolCallCount，
+            // 上面两条总量红线可能永远不触发——单独再加一道安全阀。
+            (!stepBudgetTruncated || stepBudgetContinuations < MAX_STEP_BUDGET_CONTINUATIONS);
 
           if (toolStepWithinBudget || (!isToolStep && continuationsForThisModel < MAX_AUTO_CONTINUATIONS)) {
             callbacks.onRecovered?.("context_replay");
             activeMessages = buildRecoveryMessages(activeMessages, attempt.partialText, truncationReason);
-            if (!isToolStep) continuationsForThisModel++;
+            if (isToolStep) {
+              if (stepBudgetTruncated) stepBudgetContinuations++;
+            } else {
+              continuationsForThisModel++;
+            }
             continue;
           }
 
