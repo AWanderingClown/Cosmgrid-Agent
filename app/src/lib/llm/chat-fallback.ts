@@ -110,27 +110,50 @@ export async function streamWithFallback(
   void hydrateDebateMarkers().catch(() => {});
   await hydrateModelCooldowns(models.map((m) => m.modelId)).catch(() => {});
 
-  // 跳过 cooldown 中的模型：从前往后找第一个不在 cooldown 的；前面被跳过的都触发 onSwitched("cooldown")
+  // D4：额度熔断。先解析守卫得到"额度已耗尽"的 modelId 集合（与 cooldown 是两套独立事实）。
+  // 必须在 skip 循环之前拿到——cooldown 和 quota 两个条件要在同一个循环里逐个候选交替判定。
+  const exhaustedSet = options.quotaGuard
+    ? new Set(await options.quotaGuard.getExhaustedModelIds())
+    : new Set<string>();
+
+  // 跳过 cooldown 中 / 额度已耗尽的模型：从前往后找第一个两者都不占的。
+  // 注意：cooldown 和 quota 必须在同一个循环里对每个候选逐个判定，不能分两个独立循环各自
+  // 跳完——2026-07-15 review 抓到的 bug：分两个循环时，quota 循环把 startIdx 推到的新模型
+  // 从未做过 cooldown 检查（cooldown 检查只覆盖了最开始那段连续前缀），会导致最终选中一个
+  // 实际仍在 cooldown 的模型去真实请求，cooldown 熔断形同虚设。
   let startIdx = 0;
-  while (startIdx < models.length && isInCooldown(models[startIdx]!.modelId)) {
-    const skipped = models[startIdx]!;
+  while (startIdx < models.length) {
+    const candidate = models[startIdx]!;
+    const inCooldown = isInCooldown(candidate.modelId);
+    const quotaExhausted = !inCooldown && exhaustedSet.has(candidate.modelId);
+    if (!inCooldown && !quotaExhausted) break;
+
+    const skipped = candidate;
     const skippedAt = Date.now();
+    const status = inCooldown ? "cooldown" : "quota_exhausted";
     callbacks.onInvocationAudit?.(buildLlmInvocationAuditEvent({
       target: skipped,
-      status: "cooldown",
+      status,
       startedAtMs: skippedAt,
       endedAtMs: skippedAt,
-      finishReason: "cooldown",
+      finishReason: status,
     }));
     if (startIdx < models.length - 1) {
       const next = models[startIdx + 1]!;
-      callbacks.onSwitched?.(skipped, next, { kind: "cooldown" });
+      callbacks.onSwitched?.(skipped, next, { kind: inCooldown ? "cooldown" : "quota" });
     }
     startIdx++;
   }
   if (startIdx >= models.length) {
+    const anyCooldown = models.some((m) => isInCooldown(m.modelId));
+    if (!anyCooldown) {
+      // 没有模型处于 cooldown，纯粹是额度都耗尽：抛清晰错误（与 cooldown 分开），
+      // 让 UI 清掉"进行中"状态、提示续费/换套餐。
+      const detail = models.map((m) => m.displayLabel ?? m.modelName).join("、");
+      throw new Error(`All models exhausted quota: ${detail}`);
+    }
     // 修复（2026-07-05）：之前这里直接抛裸英文 Error，classifyLlmError 认不出来只能落进
-    // "unknown"兜底——用户只看到一句生硬的英文提示，不知道具体是哪几个模型在冷却、还要
+    // "unknown"兜底——用户只看到一句生硬的英文提示，不知道具体哪几个模型在冷却、还要
     // 等多久，也不知道重启 app 能立即清空（冷却状态只在内存里，见 model-cooldown.ts）。
     // 这里把每个模型的剩余冷却时间拼进消息，error-classifier.ts 按前缀识别后原样透出。
     const detail = models

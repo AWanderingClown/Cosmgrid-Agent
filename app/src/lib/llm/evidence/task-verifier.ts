@@ -79,8 +79,9 @@ export function verifyTask(args: VerifyTaskArgs): VerificationResult {
     execRows: args.execRows,
   });
 
-  // 5：跑结构化验收
-  const { metCriteria, failedCriteria } = runAcceptanceCriteria(args.acceptanceCriteria, {
+  // 5：跑结构化验收（2026-07-14 三态：not_attempted 既不进 met 也不进 failed，
+  // 只用来让 humanSummary 的措辞更准确，不影响 status 判定，不进 VerificationResult 公开字段）。
+  const { metCriteria, failedCriteria, notAttemptedCriteria } = runAcceptanceCriteria(args.acceptanceCriteria, {
     linkedClaims,
     evidenceRefs,
     execRows: args.execRows,
@@ -129,6 +130,7 @@ export function verifyTask(args: VerifyTaskArgs): VerificationResult {
       conflicts,
       metCriteria,
       failedCriteria,
+      notAttemptedCriteria,
       unknownCount,
       acceptanceCriteria: args.acceptanceCriteria,
     }),
@@ -163,6 +165,7 @@ function buildHumanSummary(args: {
   conflicts: LinkedClaim[];
   metCriteria: string[];
   failedCriteria: string[];
+  notAttemptedCriteria: string[];
   unknownCount: number;
   acceptanceCriteria: StructuredAcceptanceCriterion[];
 }): string {
@@ -172,11 +175,22 @@ function buildHumanSummary(args: {
   );
 
   if (args.status === "passes") {
-    if (args.metCriteria.length === 0) {
+    if (args.metCriteria.length === 0 && args.notAttemptedCriteria.length === 0) {
       lines.push("无结构化验收标准触发，但未发现冲突。");
+    } else if (args.metCriteria.length === 0) {
+      // 2026-07-14：全部标准都是 not_attempted（没有一条真的 met）。注意：这个分支对当前
+      // 唯一生产调用方 VERIFY_ACCEPTANCE_CRITERIA 打不到——那组标准里 test_run 是严格项
+      // （只有 met/failed 两态，没有 not_attempted），只要它没 met 就必然 failed，会让
+      // 整体 status 变成 fails 而不是 passes，不会走到这里。这个分支是给"不含任何严格项"
+      // 的验收标准集合（比如未来只传 lint+build 这类全宽松组合）留的通用兜底，措辞要说清楚
+      // "没拦是因为没跑，不是因为跑了都过"，避免误导成"全部检查都通过了"。
+      lines.push("本轮未运行任何结构化验收检查，未发现冲突（不强制要求全部检查项）。");
     } else {
       const names = args.metCriteria.map((id) => criteriaNames.get(id) ?? id).join("、");
-      lines.push(`通过：${names}。`);
+      const skipped = args.notAttemptedCriteria.length > 0
+        ? `（本轮未运行、不计入判定：${args.notAttemptedCriteria.map((id) => criteriaNames.get(id) ?? id).join("、")}）`
+        : "";
+      lines.push(`通过：${names}。${skipped}`);
     }
   } else if (args.status === "fails") {
     const contradicted = args.conflicts.filter((c) => c.verdict === "contradicts");

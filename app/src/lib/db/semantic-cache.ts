@@ -61,13 +61,38 @@ export const semanticCache = {
     );
   },
 
-  /** 列出所有未过期缓存（检索时纯 JS 余弦扫描） */
-  async listValid(): Promise<SemanticCacheRow[]> {
+  /**
+   * 列出未过期缓存。D9（2026-07-15）：支持按 provider/task/model 等值过滤 + limit 分页，
+   * 让 lookup 走 idx_semantic_cache_lookup 复合索引而不是把整张表拉回 JS 再过滤。
+   * 不传 opts 时行为完全等同于旧实现（只按 expires_at 过滤），保持向后兼容。
+   */
+  async listValid(opts?: {
+    providerName?: string;
+    taskType?: string;
+    modelId?: string;
+    limit?: number;
+  }): Promise<SemanticCacheRow[]> {
     const db = await getDb();
-    const rows = await db.select<any[]>(
-      "SELECT * FROM semantic_cache WHERE expires_at > $1",
-      [now()]
-    );
+    const clauses: string[] = ["expires_at > $1"];
+    const params: unknown[] = [now()];
+    if (opts?.providerName != null && opts.providerName !== "") {
+      params.push(opts.providerName);
+      clauses.push(`provider_name = $${params.length}`);
+    }
+    if (opts?.taskType != null && opts.taskType !== "") {
+      params.push(opts.taskType);
+      clauses.push(`task_type = $${params.length}`);
+    }
+    if (opts?.modelId != null && opts.modelId !== "") {
+      params.push(opts.modelId);
+      clauses.push(`model_id = $${params.length}`);
+    }
+    let sql = `SELECT * FROM semantic_cache WHERE ${clauses.join(" AND ")}`;
+    if (opts?.limit != null) {
+      params.push(opts.limit);
+      sql += ` LIMIT $${params.length}`;
+    }
+    const rows = await db.select<any[]>(sql, params);
     return rows.map(mapCacheRow);
   },
 

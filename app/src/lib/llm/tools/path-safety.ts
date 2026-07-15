@@ -86,6 +86,13 @@ export interface PathCheckOptions {
   realpathFn?: RealpathFn | null;
 }
 
+/** 拆出路径的父目录和文件名（不依赖 node path，浏览器环境也能跑）。 */
+function splitDirBase(p: string): { dir: string; base: string } {
+  const idx = p.lastIndexOf("/");
+  if (idx < 0) return { dir: "", base: p };
+  return { dir: idx === 0 ? "/" : p.slice(0, idx), base: p.slice(idx + 1) };
+}
+
 /**
  * 2.2 修复：ws 和 resolved 要么都解析、要么都不解析（保证形式一致）。
  *
@@ -98,6 +105,16 @@ export interface PathCheckOptions {
  * - resolved realpath 成功 → ws 也解析（保证两者都是 realpath 形式）
  * - resolved realpath 失败（路径不存在等） → ws 也保持 raw 形式（保证两者都是 raw 形式）
  *   这样"不存在的路径"被落回原路径后，比较逻辑正常工作，让下游 fs 操作报 ENOENT
+ *
+ * 2026-07-15 review 修复：叶子路径整段解析失败时，原来直接落回 raw 全路径做字符串比较——
+ * write 工具建新文件是这个分支最常见的触发场景（目标文件本来就不存在，realpath 必然
+ * ENOENT）。如果工作区内存在指向工作区外的符号链接目录（比如 `workspace/link -> /etc`），
+ * 对 `workspace/link/newfile.txt` 做 raw 字符串前缀比较会误判成"在工作区内"，但 fs 层
+ * 真实创建的文件其实落在 `/etc/newfile.txt`——工作区外的敏感目录逃逸，且这个分支下
+ * `checkWritePath` 连"工作区外"的 external 提醒都不会给。
+ * 修法：叶子整段解析失败时，退一步只解析父目录（新建文件场景下父目录几乎总是存在）；
+ * 父目录解析成功就用"真实父目录 + 原始文件名"重建 resolved，而不是整段都退回 raw；
+ * 只有连父目录都解析失败（父目录也不存在）才彻底放弃，落回 raw 全路径。
  */
 async function resolveBoth(
   wsRaw: string,
@@ -109,23 +126,33 @@ async function resolveBoth(
     : options?.realpathFn ?? defaultRealpathFn;
   if (!fn) return { ws: wsRaw, resolved: initialResolved };
 
-  let resolved: string;
+  let resolved = initialResolved;
+  let resolvedSucceeded = false;
   try {
     resolved = await fn(initialResolved);
+    resolvedSucceeded = true;
   } catch {
-    resolved = initialResolved;
+    const { dir, base } = splitDirBase(initialResolved);
+    if (dir) {
+      try {
+        const realDir = await fn(dir);
+        resolved = base ? `${realDir}/${base}` : realDir;
+        resolvedSucceeded = true;
+      } catch {
+        // 父目录也解析失败（新建文件所在的目录本身也不存在）——彻底放弃，落回 raw。
+      }
+    }
   }
 
-  let ws: string;
-  if (resolved === initialResolved) {
-    // resolved 没解析成功（抛错/reject fallback）→ ws 保持 raw 形式
-    ws = wsRaw;
-  } else {
-    // resolved 解析成功 → ws 也解析（保证两者都是 realpath 形式）
+  let ws = wsRaw;
+  if (resolvedSucceeded) {
+    // resolved（或其父目录）解析成功 → ws 也解析（保证两者都是 realpath 形式）
     try {
       ws = await fn(wsRaw);
     } catch {
+      // ws 解析失败——两边都退回 raw 保证形式一致，不能一边 realpath 一边 raw 去比较。
       ws = wsRaw;
+      resolved = initialResolved;
     }
   }
   return { ws, resolved };

@@ -74,6 +74,22 @@ describe("isSensitivePath / checkPath — 敏感路径", () => {
     expect(isSensitivePath(`${WS}/src/index.ts`)).toBe(false);
     expect((await checkPath(WS, "src/index.ts")).ok).toBe(true);
   });
+
+  // 2026-07-15 review 修复：原来除了 secrets? 那条，其余五条正则大小写敏感。macOS 默认
+  // APFS 大小写不敏感（但保留大小写），".ENV"/".Ssh" 这类大小写变体在文件系统层面解析到
+  // 同一份文件，但正则匹配不上会绕过黑名单读到真正的敏感文件。
+  it.each([
+    "src/.ENV",
+    ".Env.local",
+    ".SSH/id_rsa",
+    ".Ssh/config",
+    ".AWS/credentials",
+    ".GnuPG/secring.gpg",
+    "KEYSTORE.JSON",
+    "ID_RSA.pub",
+  ])("大小写变体也应该被拒绝（此前会绕过黑名单）：%s", async (p) => {
+    expect((await checkPath(WS, p)).ok).toBe(false);
+  });
 });
 
 describe("checkWritePath — 写类工具专用，工作区外放行但标记 external", () => {
@@ -149,6 +165,12 @@ describe("path-safety — 符号链接逃逸防护（2.2 修复）", () => {
       path.join(workspaceDir, "real-file.txt"),
       path.join(workspaceDir, "link-internal"),
     );
+    // 2026-07-15 review 修复：workspace 内目录符号链接指向 workspace 外（非敏感）目录——
+    // 模拟"写一个还不存在的新文件"这个 write 工具最常见场景，目标文件本身从未创建过，
+    // realpath 整段解析必然 ENOENT。
+    const outsideDir = path.join(tmpDir, "outside-dir");
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.symlinkSync(outsideDir, path.join(workspaceDir, "link-to-outside-dir"));
 
     // 测试前先保存现有 default realpath（避免污染其他测试）
     previousDefaultRealpath = getDefaultRealpathFn();
@@ -196,6 +218,37 @@ describe("path-safety — 符号链接逃逸防护（2.2 修复）", () => {
     });
     // 落回原路径后，原路径在工作区内 + 不敏感 → ok=true（让下游 fs 操作报 ENOENT）
     expect(r.ok).toBe(true);
+  });
+
+  // 2026-07-15 review 修复回归测试：write 工具建新文件（目标文件不存在，realpath 整段解析
+  // 必然 ENOENT）时，如果父目录是指向工作区外的符号链接，旧实现会整段落回 raw 字符串比较，
+  // 误判成"在工作区内"——实际 fs 层真实写入目标在工作区外。修复后应该退一步解析父目录，
+  // 正确识别出这是工作区外的目录逃逸。
+  it("checkPath：符号链接目录里的新建文件（目标不存在）→ 父目录解析应识别出工作区外", async () => {
+    const r = await checkPath(workspaceDir, "link-to-outside-dir/new-file.txt", {
+      realpathFn: (p) => fs.realpathSync(p),
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/越出/);
+  });
+
+  it("checkWritePath：符号链接目录里的新建文件（目标不存在）→ 应标记 external:true，不能被误判成工作区内", async () => {
+    const r = await checkWritePath(workspaceDir, "link-to-outside-dir/new-file.txt", {
+      realpathFn: (p) => fs.realpathSync(p),
+    });
+    expect(r.ok).toBe(true);
+    // 核心断言：这是修复前的 bug 点——旧实现这里会错误地给出 external:false，
+    // 用户完全不会被提醒"这次要写到工作区之外"。
+    expect(r.external).toBe(true);
+  });
+
+  it("符号链接目录里已存在的文件（非新建场景，原本就能正确识别）仍然正确识别工作区外", async () => {
+    fs.writeFileSync(path.join(tmpDir, "outside-dir", "existing.txt"), "x");
+    const r = await checkWritePath(workspaceDir, "link-to-outside-dir/existing.txt", {
+      realpathFn: (p) => fs.realpathSync(p),
+    });
+    expect(r.ok).toBe(true);
+    expect(r.external).toBe(true);
   });
 
   it("realpathFn=null → 显式禁用 realpath（保持字符串检查语义）", async () => {

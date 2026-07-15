@@ -51,7 +51,11 @@ function stableSessionId(input: string): string {
   return `lsp-${(hash >>> 0).toString(16)}`;
 }
 
-async function createSession(workspacePath: string, server: LspServerConfig): Promise<SessionEntry> {
+async function createSession(
+  workspacePath: string,
+  server: LspServerConfig,
+  onDead: () => void,
+): Promise<SessionEntry> {
   const transport = new TauriRpcTransport({
     sessionId: stableSessionId(sessionKey(workspacePath, server)),
     program: server.program,
@@ -60,6 +64,13 @@ async function createSession(workspacePath: string, server: LspServerConfig): Pr
     framing: "content-length",
   });
   const client = new JsonRpcClient(transport, { timeoutMs: 20_000 });
+  // 2026-07-15 review 修复：进程崩溃/被 kill（比如 write_rpc_stdin 超时自动终止，见 rpc.rs）
+  // 后，之前这里完全没反应——sessions 缓存的 SessionEntry 原样留着，指向一个已经死掉的
+  // client/transport，之后同 workspace 的调用要么快速失败于"session not found"要么再次
+  // 悬挂，用户必须重启 app 才能恢复该 workspace 的 LSP 功能。这里挂上 onClose/onError，
+  // 进程一终止/一报错就把这个 key 从缓存里 evict，下次调用会重新 spawn 一个干净的会话。
+  transport.onClose(onDead);
+  transport.onError(onDead);
   const diagnostics: DiagnosticsMap = new Map();
 
   client.onRequest("workspace/configuration", (params) => {
@@ -104,7 +115,13 @@ async function getSession(workspacePath: string, filePath: string): Promise<Sess
   const key = sessionKey(workspacePath, server);
   let promise = sessions.get(key);
   if (!promise) {
-    promise = createSession(workspacePath, server).catch((error) => {
+    // onDead 只在“当前仍是这个 key 对应的这一份 promise”时才 evict——避免旧会话延迟触发的
+    // onClose，把中间已经被新会话重新占用的同一个 key 误删掉（比如 evict 后立刻又有新调用
+    // 建了新会话，旧 transport 才慢一拍报 terminated）。
+    const onDead = () => {
+      if (sessions.get(key) === promise) sessions.delete(key);
+    };
+    promise = createSession(workspacePath, server, onDead).catch((error) => {
       sessions.delete(key);
       throw error;
     });

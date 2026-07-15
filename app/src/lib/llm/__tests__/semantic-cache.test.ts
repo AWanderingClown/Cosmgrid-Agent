@@ -18,7 +18,7 @@ vi.mock("../../db", () => ({
 }));
 
 import { lookupCache, writeCache, cleanupExpiredCache, CACHE_TTL_MS } from "../semantic-cache";
-import { keywordEmbed } from "../embedding";
+import { keywordEmbed, getEmbeddingProvider } from "../embedding";
 
 function row(query: string, response: string, over: Record<string, unknown> = {}) {
   return {
@@ -86,6 +86,25 @@ describe("lookupCache", () => {
     // 旧版本写入的缓存（如 'keyword-hash'），vec 跟当前 v2 算法不兼容，绝不能命中
     mocks.listValid.mockResolvedValue([
       { ...row("什么是闭包", "旧答案"), providerName: "keyword-hash" },
+    ]);
+    expect(await lookupCache("什么是闭包")).toBeNull();
+    expect(mocks.recordHit).not.toHaveBeenCalled();
+  });
+});
+
+describe("D9：lookupCache 仅按当前 embedding provider 拉缓存", () => {
+  it("listValid 收到 providerName 过滤，避免跨 provider 全表扫描", async () => {
+    mocks.listValid.mockResolvedValue([row("什么是闭包", "闭包是函数加词法环境")]);
+    await lookupCache("什么是闭包");
+    expect(mocks.listValid).toHaveBeenCalledTimes(1);
+    const callArg = mocks.listValid.mock.calls[0]![0];
+    expect(callArg).toEqual({ providerName: getEmbeddingProvider().name });
+  });
+
+  it("DB 层 mock 即便返回别的 provider 的整批 vec，lookup 也不命中（双重防线）", async () => {
+    // 即便有人误把 listValid 实现成拉全表，JS 层 providerName 不匹配也会 skip
+    mocks.listValid.mockResolvedValue([
+      { ...row("什么是闭包", "旧答案"), providerName: "some-other-provider" },
     ]);
     expect(await lookupCache("什么是闭包")).toBeNull();
     expect(mocks.recordHit).not.toHaveBeenCalled();

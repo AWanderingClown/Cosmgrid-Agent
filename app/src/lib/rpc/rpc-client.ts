@@ -29,7 +29,7 @@ export class JsonRpcClient {
     this.transport.onError?.((error) => this.rejectPending(error));
   }
 
-  async call<T = unknown>(method: string, params?: unknown): Promise<T> {
+  call<T = unknown>(method: string, params?: unknown): Promise<T> {
     const id = this.nextId++;
     const request = params === undefined
       ? { jsonrpc: "2.0", id, method }
@@ -47,16 +47,24 @@ export class JsonRpcClient {
       });
     });
 
-    try {
-      await this.transport.send(request);
-    } catch (error) {
+    // 2026-07-15 review 修复：原实现在 `return promise` 之前 `await this.transport.send(request)`
+    // ——如果 send()（对应 invoke("write_rpc_stdin")）本身悬挂不 resolve/reject（比如子进程
+    // 不读 stdin 导致 Rust 侧写阻塞），这个 async 函数会永远停在这一行，永远走不到
+    // `return promise`。上面那个 setTimeout 虽然仍会按时触发，但它 reject 的是这个局部变量
+    // `promise`——调用方压根没拿到这个引用（因为函数还没 return），等于超时兜底完全落空，
+    // 调用方看到的是永久挂起而不是一条清晰的超时错误。
+    //
+    // 改成不 await send()：立刻同步 return promise（调用方马上拿到这个会被 timeout 保护的
+    // 引用），send() 本身异步跑；send() 失败时在 catch 里主动清理 pending 项并 reject，
+    // send() 卡住不返回则完全交给上面已经在计时的 timeout 兜底。
+    this.transport.send(request).catch((error: unknown) => {
       const pending = this.pending.get(id);
       if (pending) {
         clearTimeout(pending.timeout);
         this.pending.delete(id);
+        pending.reject(error instanceof Error ? error : new Error(String(error)));
       }
-      throw error;
-    }
+    });
 
     return promise;
   }

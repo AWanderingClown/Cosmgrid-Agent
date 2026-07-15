@@ -44,8 +44,17 @@ export const MAX_REPAIR_ATTEMPTS = 2;
 /**
  * verify 阶段专属：把"failed"降级成受控修复循环的"retryable"，或者在修复次数耗尽后
  * 升级成终态的"blocked"。非 verify 阶段的 failed 原样返回，不进入自动修复。
+ *
+ * 2026-07-14 导出：原来只在本文件内部给粗筛（verifyNodeOutcome）用；现在细对账
+ * （task-verifier.ts 的 VERIFY_ACCEPTANCE_CRITERIA 结果）也需要走同一套受控重试上限
+ * （MAX_REPAIR_ATTEMPTS），不能另开一条不受控的重试路径——所以导出复用，而不是复制一份。
+ * 第二个参数收窄成只需要的两个字段（原来接受完整 VerifyNodeOutcomeInput，但函数体只读
+ * phase/repairAttempts），调用方不需要凑一份不相关的完整输入。
  */
-function applyVerifyRepairLoop(outcome: NodeOutcome, input: VerifyNodeOutcomeInput): NodeOutcome {
+export function applyVerifyRepairLoop(
+  outcome: NodeOutcome,
+  input: { phase: WorkflowPhase; repairAttempts?: number },
+): NodeOutcome {
   if (input.phase !== "verify" || outcome.status !== "failed") return outcome;
 
   const attempts = input.repairAttempts ?? 0;

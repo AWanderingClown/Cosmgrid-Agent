@@ -28,6 +28,19 @@ function selected(skill: SkillDefinition, reason: string): SelectedSkill {
 }
 
 /**
+ * 2026-07-14 步骤2（skill/workflow 解耦）：这 3 个内置 id 的阶段行为纪律已经原样迁移进
+ * lib/workflow/phase-guidance.ts，由 buildWorkflowContextPreamble 直接注入 workflowPreamble——
+ * 不再让它们参与 skill 选择，否则同一段内容会通过两条路径（workflow 原生 + skill 选择）
+ * 重复注入 prompt。仍保留在 CORE_SKILLS / DB 里只是为了历史审计记录，步骤3 退休 DB 注册
+ * 系统时一并清理，这里不动 registry.ts/DB，只在选择入口挡掉。
+ */
+const RETIRED_PHASE_SKILL_IDS: ReadonlySet<string> = new Set([
+  "project_audit",
+  "plan_execution",
+  "verification_closure",
+]);
+
+/**
  * 按 phase 找一条 skill。引擎化阶段 1b：以前 selector 内部硬编 3 个 builtin id
  * (`find(s.id === "verification_closure")` 等)；现在用 phase 优先匹配 builtin，
  * 否则 user/ops（理论上 user skill 可注册同名 phase，但默认顺序先 builtin 更稳）。
@@ -52,7 +65,7 @@ export function selectSkillForTurn(args: {
   /** 阶段 1b：调用方传 DB 加载的 active 列表（approved 全集）。不传则降级到 CORE_SKILLS。 */
   activeSkills?: SkillDefinition[];
 }): SelectedSkill | null {
-  const skills = args.activeSkills ?? CORE_SKILLS;
+  const skills = (args.activeSkills ?? CORE_SKILLS).filter((s) => !RETIRED_PHASE_SKILL_IDS.has(s.id));
   const phase = currentPhase(args.workflowSnapshot);
   const verification = findByPhase(skills, "verify");
   const execution = findByPhase(skills, "execute");

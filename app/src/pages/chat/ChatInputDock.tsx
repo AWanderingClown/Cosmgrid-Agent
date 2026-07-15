@@ -5,10 +5,12 @@ import { Button } from "@/components/ui/button";
 import { WorkingStatusBar } from "@/components/chat/WorkingStatusBar";
 import { ToolConfirmCard } from "@/pages/chat/ToolConfirmCard";
 import { AskUserCard } from "@/pages/chat/AskUserCard";
+import { NextActionsCard } from "@/pages/chat/NextActionsCard";
 import { cn } from "@/lib/utils";
 import type { Attachment } from "@/lib/llm/attachments";
 import type { ToolCallView } from "@/lib/work-artifact-views";
 import type { ToolConfirmRequest, AskUserRequest } from "@/lib/llm/tools";
+import type { NextAction } from "@/lib/workflow/types";
 import type { StreamActivityPhase } from "@/pages/chat/streaming-status";
 
 type PermissionMode = "read" | "confirm" | "auto";
@@ -36,6 +38,10 @@ interface ChatInputDockProps {
   /** ask_user_question 工具的结构化追问——跟 pendingConfirm 同一个槽位，优先级更高 */
   pendingQuestion: AskUserRequest | null;
   onResolveQuestion: (answer: string) => void;
+  /** Task #9：workflow 上一步做完后等用户选下一步——跟 pendingConfirm/pendingQuestion 同一个
+   *  槽位，优先级最低（那两个是"有个工具调用正等着"，这个是"空闲，等你选方向"）。 */
+  pendingNextActions: NextAction[] | null;
+  onPickNextAction: (actionId: string) => void;
 }
 
 export function ChatInputDock({
@@ -59,6 +65,8 @@ export function ChatInputDock({
   onResolveConfirm,
   pendingQuestion,
   onResolveQuestion,
+  pendingNextActions,
+  onPickNextAction,
 }: ChatInputDockProps) {
   const { t } = useTranslation();
 
@@ -77,6 +85,8 @@ export function ChatInputDock({
               <AskUserCard request={pendingQuestion} onResolve={onResolveQuestion} />
             ) : pendingConfirm ? (
               <ToolConfirmCard request={pendingConfirm} onResolve={onResolveConfirm} />
+            ) : pendingNextActions && pendingNextActions.length > 0 ? (
+              <NextActionsCard actions={pendingNextActions} onPick={onPickNextAction} />
             ) : (
               <WorkingStatusBar activeCall={activeToolCall} running={isStreaming} phase={streamActivityPhase} />
             )}

@@ -340,6 +340,22 @@ describe("streamViaCli abort 真杀子进程（改进-3 核心）", () => {
     const killCalls = invokeMock.mock.calls.filter((c) => c[0] === "kill_cli");
     expect(killCalls).toHaveLength(0);
   });
+
+  // 2026-07-15 review 修复回归测试：signal 在调用 streamViaCli 之前就已经 aborted
+  // （对应 chat-fallback.ts 续接场景：两次 runModelAttempt 之间用户点了停止）。
+  // 旧实现只用 addEventListener("abort", ...)，已经发生过的 abort 事件不会补发，
+  // 会导致这次调用完全无视停止请求、真的 spawn 出子进程继续跑。
+  it("signal 在调用前就已 aborted → 立即 resolve abort，不 spawn 子进程", async () => {
+    const ac = new AbortController();
+    ac.abort(); // 调用 streamViaCli 之前就已经 aborted
+
+    const res = await streamViaCli(endpoint, messages, { onDelta: vi.fn() }, { signal: ac.signal });
+
+    expect(res.finishReason).toBe("abort");
+    // 核心断言：根本不应该发起 spawn_cli_stream，用户已经要求停止
+    const spawnCalls = invokeMock.mock.calls.filter((c) => c[0] === "spawn_cli_stream");
+    expect(spawnCalls).toHaveLength(0);
+  });
 });
 
 describe("CLI 程序路径选择", () => {

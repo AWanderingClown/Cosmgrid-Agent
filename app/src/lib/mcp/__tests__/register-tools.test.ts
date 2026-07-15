@@ -109,4 +109,32 @@ describe("registerEnabledMcpTools local launch approval", () => {
     expect(approveLocalLaunch).not.toHaveBeenCalled();
     expect(mocks.listMcpTools).toHaveBeenCalledWith(remote, "/workspace-a");
   });
+
+  // 2026-07-15 review 修复回归测试：原来是 for...of 顺序 await，一个 server 卡住/报错会
+  // 拖慢甚至（如果是真悬挂）挡住后面 server 的注册。改成 Promise.allSettled 并行后，一个
+  // server 失败不应该影响另一个 server 正常注册工具，且两个 server 的 listMcpTools 都应该
+  // 被调用到（不是顺序短路，第一个失败就不再试第二个）。
+  it("一个 server 失败不阻塞另一个 server 的工具注册（并行，不是顺序短路）", async () => {
+    const remoteA = { ...server("remote_http"), id: "server-a", name: "server-a" };
+    const remoteB = { ...server("remote_http"), id: "server-b", name: "server-b" };
+    mocks.listEnabled.mockResolvedValue([remoteA, remoteB]);
+    mocks.isApproved.mockResolvedValue(true);
+
+    mocks.listMcpTools.mockImplementation(async (s: McpServerRow) => {
+      if (s.id === "server-a") throw new Error("server-a 卡住/连不上");
+      return [{ name: "tool-b", description: "", inputSchema: { type: "object" as const } }];
+    });
+
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const registry = new ToolRegistry();
+    await registerEnabledMcpTools(registry, { workspacePath: "/workspace-a" });
+
+    expect(mocks.listMcpTools).toHaveBeenCalledWith(remoteA, "/workspace-a");
+    expect(mocks.listMcpTools).toHaveBeenCalledWith(remoteB, "/workspace-a");
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("server-a"),
+      expect.any(Error),
+    );
+    consoleErrorSpy.mockRestore();
+  });
 });

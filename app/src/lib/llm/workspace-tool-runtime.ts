@@ -28,6 +28,9 @@ export interface WorkspaceToolRuntimeOptions {
   /** 2026-07-10 OMO-7 capability guardrail：当前选中模型的人类可读名，传了才能查 models.dev
    *  的 tool_call/vision 能力位；不传就按"支持"处理（不确定不拦截）。 */
   modelName?: string;
+  /** K7 能力门控：本轮允许的 capability 集（来源 = 工作流阶段策略），烘进每个工具的 ToolContext。
+   *  不传 / 空 = 不门控（无阶段策略时保持全放行）。 */
+  activeCaps?: string[];
 }
 
 export interface WorkspaceToolRuntime {
@@ -67,6 +70,7 @@ export async function prepareWorkspaceToolRuntime(
         messageId: options.messageId,
         confirm: options.confirm,
         askUser: options.askUser,
+        activeCaps: options.activeCaps,
       });
     } catch (err) {
       console.error("[tools] 构建无工作区工具失败:", err);
@@ -92,6 +96,7 @@ export async function prepareWorkspaceToolRuntime(
         confirm: options.confirm,
         askUser: options.askUser,
         blockedCommands: options.blockedCommands,
+        activeCaps: options.activeCaps,
       });
     } catch (err) {
       console.error("[tools] 构建工具失败:", err);

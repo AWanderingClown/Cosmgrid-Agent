@@ -27,7 +27,11 @@ export async function persistToolExecution(
       input: safeStringify(rawInput),
       output: clipAndRedact(result.output, maxOutputChars),
       status: result.status,
-      userConfirmed: result.status !== "denied" && !tool.readOnly,
+      // 2026-07-15 review 修复：优先信工具自己报的真实确认状态（比如 bash 工具内部
+      // isReadOnlyCommand 免确认时会显式报 userConfirmed:false，不能让下面这条"从
+      // status/readOnly 反推"的兜底把它盖成 true）。大多数工具（write/edit/hashline_edit/
+      // memory）无条件走 requireApprovalAsV2，没有主动报这个字段，走兜底推导仍然准确。
+      userConfirmed: result.userConfirmed ?? (result.status !== "denied" && !tool.readOnly),
       reversible: result.reversible ?? false,
       durationMs,
       resultJson: serializeResultV2(persistResult),

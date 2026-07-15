@@ -752,6 +752,107 @@ describe("streamWithFallback - cooldown 行为", () => {
   });
 });
 
+describe("streamWithFallback - D4 额度熔断", () => {
+  const quotaGuard = (ids: string[]) => ({
+    getExhaustedModelIds: () => new Set(ids),
+  });
+
+  it("主模型额度耗尽 → 直接跳到 fallback + 触发 onSwitched(kind=quota)", async () => {
+    mocks.streamText.mockReturnValueOnce(makeSuccessStream(["from fallback"]));
+
+    const switched: Array<{ from: string; to: string; reason: SwitchReason }> = [];
+    const audits: Array<{ status: string; modelId: string }> = [];
+    const cbs: StreamCallbacks = {
+      onDelta: () => {},
+      onSwitched: (f, t, r) => switched.push({ from: f.modelId, to: t.modelId, reason: r }),
+      onInvocationAudit: (event) => audits.push({ status: event.status, modelId: event.modelId }),
+    };
+
+    const result = await streamWithFallback(
+      [primary, fallback],
+      [{ role: "user", content: "x" }],
+      cbs,
+      { quotaGuard: quotaGuard(["m-primary"]) },
+    );
+    expect(result.switched).toBe(true);
+    expect(result.usedModelId).toBe("m-fallback");
+    expect(switched).toHaveLength(1);
+    expect(switched[0]!.reason).toEqual({ kind: "quota" });
+    expect(audits.some((a) => a.status === "quota_exhausted" && a.modelId === "m-primary")).toBe(true);
+  });
+
+  it("所有模型额度都耗尽 → 抛错（与 cooldown 分开），不调用任何模型", async () => {
+    const cbs: StreamCallbacks = { onDelta: () => {} };
+    await expect(
+      streamWithFallback(
+        [primary, fallback],
+        [{ role: "user", content: "x" }],
+        cbs,
+        { quotaGuard: quotaGuard(["m-primary", "m-fallback"]) },
+      ),
+    ).rejects.toThrow(/All models exhausted quota: Primary、Fallback/);
+    expect(mocks.streamText).not.toHaveBeenCalled();
+  });
+
+  it("额度守卫缺失 → 不熔断，主模型正常跑（保持原有行为，CLI 等路径安全）", async () => {
+    mocks.streamText.mockReturnValueOnce(makeSuccessStream(["ok"]));
+    const cbs: StreamCallbacks = { onDelta: () => {} };
+    const result = await streamWithFallback(
+      [primary, fallback],
+      [{ role: "user", content: "x" }],
+      cbs,
+    );
+    expect(result).toEqual({ usedModelId: "m-primary", switched: false });
+    expect(mocks.streamText).toHaveBeenCalledTimes(1);
+  });
+
+  it("额度耗尽但后备也失败 → 切到后备时不再被额度拦截、正常走 fallback 错误分类", async () => {
+    mocks.streamText.mockReturnValueOnce(makeSuccessStream(["from fallback"]));
+    const cbs: StreamCallbacks = { onDelta: () => {} };
+    const result = await streamWithFallback(
+      [primary, fallback],
+      [{ role: "user", content: "x" }],
+      cbs,
+      { quotaGuard: quotaGuard(["m-primary"]) },
+    );
+    expect(result.usedModelId).toBe("m-fallback");
+  });
+
+  // 2026-07-15 review 回归测试：cooldown 和 quota 交错时，之前的实现分两个独立循环——
+  // quota 循环把 startIdx 推到的模型从未做过 cooldown 检查，会选中一个实际在 cooldown
+  // 的模型去真实请求。见 chat-fallback.ts 里 D4 skip 循环的合并注释。
+  it("cooldown 与 quota 交错 → 第三个模型仍需过 cooldown 检查，不能被跳过检测漏掉", async () => {
+    const third: ModelEndpoint = {
+      modelId: "m-third",
+      modelName: "third-model",
+      providerType: "openai",
+      providerId: "prov-third",
+      apiCredentialId: "cred-third",
+      apiKey: "sk-test-third",
+      baseUrl: "https://api.third.example",
+      displayLabel: "Third",
+    };
+    // primary 在 cooldown，fallback 额度耗尽（不在 cooldown），third 也在 cooldown（不在额度耗尽集合）。
+    markModelFailed(primary.modelId);
+    markModelFailed(third.modelId);
+    expect(isInCooldown(primary.modelId)).toBe(true);
+    expect(isInCooldown(third.modelId)).toBe(true);
+
+    const cbs: StreamCallbacks = { onDelta: () => {} };
+    await expect(
+      streamWithFallback(
+        [primary, fallback, third],
+        [{ role: "user", content: "x" }],
+        cbs,
+        { quotaGuard: quotaGuard(["m-fallback"]) },
+      ),
+    ).rejects.toThrow(/All models are cooling down/);
+    // 三个模型全部被正确判定为不可用（cooldown 或 quota），没有一个真的发起请求——
+    // 之前的 bug 会让 third 绕过 cooldown 检查被直接调用。
+    expect(mocks.streamText).not.toHaveBeenCalled();
+  });
+});
+
 describe("streamWithFallback - abort 处理", () => {
   it("主动 abort 不算失败、不切 fallback、不写 UsageEvent", async () => {
     const abortError = Object.assign(new Error("aborted"), { name: "AbortError" });

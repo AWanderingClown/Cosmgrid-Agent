@@ -73,6 +73,12 @@ function debateNodeStatus(snapshot: WorkflowSnapshot, node: WorkflowNode): Chain
   if (node.status === "done") return "done";
   if (node.status === "failed") return "aborted";
   if (node.status === "skipped") return "skipped";
+  // 2026-07-15 review 修复：waiting_user（用户拒绝权限/主动中止）不该跟 running/ready 一样
+  // 渲染成 "active"（看起来还在跑）——ChainNodeVisualStatus 目前没有专门的"暂停等用户"视觉
+  // 状态，借用 "aborted"（X 图标 + 醒目配色）传达"已经停下来了，不是还在进行中"，比继续显示
+  // "进行中"更接近真实情况。后续如果要精确区分"失败终止"和"等用户"，再给 ChainNodeVisualStatus
+  // 加专门的枚举值 + 图标/配色。
+  if (node.status === "waiting_user") return "aborted";
   if (snapshot.currentNodeId === node.id || node.status === "ready" || node.status === "running") return "active";
   return "planned";
 }
@@ -115,6 +121,9 @@ function workflowNodeStatus(snapshot: WorkflowSnapshot, node: WorkflowNode): Cha
   if (node.status === "done") return "done";
   if (node.status === "failed") return "aborted";
   if (node.status === "skipped") return "skipped";
+  // 2026-07-15 review 修复：见 debateNodeStatus 同名分支的注释——waiting_user 不该跟
+  // running/ready 一样渲染成"进行中"。
+  if (node.status === "waiting_user") return "aborted";
   if (snapshot.currentNodeId === node.id || node.status === "ready" || node.status === "running") return "active";
   return "planned";
 }

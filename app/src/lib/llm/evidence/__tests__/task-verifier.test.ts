@@ -14,6 +14,7 @@
 import { describe, expect, it } from "vitest";
 import type { ToolExecutionRow } from "@/lib/db";
 import { verifyTask } from "../task-verifier";
+import { VERIFY_ACCEPTANCE_CRITERIA } from "../verify-acceptance-criteria";
 import type { EvidenceRef, LinkedClaim, StructuredAcceptanceCriterion, VerificationResult } from "../types";
 
 // =====================================================================
@@ -331,6 +332,82 @@ describe("task-verifier: claim 关联到正确 EvidenceRef.id", () => {
     expect(fileClaim?.evidenceIds.length).toBeGreaterThan(0);
     // decisionEvidenceIds 收集所有 claim 的 evidenceIds
     expect(result.decisionEvidenceIds.length).toBeGreaterThan(0);
+  });
+});
+
+// =====================================================================
+// 2026-07-14：verify 阶段真实判定接入——VERIFY_ACCEPTANCE_CRITERIA 组合场景
+// （测试严格：没有真实可核对的测试证据 = failed；lint/build 宽松：没跑不算错，
+// 跑了但真失败才算错。见 structured-criteria.ts 三态改造 + 本次批准的方案。）
+// =====================================================================
+
+describe("task-verifier: VERIFY_ACCEPTANCE_CRITERIA 组合场景", () => {
+  it("回归防护：只跑了测试且带明确数字，没跑 lint/build → 整体 passes（没跑 lint/build 不算错）", () => {
+    const result = callVerify({
+      finalContent: "8 项测试全部通过",
+      execRows: [
+        rowOf({
+          id: "bash1",
+          toolName: "bash",
+          input: JSON.stringify({ command: "pnpm test" }),
+          output: "Tests: 8 passed",
+          status: "success",
+        }),
+      ],
+      acceptanceCriteria: VERIFY_ACCEPTANCE_CRITERIA,
+    });
+    expect(result.status).toBe("passes");
+    expect(result.failedCriteria).toEqual([]);
+    expect(result.metCriteria).toContain("tests_pass");
+    // lint/build 没跑，不应该出现在 failedCriteria 里（这是本次修复要堵住的回归）
+    expect(result.failedCriteria).not.toContain("lint_pass");
+    expect(result.failedCriteria).not.toContain("build_pass");
+  });
+
+  it("堵洞验证：只说「测试都通过了」不带数字 → fails（含糊声明不再蒙混过关）", () => {
+    const result = callVerify({
+      finalContent: "测试都通过了，没有问题。",
+      execRows: [],
+      acceptanceCriteria: VERIFY_ACCEPTANCE_CRITERIA,
+    });
+    expect(result.status).toBe("fails");
+    expect(result.failedCriteria).toContain("tests_pass");
+  });
+
+  it("什么测试证据都没给（回复里完全不提测试）→ fails", () => {
+    const result = callVerify({
+      finalContent: "已经完成本轮修改。",
+      execRows: [],
+      acceptanceCriteria: VERIFY_ACCEPTANCE_CRITERIA,
+    });
+    expect(result.status).toBe("fails");
+    expect(result.failedCriteria).toContain("tests_pass");
+  });
+
+  it("lint 真的跑了且失败 → fails，且失败原因精确指向 lint_pass（测试本身仍是 met，不被 lint 拖累判断依据）", () => {
+    const result = callVerify({
+      finalContent: "8 项测试全部通过",
+      execRows: [
+        rowOf({
+          id: "bash-test",
+          toolName: "bash",
+          input: JSON.stringify({ command: "pnpm test" }),
+          output: "Tests: 8 passed",
+          status: "success",
+        }),
+        rowOf({
+          id: "bash-lint",
+          toolName: "bash",
+          input: JSON.stringify({ command: "npm run lint" }),
+          output: "3 problems",
+          status: "error",
+        }),
+      ],
+      acceptanceCriteria: VERIFY_ACCEPTANCE_CRITERIA,
+    });
+    expect(result.status).toBe("fails");
+    expect(result.failedCriteria).toEqual(["lint_pass"]);
+    expect(result.metCriteria).toContain("tests_pass");
   });
 });
 

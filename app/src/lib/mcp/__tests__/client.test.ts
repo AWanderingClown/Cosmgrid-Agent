@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   disposeRemote: vi.fn(),
   disposeRemoteServer: vi.fn(),
   hasRemote: vi.fn(() => false),
-  transports: [] as Array<{ options: Record<string, unknown>; dispose: ReturnType<typeof vi.fn> }>,
+  transports: [] as Array<{ options: Record<string, unknown>; dispose: ReturnType<typeof vi.fn>; simulateTerminated: () => void }>,
 }));
 
 vi.mock("../remote-client", () => ({
@@ -24,6 +24,7 @@ vi.mock("../remote-client", () => ({
 vi.mock("@/lib/rpc/tauri-transport", () => ({
   TauriRpcTransport: class {
     private listener: ((message: unknown) => void) | null = null;
+    private closeListeners: Array<() => void> = [];
     dispose = vi.fn(async () => undefined);
 
     constructor(readonly options: Record<string, unknown>) {
@@ -34,9 +35,16 @@ vi.mock("@/lib/rpc/tauri-transport", () => ({
       this.listener = listener;
     }
 
-    onClose() {}
+    onClose(listener: () => void) {
+      this.closeListeners.push(listener);
+    }
     onError() {}
     async start() {}
+
+    /** 测试用：模拟进程终止，触发 onDead 让会话缓存 evict 自己。 */
+    simulateTerminated() {
+      for (const l of this.closeListeners) l();
+    }
 
     async send(raw: unknown) {
       const message = raw as { id?: number; method?: string };
@@ -123,6 +131,23 @@ describe("MCP client routing and lifecycle", () => {
     await disposeAllMcpSessions();
     expect(mocks.transports[1]!.dispose).toHaveBeenCalled();
     expect(mocks.disposeRemote).toHaveBeenCalled();
+  });
+
+  // 2026-07-15 review 修复回归测试：进程崩溃/被 kill 后，之前 localSessions 缓存的条目原样
+  // 留着指向已死的 client/transport，之后同 workspace 的调用会一直复用这个死会话，用户
+  // 必须重启 app 才能恢复。现在 transport 报 terminated 后应该把缓存 evict，下一次调用会
+  // 重新 spawn 一个全新的 transport。
+  it("transport 报 terminated 后应该从缓存 evict，下次调用重新建会话而不是复用死会话", async () => {
+    const local = server("local_stdio");
+    await listMcpTools(local, "/workspace-a");
+    expect(mocks.transports).toHaveLength(1);
+
+    // 模拟进程被杀（比如 write_rpc_stdin 超时自动终止）
+    mocks.transports[0]!.simulateTerminated();
+
+    await listMcpTools(local, "/workspace-a");
+    // evict 生效：第二次调用应该重新建了一个新 transport，不是复用第一次那个
+    expect(mocks.transports).toHaveLength(2);
   });
 });
 

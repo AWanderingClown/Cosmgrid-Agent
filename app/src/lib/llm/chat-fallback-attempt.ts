@@ -202,6 +202,14 @@ export async function runModelAttempt(
   const lm = getLanguageModel(target.providerType, target.modelName, target.apiKey, target.baseUrl);
   const localAbort = new AbortController();
   const onParentAbort = () => localAbort.abort();
+  // 2026-07-15 review 修复：AbortSignal 的 'abort' 事件只在真正 abort 的那一刻广播一次——
+  // 续接场景下（撞步数上限后 continue 到下一次 runModelAttempt），如果用户点停止的时机
+  // 刚好卡在两次 attempt 之间，这里注册监听器时 options.signal 可能已经 aborted 过了，
+  // 单纯 addEventListener 会永远错过那个已经发生的事件，本次 attempt 会无视停止请求一路
+  // 跑到自然结束。先补查一次已 aborted 的情况，直接同步触发，再继续监听后续的 abort。
+  if (options.signal?.aborted) {
+    onParentAbort();
+  }
   options.signal?.addEventListener("abort", onParentAbort);
   const stepToolCalls: StepToolCall[] = [];
   let stepCount = 0;

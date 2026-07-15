@@ -66,6 +66,37 @@ describe("runModelAttempt - doom-loop 跨续接批次判定（priorToolCalls）"
   });
 });
 
+// 2026-07-15 review 修复回归测试：options.signal 在调用 runModelAttempt 之前就已经
+// aborted（对应 chat-fallback.ts 续接场景：两次 attempt 之间用户点了停止）。旧实现只用
+// addEventListener("abort", onParentAbort)，已经发生过的 abort 事件不会补发到新注册的
+// 监听器上，会导致这次调用完全无视停止请求、把 streamText 真的跑完。
+describe("runModelAttempt - signal 提前 aborted 的续接场景（2026-07-15 review 修复）", () => {
+  it("signal 在调用前就已 aborted → localAbort 被同步触发，streamText 拿到的是已 aborted 的 abortSignal", async () => {
+    let capturedAbortSignal: AbortSignal | undefined;
+    mocks.streamText.mockImplementationOnce((args: { abortSignal?: AbortSignal }) => {
+      capturedAbortSignal = args.abortSignal;
+      return {
+        fullStream: (async function* () {})(),
+        usage: Promise.resolve({ inputTokens: 0, outputTokens: 0 }),
+        finishReason: Promise.resolve("stop"),
+      };
+    });
+
+    const ac = new AbortController();
+    ac.abort(); // 调用 runModelAttempt 之前就已经 aborted
+
+    const result = await runModelAttempt(
+      target,
+      [{ role: "user", content: "继续" }],
+      { onDelta: () => {} },
+      { signal: ac.signal },
+    );
+
+    expect(capturedAbortSignal?.aborted).toBe(true);
+    expect(result.wasAborted).toBe(true);
+  });
+});
+
 describe("runModelAttempt - stepCount 真实步数统计（假收尾判定用，见 chat-fallback.ts）", () => {
   it("每次 onStepFinish 触发都计入 stepCount，不管这一步有没有工具调用", async () => {
     mocks.streamText.mockImplementationOnce(

@@ -2,7 +2,7 @@
 // preamble.ts 当前 branches 0%；buildSkillPreamble 三个分支：skill=null / 找不到 definition / 命中。
 import { describe, it, expect } from "vitest";
 import { buildSkillPreamble } from "../preamble";
-import type { SelectedSkill } from "../types";
+import type { SelectedSkill, SkillDefinition } from "../types";
 
 describe("buildSkillPreamble", () => {
   it("skill 为 null 时返回 null", () => {
@@ -51,5 +51,49 @@ describe("buildSkillPreamble", () => {
     expect(text).not.toBeNull();
     expect(text!.length).toBeGreaterThan(50);
     expect(text!.includes("\n")).toBe(true);
+  });
+
+  it("结构化验收标准渲染 description，不是 [object Object]", () => {
+    // verification_closure 的 acceptanceCriteria 是 {id,description,kind} 对象数组，
+    // 旧实现 `- ${item}` 会拼成 "- [object Object]"。
+    const skill: SelectedSkill = {
+      id: "verification_closure",
+      label: "",
+      selectedAt: "2026-07-10T00:00:00Z",
+      reason: "验证",
+    };
+    const text = buildSkillPreamble(skill);
+    expect(text).not.toBeNull();
+    expect(text).not.toContain("[object Object]");
+    expect(text).toContain("运行测试套件全部通过");
+  });
+
+  it("skill.id 不在 CORE_SKILLS，但在传入的 definitions 里 → 用 definitions 解析（user skill 可渲染）", () => {
+    const userSkill: SkillDefinition = {
+      id: "custom_security_review",
+      label: "安全审查",
+      purpose: "对改动做 OWASP 视角复查。",
+      triggerPhases: ["verify"],
+      triggerKeywords: ["安全", "漏洞"],
+      requiredCapabilities: ["read_files"],
+      systemGuidance: ["先看认证与输入处理边界。"],
+      acceptanceCriteria: ["列出高危项及修复建议。"],
+      source: "user",
+      reviewStatus: "approved",
+    };
+    const selected: SelectedSkill = {
+      id: "custom_security_review",
+      label: "安全审查",
+      selectedAt: "2026-07-14T00:00:00Z",
+      reason: "关键词命中：安全",
+    };
+    // 不传 definitions → CORE_SKILLS 找不到 → null（回归旧行为）
+    expect(buildSkillPreamble(selected)).toBeNull();
+    // 传 definitions → 命中，渲染完整 preamble
+    const text = buildSkillPreamble(selected, [userSkill]);
+    expect(text).not.toBeNull();
+    expect(text).toContain("当前启用技能：安全审查");
+    expect(text).toContain("先看认证与输入处理边界。");
+    expect(text).toContain("列出高危项及修复建议。");
   });
 });

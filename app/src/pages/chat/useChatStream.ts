@@ -32,6 +32,10 @@ import { getFsAdapter } from "@/lib/llm/tools/fs-adapter";
 import { prepareTurnWorkflow } from "@/lib/workflow/prepare-turn-workflow";
 import { buildSkillPreamble } from "@/lib/skills/preamble";
 import { selectSkillForTurn } from "@/lib/skills/selector";
+import { skillDefinitions, rowToDefinition } from "@/lib/db/skill-definitions";
+import type { SkillDefinition } from "@/lib/skills/types";
+import { capabilitiesForPhase } from "@/lib/workflow/phase-capabilities";
+import { loadClaudeCodeSkills, buildSkillCatalogPreamble } from "@/lib/llm/claude-code-compat/skill-loader";
 import { attachActiveSkillToWorkflow, attachPlanSourceToWorkflow } from "@/lib/workflow/reducer";
 import { buildWorkflowContextPreamble, readDesktopPlanForExecution } from "@/lib/workflow/execution-context";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
@@ -489,6 +493,31 @@ export function useChatStream(opts: UseChatStreamOptions) {
         setMessages,
       });
 
+      // K7 能力门控的允许集来自「当前工作流阶段」策略（已与 skill 解耦，见 phase-capabilities.ts）。
+      // 必须在工具构建前算出：ctx 在 buildAiSdkTools 时定型，之后才执行。
+      // 下方 desktopPlan 只改 planSource 不改 phase，故此处用的阶段与最终一致。
+      const currentNode = activeTurnWorkflowSnapshot?.nodes.find(
+        (n) => n.id === activeTurnWorkflowSnapshot?.currentNodeId,
+      );
+      const activeCaps = capabilitiesForPhase(currentNode?.phase);
+
+      // Skill 选择（仅用于注入 skillPreamble；能力门控已不依赖它）。
+      // DB 不可用 / 空表都降级到 undefined —— selector / preamble 内部回退到 CORE_SKILLS
+      //（空数组不会被 `activeSkills ?? CORE_SKILLS` 兜底，会把 skill 整个关掉，故显式转 undefined）。
+      let activeSkillDefs: SkillDefinition[] | undefined;
+      try {
+        const rows = await skillDefinitions.listActive();
+        activeSkillDefs = rows.length > 0 ? rows.map(rowToDefinition) : undefined;
+      } catch {
+        activeSkillDefs = undefined;
+      }
+      const selectedSkill = selectSkillForTurn({
+        text,
+        workflowSnapshot: activeTurnWorkflowSnapshot,
+        intentDecision: cacheIntent,
+        activeSkills: activeSkillDefs,
+      });
+
       const includeWriteTools = shouldExposeWriteTools(effectivePermissionMode);
       const workspaceRuntime = await prepareChatWorkspaceRuntime({
         workspacePath: effectiveWorkspace,
@@ -501,6 +530,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         requestAskUser,
         stopIfAborted,
         modelName: model.name,
+        activeCaps,
       });
       if (workspaceRuntime.aborted) return;
       tools = workspaceRuntime.tools;
@@ -541,11 +571,8 @@ export function useChatStream(opts: UseChatStreamOptions) {
         desktopPlan,
       });
 
-      const selectedSkill = selectSkillForTurn({
-        text,
-        workflowSnapshot: activeTurnWorkflowSnapshot,
-        intentDecision: cacheIntent,
-      });
+      // selectedSkill / activeSkillDefs 已在工具构建前算出（见上方 K7 能力门控块），
+      // 这里只做「把选中 skill 写回 workflow snapshot + 落审计事件」的副作用。
       if (selectedSkill && convId && activeTurnWorkflowSnapshot && turnWorkflowRunId) {
         const nextWorkflow = attachActiveSkillToWorkflow({
           snapshot: activeTurnWorkflowSnapshot,
@@ -560,7 +587,18 @@ export function useChatStream(opts: UseChatStreamOptions) {
         activeTurnWorkflowSnapshot = nextWorkflow;
         applyWorkflowSnapshot(nextWorkflow);
       }
-      skillPreamble = buildSkillPreamble(selectedSkill);
+      const legacySkillPreamble = buildSkillPreamble(selectedSkill, activeSkillDefs);
+      // 真 Skill（磁盘 .claude/skills/*/SKILL.md）目录——只在绑了工作区时读，读取失败不影响主流程。
+      let realSkillCatalogPreamble: string | null = null;
+      if (effectiveWorkspace) {
+        try {
+          const realSkills = await loadClaudeCodeSkills(effectiveWorkspace);
+          realSkillCatalogPreamble = buildSkillCatalogPreamble(realSkills);
+        } catch {
+          realSkillCatalogPreamble = null;
+        }
+      }
+      skillPreamble = [legacySkillPreamble, realSkillCatalogPreamble].filter(Boolean).join("\n\n") || null;
 
       const currentProjectId =
         (convId ? conversationList.find((c) => c.id === convId)?.projectId : null) ?? null;

@@ -24,8 +24,13 @@ export interface TauriRpcTransportOptions {
 
 export class TauriRpcTransport implements JsonRpcTransport {
   private listener: ((message: unknown) => void) | null = null;
-  private closeListener: (() => void) | null = null;
-  private errorListener: ((error: Error) => void) | null = null;
+  // 2026-07-15 review 修复：原来 onClose/onError 各自只存一个函数引用，后注册的会覆盖先
+  // 注册的。JsonRpcClient 的构造函数会注册一份（用来 reject 所有 pending 调用），会话缓存层
+  // （lsp-session.ts / mcp/client.ts）现在也要注册一份（用来在进程终止/报错时把自己从缓存
+  // 里 evict 掉，否则下次调用会一直复用一个指向已死进程的缓存条目，只有重启 app 才能恢复）
+  // ——两者必须都能收到通知，不能互相覆盖，改成数组存多个监听器。
+  private closeListeners: Array<() => void> = [];
+  private errorListeners: Array<(error: Error) => void> = [];
   private unlisten: Promise<UnlistenFn> | null = null;
 
   constructor(private readonly options: TauriRpcTransportOptions) {}
@@ -35,11 +40,11 @@ export class TauriRpcTransport implements JsonRpcTransport {
   }
 
   onClose(listener: () => void): void {
-    this.closeListener = listener;
+    this.closeListeners.push(listener);
   }
 
   onError(listener: (error: Error) => void): void {
-    this.errorListener = listener;
+    this.errorListeners.push(listener);
   }
 
   async start(): Promise<void> {
@@ -47,18 +52,20 @@ export class TauriRpcTransport implements JsonRpcTransport {
       const payload = event.payload;
       if (payload.sessionId !== this.options.sessionId) return;
       if (payload.type === "terminated") {
-        this.closeListener?.();
+        for (const l of this.closeListeners) l();
         return;
       }
       if (payload.type === "error") {
-        this.errorListener?.(new Error(payload.message ?? "RPC process error"));
+        const error = new Error(payload.message ?? "RPC process error");
+        for (const l of this.errorListeners) l(error);
         return;
       }
       if (payload.type !== "message" || typeof payload.message !== "string") return;
       try {
         this.listener?.(JSON.parse(payload.message));
       } catch {
-        this.errorListener?.(new Error("RPC process emitted malformed JSON"));
+        const error = new Error("RPC process emitted malformed JSON");
+        for (const l of this.errorListeners) l(error);
       }
     });
     await invoke("spawn_rpc_process", {

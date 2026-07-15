@@ -246,6 +246,13 @@ export async function initSchemaForDb(db: DatabaseLike): Promise<void> {
   await db.execute(
     "CREATE INDEX IF NOT EXISTS idx_usage_events_price_catalog ON usage_events(price_catalog_id, created_at DESC)"
   );
+  // 2026-07-15 review 修复：quota guard 每次发消息都要按 (provider_id, api_credential_id)
+  // 聚合额度用量，原来是拉全表到 JS 里 reduce，历史越多越卡（体现为"点发送后卡一下才出字"）。
+  // 改成 SQL 侧 GROUP BY 聚合（见 usage-events.ts 的 aggregateByProviderCredential），
+  // 这条索引让分组走索引有序扫描而不是临时哈希表。
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_usage_events_provider_credential ON usage_events(provider_id, api_credential_id)"
+  );
 
   // v0.6 项目级长期记忆（4.11 记忆分层 + 5.6 RAG）
   // 每条记忆 = 一段结构化笔记（决策 / 经验 / 上下文 / 失败教训），
@@ -343,6 +350,13 @@ export async function initSchemaForDb(db: DatabaseLike): Promise<void> {
   await db.execute(`
     CREATE INDEX IF NOT EXISTS idx_semantic_cache_expires
     ON semantic_cache(expires_at)
+  `);
+  // D9（2026-07-15）：复合索引，让 listValid 按 provider/task/model 过滤 + 分页时
+  // 走索引而非全表扫描。expires_at 放最后，配合前导等值列（provider_name/task_type/
+  // model_id）做范围裁剪；单独的 expires 索引仍保留给"无过滤只按过期时间扫"的场景。
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_semantic_cache_lookup
+    ON semantic_cache(provider_name, task_type, model_id, expires_at)
   `);
 
   // 价格目录：内置默认价 + 远程同步价 + 用户手动覆盖价。

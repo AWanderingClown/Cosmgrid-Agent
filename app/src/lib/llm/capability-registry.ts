@@ -6,9 +6,14 @@
  * （skills → lib/llm 当前规则允许）反向安全。
  *
  * 模块构成：
- *   - ALL_CAPABILITIES：capability 字符串常量表
- *   - capabilitiesForToolKind：tool.security.kind → 该工具链提供的 capability
- *   - enforceCapabilities：核心 check，skill 需求 ⊆ tool 能力才 ok
+ *   - ALL_CAPABILITIES：capability 字符串常量表（registration 校验用）
+ *   - checkSkillToolAccess：核心 check —— active skill 是否允许调用某 kind 的工具
+ *
+ * 语义（2026-07-14 修正）：skill 的 requiredCapabilities 是"允许集"。
+ *   - read-path / none 类工具恒放行（读文件、ask_user、web_fetch 无写副作用，不门控）
+ *   - write-path / command 类工具：必须由 skill 的某条 capability 授予，否则拒绝
+ * 旧实现 enforceCapabilities 判定的是 skillCaps ⊆ toolCaps，方向反了 —— skill 声明多个
+ * 细粒度 cap 时（如 project_audit 的 3 个），每个工具都会被判成"缺能力"而全拒。已废弃。
  *
  * 故意不放：content blocklist（SKILL_CONTENT_BLOCKLIST_PATTERNS）——这是 Skill 域专属
  * 治理词（防注入 prompt 注入退化诱导），跟 capability guard 解耦，留在 skills/capabilities.ts。
@@ -31,53 +36,54 @@ export const ALL_CAPABILITIES = Object.freeze([
 
 export type Capability = (typeof ALL_CAPABILITIES)[number];
 
-/** Tool security.kind → 该工具链提供的 capabilities。 */
-export function capabilitiesForToolKind(
-  kind: "read-path" | "write-path" | "command" | "none",
-): ReadonlyArray<Capability> {
-  switch (kind) {
-    case "read-path":
-      return ["read_files"];
-    case "write-path":
-      return ["edit_files"];
-    case "command":
-      return ["run_commands"];
-    case "none":
-      // ask_user / remember / web_fetch / web_search 这类工具有自家边界检查，
-      // 跟 skill capability 正交——不通过 K7 enforcement 卡点。
-      return [];
-  }
-}
+/** 受能力门控的工具 kind（read-path / none 恒放行，不在此列）。 */
+export type GatedToolKind = "write-path" | "command";
 
-export interface CapabilityCheck {
+export type ToolSecurityKind = "read-path" | "write-path" | "command" | "none";
+
+/**
+ * 每个 capability 授予对哪些受控 tool kind 的访问。
+ * 只要 skill 的 requiredCapabilities 里有任一 cap 授予了该 kind，就放行。
+ *
+ * read_files / ask_user / web_fetch / memory_store 不在表里 —— 它们对应的工具
+ * （read-path / none）本就恒放行，无需授予。
+ */
+const CAP_TOOL_KIND_GRANTS: Readonly<Record<string, ReadonlyArray<GatedToolKind>>> = Object.freeze({
+  edit_files: ["write-path"],
+  update_docs: ["write-path"],
+  run_commands: ["command"],
+  run_tests: ["command"],
+  run_build: ["command"],
+  run_readonly_checks: ["command"],
+  inspect_git: ["command"],
+  inspect_failures: ["command"],
+});
+
+export interface SkillToolAccessCheck {
   ok: boolean;
-  /** Skill 需要但工具不提供的 capability。 */
-  missing: ReadonlyArray<string>;
-  /** 给 UI/日志：缺的原因 + 未知 cap。 */
+  /** 拒绝原因（给 UI/日志）；ok=true 时为空串。 */
   reason: string;
 }
 
 /**
- * K7 真强制：skill 声明 requiredCapabilities，工具链提供 toolCaps；
- * skill 需求必须是 tool 提供集合的子集，否则不允许执行。
+ * K7 真强制：判断 active skill 是否允许调用某 kind 的工具。
  *
- * 未在 ALL_CAPABILITIES 的 capability 字符串视为"schema 错误"——schema 校验应早拦，
- * 这是兜底；生产侧靠 registerSkill 的 zod 校验把关。
+ * @param skillCaps active skill 的 requiredCapabilities（允许集）
+ * @param kind      工具的 security.kind
  */
-export function enforceCapabilities(
+export function checkSkillToolAccess(
   skillCaps: ReadonlyArray<string>,
-  toolCaps: ReadonlyArray<string>,
-): CapabilityCheck {
-  const toolSet = new Set(toolCaps);
-  const unknownCaps = skillCaps.filter(
-    (c) => !(ALL_CAPABILITIES as readonly string[]).includes(c),
-  );
-  const missing = skillCaps.filter((c) => !toolSet.has(c));
-  if (missing.length === 0 && unknownCaps.length === 0) {
-    return { ok: true, missing: [], reason: "" };
-  }
-  const reasons: string[] = [];
-  if (missing.length > 0) reasons.push(`tools lack: ${missing.join(", ")}`);
-  if (unknownCaps.length > 0) reasons.push(`unknown capabilities: ${unknownCaps.join(", ")}`);
-  return { ok: false, missing, reason: reasons.join("; ") };
+  kind: ToolSecurityKind,
+): SkillToolAccessCheck {
+  // read-path / none：读与无副作用工具不受 skill 能力门控。
+  if (kind === "read-path" || kind === "none") return { ok: true, reason: "" };
+
+  const granted = skillCaps.some((c) => (CAP_TOOL_KIND_GRANTS[c] ?? []).includes(kind));
+  if (granted) return { ok: true, reason: "" };
+
+  const need = kind === "write-path" ? "写文件" : "执行命令";
+  return {
+    ok: false,
+    reason: `active skill 未声明${need}能力（requiredCapabilities 缺少授予 ${kind} 类工具的项）`,
+  };
 }

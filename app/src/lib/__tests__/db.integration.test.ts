@@ -568,6 +568,45 @@ describe("usageEvents", () => {
     expect(row.priceSource).toBe("remote");
     expect(row.priceCatalogId).toBe("price-row-1");
   });
+
+  // 2026-07-15 review 修复：quota guard 热路径改走这条 SQL GROUP BY 聚合而不是拉全表原始
+  // 记录到 JS reduce。这条测试跑真实 SQLite，锁定聚合 SQL 本身语法正确、算出的数字正确——
+  // 之前的单测都是拿手写的 UsageAggregateRow 摆样子，没有一条测过真实 SQL 引擎算出来的
+  // 结果对不对。
+  it("aggregateByProviderCredential 按 provider+credential 分组算出真实 SQL 聚合", async () => {
+    await db.usageEvents.create({
+      providerId: "agg-test-provider", apiCredentialId: "agg-test-cred",
+      modelId: "m-agg-1", cost: 0.03, inputTokens: 100, outputTokens: 50,
+      cacheCreationTokens: 10, cacheHitTokens: 20, pricingKnown: true,
+    });
+    await db.usageEvents.create({
+      providerId: "agg-test-provider", apiCredentialId: "agg-test-cred",
+      modelId: "m-agg-2", cost: 0.02, inputTokens: 80, outputTokens: 40,
+      cacheCreationTokens: 5, cacheHitTokens: 15, pricingKnown: false,
+    });
+    // 不同 credential，不应该混进上面那组
+    await db.usageEvents.create({
+      providerId: "agg-test-provider", apiCredentialId: "agg-test-cred-other",
+      modelId: "m-agg-3", cost: 9,
+    });
+
+    const aggregates = await db.usageEvents.aggregateByProviderCredential();
+    const row = aggregates.find(
+      (a) => a.providerId === "agg-test-provider" && a.apiCredentialId === "agg-test-cred",
+    );
+    expect(row).toBeDefined();
+    expect(row!.totalCost).toBeCloseTo(0.05);
+    expect(row!.totalTokens).toBe(100 + 50 + 10 + 20 + 80 + 40 + 5 + 15);
+    expect(row!.recordedEvents).toBe(2);
+    expect(row!.unknownPricingCalls).toBe(1);
+
+    const otherRow = aggregates.find(
+      (a) => a.providerId === "agg-test-provider" && a.apiCredentialId === "agg-test-cred-other",
+    );
+    expect(otherRow).toBeDefined();
+    expect(otherRow!.totalCost).toBeCloseTo(9);
+    expect(otherRow!.recordedEvents).toBe(1);
+  });
 });
 
 describe("modelPriceCatalog + priceSyncStatus", () => {
@@ -1557,5 +1596,47 @@ describe("getRoleBindingsForTemplate（阶段 D tidy：空字符串占位不进 
     const bindings = await db.projectTemplateRoles.getRoleBindingsForTemplate(tpl!.id);
     expect(bindings.size).toBe(1); // 只有 frontend 进 Map
     expect(bindings.get("frontend")).toBe("model-real-frontend");
+  });
+});
+
+describe("seedBuiltinSkills 版本重刷", () => {
+  it("首次 seed：写入 3 个内置 skill，project_audit 关键词不含「问题」", async () => {
+    const { seedBuiltinSkills } = await import("../skills/seed");
+    const { skillDefinitions } = await import("../db/skill-definitions");
+
+    const r = await seedBuiltinSkills();
+    expect(r.inserted + r.skipped + r.reseeded).toBeGreaterThanOrEqual(3);
+
+    const audit = await skillDefinitions.getById("project_audit");
+    expect(audit).not.toBeNull();
+    expect(audit!.triggerKeywords).not.toContain("问题");
+  });
+
+  it("版本戳不一致（模拟旧行含「问题」）→ 重刷：关键词更新、版本对齐", async () => {
+    const { seedBuiltinSkills } = await import("../skills/seed");
+    const { skillDefinitions } = await import("../db/skill-definitions");
+
+    // 模拟一台旧 app：把 project_audit 打回旧版本并塞回「问题」关键词
+    await adapter.execute(
+      "UPDATE skill_definitions SET builtin_version = $2, trigger_keywords = $3 WHERE id = $1",
+      ["project_audit", "builtin-2026-07-12", JSON.stringify(["审计", "问题"])],
+    );
+    const before = await skillDefinitions.getById("project_audit");
+    expect(before!.triggerKeywords).toContain("问题");
+
+    const r = await seedBuiltinSkills();
+    expect(r.reseeded).toBeGreaterThanOrEqual(1);
+
+    const after = await skillDefinitions.getById("project_audit");
+    expect(after!.triggerKeywords).not.toContain("问题");
+    expect(after!.builtinVersion).not.toBe("builtin-2026-07-12");
+  });
+
+  it("版本戳一致 → 全部跳过，不重复写", async () => {
+    const { seedBuiltinSkills } = await import("../skills/seed");
+    const r = await seedBuiltinSkills();
+    expect(r.reseeded).toBe(0);
+    expect(r.inserted).toBe(0);
+    expect(r.skipped).toBeGreaterThanOrEqual(3);
   });
 });

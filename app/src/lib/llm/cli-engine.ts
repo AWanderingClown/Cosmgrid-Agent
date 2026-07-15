@@ -211,7 +211,7 @@ export async function streamViaCli(
 
     // abort：前端立即收尾恢复 UI，并请 Rust 真正杀掉子进程（停止白耗额度）。
     // kill_cli 失败不影响前端收尾——进程可能已自然结束，只记日志不阻塞。
-    options.signal?.addEventListener("abort", () => {
+    const handleAbort = (): void => {
       if (settled) return;
       settled = true;
       disarmWatchdog();
@@ -219,7 +219,17 @@ export async function streamViaCli(
         console.warn("kill_cli 失败（子进程可能已结束）：", err);
       });
       resolve({ ...usage, finishReason: "abort", officialSessionId, actualModelName });
-    });
+    };
+    // 2026-07-15 review 修复：先查一次 signal 是否已经 aborted，再决定是直接处理还是挂监听——
+    // AbortSignal 的 'abort' 事件只在真正 abort 的那一刻广播一次，如果 signal 在这次 attempt
+    // 开始之前（比如续接批次之间的间隙）就已经被点了停止，只用 addEventListener 会永远收不到
+    // 那个已经错过的事件，导致这次调用完全无视用户的停止操作，一路跑到自然结束（CLI 路径下
+    // 子进程真的会被 spawn 出来继续吃订阅额度）。已经 aborted 就直接处理，不再往下 spawn。
+    if (options.signal?.aborted) {
+      handleAbort();
+      return;
+    }
+    options.signal?.addEventListener("abort", handleAbort);
 
     invoke("spawn_cli_stream", {
       params: {

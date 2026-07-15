@@ -60,7 +60,7 @@ export type { Checkpoint, CreateCheckpointInput } from "./db/checkpoints";
 export { handoffPackets, renderHandoffMarkdown } from "./db/handoff-packets";
 export type { CreateHandoffPacketInput, HandoffPacket } from "./db/handoff-packets";
 export { usageEvents } from "./db/usage-events";
-export type { UsageEventRow } from "./db/usage-events";
+export type { UsageEventRow, UsageAggregateRow } from "./db/usage-events";
 export { modelPerformanceStats } from "./db/model-performance-stats";
 export type { ModelPerformanceStatRow } from "./db/model-performance-stats";
 export { semanticCache } from "./db/semantic-cache";

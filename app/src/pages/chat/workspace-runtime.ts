@@ -21,6 +21,8 @@ export interface PrepareChatWorkspaceRuntimeArgs {
   /** 2026-07-10 OMO-7 capability guardrail：当前选中模型的人类可读名，透传给
    *  prepareWorkspaceToolRuntime 查 models.dev 的 tool_call/vision 能力位。 */
   modelName?: string;
+  /** K7 能力门控：本轮允许的 capability 集（来源 = 工作流阶段策略），透传烘进工具 ToolContext。 */
+  activeCaps?: string[];
 }
 
 export interface PreparedChatWorkspaceRuntime {
@@ -63,6 +65,7 @@ export async function prepareChatWorkspaceRuntime(
       includePreamble: true,
       desktopPath: writableDesktopPath,
       modelName: args.modelName,
+      activeCaps: args.activeCaps,
     });
     return {
       aborted: args.stopIfAborted(),
@@ -84,6 +87,7 @@ export async function prepareChatWorkspaceRuntime(
       }),
       askUser: args.requestAskUser,
       modelName: args.modelName,
+      activeCaps: args.activeCaps,
     });
     return {
       aborted: args.stopIfAborted(),

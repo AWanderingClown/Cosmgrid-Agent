@@ -13,10 +13,11 @@
 
 import { z } from "zod";
 import type { ToolDefinition } from "./types";
-import { isReadOnlyCommand } from "./command-safety";
+import { isReadOnlyCommand, tryParseProgramArgs } from "./command-safety";
 import { getShellAdapter } from "./shell-adapter";
 import { requireApprovalAsV2 } from "./confirm";
 import {
+  deniedResult,
   errorResult,
   successResult,
   TOOL_COMMAND_FAILED,
@@ -46,10 +47,29 @@ export const bashTool: ToolDefinition<BashParams> = {
   async execute(input, ctx): Promise<ToolResultV2> {
     // 闸 1：安全分类，现在由 executor 按 tool.security 声明强制跑（L6 安全网收拢，2026-07-09）——
     // 走到这里说明 checkCommand 已经判过 allow，block 在 executor 层就直接 denied 了。
+    //
+    // D2：AI 工具调用统一走 program+args（runArgs），绝不经 sh -c。shell 组合语法
+    // （; && || | > 等）/命令替换（$() / 反引号）需要 shell 解释 → 禁止回退到 sh -c，直接拒。
+    const parsed = tryParseProgramArgs(input.command);
+    if (!parsed) {
+      return deniedResult({
+        output: `命令含 shell 组合/重定向/替换语法，已拦截（不走 sh -c）：${input.command}`,
+        summary: "组合命令被拦截",
+        reason:
+          "AI 工具调用必须经 program+args 执行；shell 组合语法（; | && > $() 等）会被拦截，请拆成单条命令分别执行",
+      });
+    }
 
     // 闸 2：只读命令（git log/status/diff、ls/cat/grep 等只看不改）免确认，看项目不被打扰；
     //        写/有副作用命令（装依赖、git 提交、跑脚本等）才需用户确认。
-    if (!isReadOnlyCommand(input.command)) {
+    //
+    // 2026-07-15 review 修复：bashTool.readOnly 全局声明是 false（bash 整体能写），但走到
+    // 这里的具体命令可能因为 isReadOnlyCommand 判定为真而跳过确认——旧的审计推导
+    // （persistToolExecution 的 "status !== denied && !tool.readOnly"）会把这种"系统判定
+    // 安全免确认"的情况误记成"用户确认过"。真实是否弹过确认框记在 skippedConfirm 里，
+    // 下面所有 return 都显式带上 userConfirmed，不留给 executor-audit.ts 去猜。
+    const skippedConfirm = isReadOnlyCommand(input.command);
+    if (!skippedConfirm) {
       const denied = await requireApprovalAsV2(
         ctx,
         {
@@ -61,9 +81,10 @@ export const bashTool: ToolDefinition<BashParams> = {
       if (denied) return denied;
     }
 
-    // 闸 3：执行
+    // 闸 3：执行 —— 走 runArgs（program+args，不经 sh -c），杜绝路径/参数里的
+    // ; && | 等 shell 元字符被解释成第二条命令。
     try {
-      const res = await getShellAdapter().run(input.command, ctx.workspacePath);
+      const res = await getShellAdapter().runArgs([parsed.program, ...parsed.args], ctx.workspacePath);
       const ok = res.code === 0 || res.code === null;
       const stdout = clip(res.stdout).trimEnd();
       const stderr = res.stderr.trim() ? `--- stderr ---\n${clip(res.stderr).trimEnd()}` : "";
@@ -80,56 +101,64 @@ export const bashTool: ToolDefinition<BashParams> = {
       ];
 
       if (ok) {
-        return successResult({
-          output: body,
-          summary: `${input.command} → exit ${res.code ?? 0}`,
-          artifacts,
-          nextActions: res.code === 0
-            ? [
-                {
-                  action: "verify_with_tests",
-                  reason: "命令成功了；如果是 build/test 类命令，下一步建议跑相关测试验证",
-                  safe: true,
-                },
-              ]
-            : [],
-        });
+        return {
+          ...successResult({
+            output: body,
+            summary: `${input.command} → exit ${res.code ?? 0}`,
+            artifacts,
+            nextActions: res.code === 0
+              ? [
+                  {
+                    action: "verify_with_tests",
+                    reason: "命令成功了；如果是 build/test 类命令，下一步建议跑相关测试验证",
+                    safe: true,
+                  },
+                ]
+              : [],
+          }),
+          userConfirmed: !skippedConfirm,
+        };
       }
 
       // 命令退出码非 0：errorResult，retryable 视命令语义——
       // 写命令（git commit / rm / pnpm install）失败不该自动重试（重试只会重现同样的失败）；
       // 读命令（git status / ls）失败可以重试一次（可能是临时状态）。
-      const readOnly = isReadOnlyCommand(input.command);
-      return errorResult({
-        output: body,
-        summary: `${input.command} 退出码 ${res.code}`,
-        error: {
-          code: TOOL_COMMAND_FAILED,
-          rootCauseHint: stderr
-            ? `命令退出码 ${res.code}，stderr 摘录：${stderr.slice(0, 200)}`
-            : `命令退出码 ${res.code}`,
-          retryable: readOnly,
-          retryInstruction: readOnly
-            ? "只读命令可以再试一次，失败原因可能跟文件状态/网络抖动有关"
-            : "写命令失败不建议立即重试，先看 stderr 修复根本原因（权限 / 路径 / 资源）",
-          stopCondition: readOnly
-            ? undefined
-            : "连续失败 2 次后停止重试，必须先看 stderr 修根因",
-        },
-        artifacts,
-      });
+      return {
+        ...errorResult({
+          output: body,
+          summary: `${input.command} 退出码 ${res.code}`,
+          error: {
+            code: TOOL_COMMAND_FAILED,
+            rootCauseHint: stderr
+              ? `命令退出码 ${res.code}，stderr 摘录：${stderr.slice(0, 200)}`
+              : `命令退出码 ${res.code}`,
+            retryable: skippedConfirm,
+            retryInstruction: skippedConfirm
+              ? "只读命令可以再试一次，失败原因可能跟文件状态/网络抖动有关"
+              : "写命令失败不建议立即重试，先看 stderr 修复根本原因（权限 / 路径 / 资源）",
+            stopCondition: skippedConfirm
+              ? undefined
+              : "连续失败 2 次后停止重试，必须先看 stderr 修根因",
+          },
+          artifacts,
+        }),
+        userConfirmed: !skippedConfirm,
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return errorResult({
-        output: `执行失败：${msg}`,
-        summary: `bash 抛错 ${input.command}`,
-        error: {
-          code: TOOL_COMMAND_FAILED,
-          rootCauseHint: msg,
-          retryable: false,
-          stopCondition: "shell adapter 抛错通常是进程层失败（如超时/资源耗尽），先排查环境",
-        },
-      });
+      return {
+        ...errorResult({
+          output: `执行失败：${msg}`,
+          summary: `bash 抛错 ${input.command}`,
+          error: {
+            code: TOOL_COMMAND_FAILED,
+            rootCauseHint: msg,
+            retryable: false,
+            stopCondition: "shell adapter 抛错通常是进程层失败（如超时/资源耗尽），先排查环境",
+          },
+        }),
+        userConfirmed: !skippedConfirm,
+      };
     }
   },
 };

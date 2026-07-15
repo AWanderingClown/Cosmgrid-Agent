@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import { conversations as dbConversations } from "@/lib/db";
 import { type ToolConfirmRequest, type AskUserRequest } from "@/lib/llm/tools";
 import { deriveArtifacts, type WorkArtifact } from "@/lib/work-artifacts";
@@ -95,6 +96,18 @@ export function useWorkPanel({
     // resolveConfirm 是当前组件内函数，引用稳定；此处仅依赖 pendingConfirm 触发挂载/卸载
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingConfirm]);
+
+  // D1 修复回归（2026-07-15 review）：fs 读权限的静态 capability 收紧在 $HOME/**（历史债
+  // D1），但工作文件夹选择器不限制只能选 $HOME 内的路径——选外接硬盘/`/tmp`/挂载卷等目录会
+  // 导致所有文件读取被 ACL 静默拒绝。这里不在 bindWorkspace 单点上补，而是在 workspacePath
+  // 变化时统一补（覆盖 chooseWorkspace/拖入文件夹/切换会话恢复路径等所有改路径的入口，不用
+  // 逐个调用点找齐）：每次 workspacePath 变化就调 Rust 侧 grant_workspace_fs_access，给这个
+  // 具体目录动态追加读权限（敏感目录黑名单仍然生效，见 security.rs 里的实现注释）。授权失败
+  // 不阻断——常见于路径已被删除/不可访问，真正的读操作尝试时会自然报错给用户。
+  useEffect(() => {
+    if (!workspacePath) return;
+    void invoke("grant_workspace_fs_access", { path: workspacePath }).catch(() => {});
+  }, [workspacePath]);
 
   // 绑定工作文件夹到当前会话并落库（选择器选中 / 拖入文件夹都走这里，单一来源）
   const bindWorkspace = useCallback(async (path: string) => {

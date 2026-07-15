@@ -5,6 +5,7 @@
 
 use std::env;
 use std::path::{Path, PathBuf};
+use tauri::Manager;
 
 /// LSP / MCP stdio 子进程的 env 白名单——只放行运行必需的变量，防止把宿主进程里的密钥
 /// （OPENAI_API_KEY / AWS_SECRET_ACCESS_KEY 等）意外透传给第三方子进程。
@@ -53,6 +54,53 @@ pub fn resolve_realpath(path: String) -> Result<String, String> {
     std::fs::canonicalize(&path)
         .map(|p| p.to_string_lossy().into_owned())
         .map_err(|e| format!("realpath failed for {path}: {e}"))
+}
+
+/// D1 修复回归（2026-07-15 review）：工作文件夹选择器（`useWorkPanel.ts` 的
+/// `chooseWorkspace`）允许选磁盘上任意路径，不限 `$HOME`；但 capabilities/default.json
+/// 里的 fs 读权限收紧在 `$HOME/**`（历史债 D1）。两者相撞：选外接硬盘 / `/tmp` / 挂载卷等
+/// `$HOME` 之外的目录当工作区时，所有文件读取会被 ACL 静默拒绝。
+///
+/// 参考 opencode 的 external-directory 思路：不整体放宽静态权限（那样敏感目录黑名单之外的
+/// 任意路径都能读，攻击面变大），而是在用户实际选中某个工作文件夹时，用 Tauri 的运行时动态
+/// ACL（`dynamic-acl` feature）只给这一个目录追加读权限。default.json 里那份静态 capability
+/// 的 deny 规则（`.ssh`/`.aws`/`.gnupg`/`.env*`/`secrets.*`）仍然生效——deny 是跨 capability
+/// 聚合的（见 tauri::ipc::authority::add_capability_inner），不会因为多加了一份 allow 就被绕过。
+#[tauri::command]
+pub fn grant_workspace_fs_access(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let canonical =
+        std::fs::canonicalize(&path).map_err(|e| format!("工作文件夹路径无效：{path}（{e}）"))?;
+    if !canonical.is_dir() {
+        return Err(format!("工作文件夹不是目录：{path}"));
+    }
+    let root = canonical.to_string_lossy().into_owned();
+
+    #[derive(serde::Serialize, Clone)]
+    struct FsPathEntry {
+        path: String,
+    }
+    // 目录本身（给 exists/stat/read-dir 用）+ 递归通配（给目录下所有文件用）。
+    let entries = vec![
+        FsPathEntry { path: root.clone() },
+        FsPathEntry { path: format!("{root}/**") },
+    ];
+
+    // identifier 按目录内容哈希取稳定值：同一目录反复绑定（比如重启会话）不会无限堆叠新
+    // capability；不同目录各自独立 identifier，互不覆盖（用户切换多个工作区时旧的仍保留
+    // 读权限，跟 opencode「批准过的目录以后都不用再问」的语义一致）。
+    let identifier = format!("dynamic-workspace-fs-{}", fnv1a_hex(&root));
+    let mut builder = tauri::ipc::CapabilityBuilder::new(identifier).window("main");
+    for permission in [
+        "fs:allow-read-file",
+        "fs:allow-read-text-file",
+        "fs:allow-read-dir",
+        "fs:allow-exists",
+        "fs:allow-stat",
+    ] {
+        builder = builder.permission_scoped(permission, entries.clone(), Vec::<FsPathEntry>::new());
+    }
+
+    app.add_capability(builder).map_err(|e| e.to_string())
 }
 
 pub(crate) fn is_executable_file(path: &Path) -> bool {

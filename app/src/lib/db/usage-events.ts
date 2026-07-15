@@ -80,6 +80,36 @@ export const usageEvents = {
     return { taskType: rows[0]!.role };
   },
 
+  /**
+   * 2026-07-15 review 修复：按 (provider_id, api_credential_id) 分组聚合 cost/tokens/
+   * 记录数/未知计价笔数——quota guard 判定套餐是否耗尽只需要这几个聚合值，不需要每条
+   * 原始记录。原来 quota guard 走 `list()` 把全表拉进 JS 再 reduce，每次发消息都要做
+   * 一次无 LIMIT 全表扫描 + 全量行的 IPC 序列化，历史越多越卡（体现为"点发送后卡一下
+   * 才开始出字"）。改成 SQL 侧 GROUP BY：返回的行数只跟"用过几种 provider+credential
+   * 组合"成正比（通常个位数），跟 usage_events 总行数无关，且计算本身在 SQLite 里做，
+   * 不用把成千上万条原始记录序列化过 Tauri IPC 边界。
+   */
+  async aggregateByProviderCredential(): Promise<UsageAggregateRow[]> {
+    const db = await getDb();
+    const rows = await db.select<any[]>(
+      `SELECT provider_id, api_credential_id,
+              COALESCE(SUM(cost), 0) AS total_cost,
+              COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_hit_tokens), 0) AS total_tokens,
+              COUNT(*) AS recorded_events,
+              COALESCE(SUM(CASE WHEN pricing_known = 0 THEN 1 ELSE 0 END), 0) AS unknown_pricing_calls
+       FROM usage_events
+       GROUP BY provider_id, api_credential_id`,
+    );
+    return rows.map((r) => ({
+      providerId: r.provider_id ?? null,
+      apiCredentialId: r.api_credential_id ?? null,
+      totalCost: r.total_cost,
+      totalTokens: r.total_tokens,
+      recordedEvents: r.recorded_events,
+      unknownPricingCalls: r.unknown_pricing_calls,
+    }));
+  },
+
   /** 列出用量事件（StatsPage 统计用）。sinceTs 可选，只取该 ISO 时间之后的 */
   async list(sinceTs?: string): Promise<UsageEventRow[]> {
     const db = await getDb();
@@ -115,6 +145,16 @@ export const usageEvents = {
     }));
   },
 };
+
+/** 按 (provider_id, api_credential_id) 分组聚合的用量——见 aggregateByProviderCredential */
+export interface UsageAggregateRow {
+  providerId: string | null;
+  apiCredentialId: string | null;
+  totalCost: number;
+  totalTokens: number;
+  recordedEvents: number;
+  unknownPricingCalls: number;
+}
 
 export interface UsageEventRow {
   id: string;

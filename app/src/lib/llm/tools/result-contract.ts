@@ -14,6 +14,7 @@
 //    stopCondition（明确告诉模型不该再试 / 应该请求用户）。
 
 import type { ContentPart, ToolResult } from "./types";
+import { redactApiKeys } from "../../security-invariants/api-key-patterns";
 
 /** 工具执行终态。
  *  - success：完成目标，输出可消费。
@@ -96,6 +97,14 @@ export interface ToolResultV2 {
   reversible?: boolean;
   /** 工具执行耗时毫秒（executor 统一注入，工具本身不填）。 */
   durationMs?: number;
+  /** 2026-07-15 review 修复：这次执行是否真的弹过确认框并被用户同意——不是从 status/
+   *  tool.readOnly 反推的。大多数写工具（write/edit/hashline_edit/memory）无条件走
+   *  requireApprovalAsV2，旧的"status !== denied && !tool.readOnly"推导对它们是准的；
+   *  但 bash 工具内部有 isReadOnlyCommand 判定，命中时跳过确认直接执行——这种情况下
+   *  tool.readOnly 仍是 false（bash 整体能写），旧推导会把"系统判定安全免确认"误记成
+   *  "用户确认过"，审计日志失真。只读工具/未显式声明的工具留 undefined，
+   *  persistToolExecution 落库时回退到旧推导（向后兼容，不强制所有工具都改）。 */
+  userConfirmed?: boolean;
 }
 
 // =====================================================================
@@ -345,7 +354,9 @@ export function summarize(output: string, maxLen = 80): string {
  *  4. parts 不参与脱敏（多模态内容已经是 base64，本身不在脱敏范围）。 */
 export function truncateForContext(result: ToolResultV2, maxChars = 10_000): ToolResultV2 {
   const clippedOutput = clipAndRedact(result.output, maxChars);
-  const clippedSummary = redactSecret(result.summary);
+  // summary 走一遍 kv/Bearer 脱敏（redactSecret）+ 厂商 key 前缀脱敏（redactApiKeys），
+  // 与 output 的 clipAndRedact 保持一致，避免 sk-ant- / sk-proj- / AIza / gsk_ 从摘要泄露。
+  const clippedSummary = redactApiKeys(redactSecret(result.summary));
 
   // 不重新 redact parts（多模态不走字符串脱敏）
   return {
@@ -355,9 +366,12 @@ export function truncateForContext(result: ToolResultV2, maxChars = 10_000): Too
   };
 }
 
-/** 截断 + secret 脱敏。单独导出让 write/edit 等长输出工具复用。 */
+/** 截断 + secret 脱敏。单独导出让 write/edit 等长输出工具复用。
+ *  脱敏覆盖两类：① kv / Bearer / Authorization 头（redactSecret）；
+ *  ② 厂商 API key 前缀（redactApiKeys：sk-ant- / sk-proj- / AIza / gsk_ 等）。
+ *  这是工具输出落库前 + 注入模型上下文前的统一脱敏关卡，单一事实来源。 */
 export function clipAndRedact(text: string, maxChars: number): string {
-  const redacted = redactSecret(text);
+  const redacted = redactApiKeys(redactSecret(text));
   if (redacted.length <= maxChars) return redacted;
   return redacted.slice(0, maxChars) + "\n…(truncated)";
 }

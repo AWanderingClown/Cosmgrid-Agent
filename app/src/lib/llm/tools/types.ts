@@ -22,10 +22,12 @@ export interface ToolContext {
   confirm?: (preview: ToolConfirmRequest) => Promise<boolean>;
   /** 项目自定义的命令黑名单前缀（bash 工具用，叠加在内置危险拦截之上） */
   blockedCommands?: string[];
-  /** 引擎化阶段 1b（K7）：当前激活 skill 的 requiredCapabilities。
-   *  执行器在 runSecurityPrecheck 之后会做 enforceCapabilities(this, tool 提供 capability)。
-   *  不传 = 不做 K7 enforcement（保持老调用方行为不变）。 */
-  activeSkillCaps?: string[];
+  /** K7 能力门控：本轮允许的 capability 集（允许集）。来源 = 当前工作流阶段策略
+   *  （capabilitiesForPhase），后续真 skill 被 invoke 时再并入其 allowed-tools。
+   *  runSecurityPrecheck 用 checkSkillToolAccess(this, tool.security.kind) 判定：
+   *  read-path/none 恒放行，write-path/command 需被授予，否则 denied。
+   *  不传 / 空数组 = 不做 K7 enforcement（保持老调用方行为不变）。 */
+  activeCaps?: string[];
   /** ask_user_question 工具用：向用户提一个结构化问题，返回用户选中的 label 文本 */
   askUser?: (request: AskUserRequest) => Promise<string>;
   /**

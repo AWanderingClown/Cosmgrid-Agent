@@ -2,8 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   ALL_CAPABILITIES,
-  capabilitiesForToolKind,
-  enforceCapabilities,
+  checkSkillToolAccess,
   findBlockedPhrase,
   SKILL_CONTENT_BLOCKLIST_PATTERNS,
 } from "@/lib/skills/capabilities";
@@ -22,63 +21,63 @@ describe("skills/capabilities", () => {
     });
   });
 
-  describe("capabilitiesForToolKind", () => {
-    it("read-path → 提供 read_files", () => {
-      expect(capabilitiesForToolKind("read-path")).toEqual(["read_files"]);
+  describe("checkSkillToolAccess (K7 真强制，方向：tool kind ∈ skill 授予集)", () => {
+    it("read-path 恒放行——读文件不受 skill 能力门控", () => {
+      // 即便 skill 只声明了写能力，读工具也放行
+      expect(checkSkillToolAccess(["edit_files"], "read-path").ok).toBe(true);
+      // 空 skill caps 也放行读
+      expect(checkSkillToolAccess([], "read-path").ok).toBe(true);
     });
 
-    it("write-path → 提供 edit_files", () => {
-      expect(capabilitiesForToolKind("write-path")).toEqual(["edit_files"]);
+    it("none 类工具恒放行（ask_user / web_fetch 走自己的边界）", () => {
+      expect(checkSkillToolAccess(["read_files"], "none").ok).toBe(true);
     });
 
-    it("command → 提供 run_commands", () => {
-      expect(capabilitiesForToolKind("command")).toEqual(["run_commands"]);
-    });
-
-    it("none → 不提供任何 capability（这些工具走自己的边界，不通过 K7 enforcement 卡点）", () => {
-      expect(capabilitiesForToolKind("none")).toEqual([]);
-    });
-  });
-
-  describe("enforceCapabilities (K7 真强制)", () => {
-    it("skill 需求 ⊆ tool 能力 → ok", () => {
-      const r = enforceCapabilities(["edit_files", "run_tests"], ["edit_files", "run_tests", "run_build"]);
+    it("write-path：skill 声明 edit_files → 放行", () => {
+      const r = checkSkillToolAccess(["edit_files", "run_tests"], "write-path");
       expect(r.ok).toBe(true);
-      expect(r.missing).toEqual([]);
       expect(r.reason).toBe("");
     });
 
-    it("skill 需求不在 tool 能力集 → not ok，且暴露 missing", () => {
-      const r = enforceCapabilities(["edit_files", "run_tests"], ["edit_files"]);
+    it("write-path：update_docs 也授予写权限 → 放行", () => {
+      expect(checkSkillToolAccess(["update_docs"], "write-path").ok).toBe(true);
+    });
+
+    it("write-path：只读审计 skill（read_files/inspect_git/run_readonly_checks）→ 拒绝写", () => {
+      const r = checkSkillToolAccess(["read_files", "inspect_git", "run_readonly_checks"], "write-path");
       expect(r.ok).toBe(false);
-      expect(r.missing).toContain("run_tests");
+      expect(r.reason).toContain("写文件");
     });
 
-    it("skill 全部需求都被工具满足 → ok", () => {
-      const r = enforceCapabilities([], ["edit_files"]);
-      expect(r.ok).toBe(true);
+    it("command：run_tests / inspect_git 等授予命令权限 → 放行", () => {
+      expect(checkSkillToolAccess(["run_tests"], "command").ok).toBe(true);
+      expect(checkSkillToolAccess(["inspect_git"], "command").ok).toBe(true);
+      expect(checkSkillToolAccess(["run_readonly_checks"], "command").ok).toBe(true);
     });
 
-    it("skill 包含未知 capability 字符串 → not ok（schema 兜底）", () => {
-      const r = enforceCapabilities(["unknown_cap"], ["read_files"]);
+    it("command：纯写 skill（只有 edit_files）未授予命令 → 拒绝执行命令", () => {
+      const r = checkSkillToolAccess(["edit_files"], "command");
       expect(r.ok).toBe(false);
-      expect(r.missing).toContain("unknown_cap");
-      expect(r.reason).toContain("unknown capabilities");
+      expect(r.reason).toContain("执行命令");
     });
 
-    it("既缺已知 cap 又含未知 cap → reason 包含两种", () => {
-      const r = enforceCapabilities(["run_tests", "weird_one"], ["edit_files"]);
-      expect(r.ok).toBe(false);
-      expect(r.reason).toContain("tools lack");
-      expect(r.reason).toContain("unknown capabilities");
+    it("多细粒度 cap 的 skill 不会互相拖累（回归旧 enforceCapabilities 全拒 bug）", () => {
+      // project_audit 声明 3 个 cap：读放行、命令放行、写拒绝——各自独立判定，不再"缺一即全拒"
+      const audit = ["read_files", "inspect_git", "run_readonly_checks"];
+      expect(checkSkillToolAccess(audit, "read-path").ok).toBe(true);
+      expect(checkSkillToolAccess(audit, "command").ok).toBe(true);
+      expect(checkSkillToolAccess(audit, "write-path").ok).toBe(false);
     });
 
-    it("不能 mutate 入参", () => {
+    it("未知 capability 字符串不授予任何受控 kind → 写/命令都拒", () => {
+      expect(checkSkillToolAccess(["unknown_cap"], "write-path").ok).toBe(false);
+      expect(checkSkillToolAccess(["unknown_cap"], "command").ok).toBe(false);
+    });
+
+    it("不 mutate 入参", () => {
       const skill = ["edit_files"];
-      const tool = ["read_files"];
-      enforceCapabilities(skill, tool);
+      checkSkillToolAccess(skill, "write-path");
       expect(skill).toEqual(["edit_files"]);
-      expect(tool).toEqual(["read_files"]);
     });
   });
 

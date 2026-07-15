@@ -77,6 +77,54 @@ function mapWorkflowEventRow(r: WorkflowEventRow): WorkflowEvent {
   };
 }
 
+/**
+ * Task #9 独立复检发现的 MEDIUM 问题：saveSnapshot 是一条不带版本号/CAS 的
+ * `UPDATE ... WHERE id = $runId`，谁后写谁赢。同一个 runId 现在有两条独立调用路径——
+ * `prepare-turn-workflow.ts`（打字发消息，intent classifier 推进）和
+ * `useOrchestration.ts` 的 `pickNextAction`（点 nextAction 按钮，确定性推进）——
+ * 用户点完按钮、DB 写入还没落盘时如果立刻发下一条消息，两次 saveSnapshot 可能并发写同一行，
+ * 写入完成的先后顺序不保证跟调用顺序一致，旧的快照可能把新的覆盖掉（内存里的 React state
+ * 不会错，只有落盘的行会回退，刷新页面/切会话再切回来才会暴露）。
+ * 按 runId 串行化：同一个 runId 的写入排成队列，前一个写完（无论成功失败）才轮到下一个，
+ * 不同 runId 之间互不阻塞。错误被吞掉不重新抛出到队列里，避免一次失败的写永久卡住后续写。
+ */
+const snapshotWriteQueues = new Map<string, Promise<void>>();
+
+/** 导出仅供单测直接验证串行化行为（见 __tests__/workflow-runs.test.ts）——不依赖真实 sqlite，
+ *  用可控延迟的假 write 函数证明"先调用的先落盘"，而不是"先 resolve 的先落盘"。 */
+export function enqueueSnapshotWrite(runId: string, write: () => Promise<void>): Promise<void> {
+  const prior = snapshotWriteQueues.get(runId) ?? Promise.resolve();
+  const next = prior.then(write, write).catch(() => {});
+  snapshotWriteQueues.set(runId, next);
+  return next;
+}
+
+async function writeSnapshot(input: {
+  runId: string;
+  snapshot: WorkflowSnapshot;
+  eventType?: string;
+  eventPayload?: unknown;
+}): Promise<void> {
+  const db = await getDb();
+  const snapshotJson = JSON.stringify(input.snapshot);
+  const currentPhase = currentPhaseOf(input.snapshot);
+  const ts = now();
+  await db.execute(
+    `UPDATE workflow_runs
+     SET status = $1, current_phase = $2, snapshot_json = $3, updated_at = $4
+     WHERE id = $5`,
+    [input.snapshot.status, currentPhase, snapshotJson, ts, input.runId],
+  );
+  if (input.eventType) {
+    await workflowRuns.appendEvent({
+      workflowRunId: input.runId,
+      conversationId: input.snapshot.conversationId,
+      eventType: input.eventType,
+      payload: input.eventPayload ?? { status: input.snapshot.status, currentPhase },
+    });
+  }
+}
+
 export const workflowRuns = {
   async create(input: {
     conversationId: string;
@@ -136,24 +184,9 @@ export const workflowRuns = {
     eventType?: string;
     eventPayload?: unknown;
   }): Promise<void> {
-    const db = await getDb();
-    const snapshotJson = JSON.stringify(input.snapshot);
-    const currentPhase = currentPhaseOf(input.snapshot);
-    const ts = now();
-    await db.execute(
-      `UPDATE workflow_runs
-       SET status = $1, current_phase = $2, snapshot_json = $3, updated_at = $4
-       WHERE id = $5`,
-      [input.snapshot.status, currentPhase, snapshotJson, ts, input.runId],
-    );
-    if (input.eventType) {
-      await this.appendEvent({
-        workflowRunId: input.runId,
-        conversationId: input.snapshot.conversationId,
-        eventType: input.eventType,
-        payload: input.eventPayload ?? { status: input.snapshot.status, currentPhase },
-      });
-    }
+    // 按 runId 串行化，见上面 enqueueSnapshotWrite 的注释——避免"点按钮"和"打字发消息"
+    // 两条独立调用路径并发写同一个 runId 时，写入完成顺序跟调用顺序不一致导致旧快照覆盖新快照。
+    return enqueueSnapshotWrite(input.runId, () => writeSnapshot(input));
   },
 
   async appendEvent(input: {

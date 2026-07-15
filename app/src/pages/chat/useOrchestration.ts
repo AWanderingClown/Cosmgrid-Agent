@@ -3,6 +3,7 @@ import {
   type OrchestrationState,
   type RoleId,
 } from "@/lib/llm/orchestrator";
+import { applyNextActionChoice } from "@/lib/workflow/reducer";
 import type { WorkflowSnapshot } from "@/lib/workflow/types";
 import { workflowRuns, type WorkflowEvent } from "@/lib/db";
 
@@ -140,6 +141,33 @@ export function useOrchestration(_opts: UseOrchestrationOptions = {}) {
     dispatch({ type: "set_chain_running", running });
   }
 
+  /**
+   * Task #9（2026-07-15）：用户在 NextActionsCard 上点了某个 nextAction 按钮——直接用
+   * reducer 的 applyNextActionChoice 确定性推进（不经过 intent classifier），同步更新
+   * UI 快照 + 落库（跟 prepare-turn-workflow.ts 里 intent classifier 推进后的落库方式一致，
+   * eventType 用 "workflow.intent_applied"，payload 标 source: "user_click" 方便跟分类器
+   * 推进的事件区分）。actionId 找不到（按钮已经陈旧）时 applyNextActionChoice 原样返回
+   * 快照，这里用引用相等判断"没有变化"，不做任何 UI/落库操作。
+   */
+  const pickNextAction = useCallback(async (actionId: string): Promise<void> => {
+    const current = workflowSnapshotRef.current;
+    if (!current) return;
+    const next = applyNextActionChoice({ snapshot: current, actionId });
+    if (next === current) return;
+    applyWorkflowSnapshot(next);
+    try {
+      await workflowRuns.saveSnapshot({
+        runId: next.runId,
+        snapshot: next,
+        eventType: "workflow.intent_applied",
+        eventPayload: { source: "user_click", actionId },
+      });
+    } catch {
+      // 落库失败不影响当前会话内已经生效的 UI 状态；跟其余 workflow 落库失败处理方式一致
+      // （prepare-turn-workflow.ts 的 saveSnapshot 调用也是尽力而为，不阻塞用户继续操作）。
+    }
+  }, []);
+
   const loadWorkflowForConversation = useCallback(async (id: string) => {
     try {
       const activeRun = await workflowRuns.getActiveByConversation(id);
@@ -177,6 +205,8 @@ export function useOrchestration(_opts: UseOrchestrationOptions = {}) {
     applyOrchestration,
     applyWorkflowEvents,
     applyWorkflowSnapshot,
+    // Task #9：用户点了 NextActionsCard 按钮时调用
+    pickNextAction,
     // load
     loadWorkflowForConversation,
   };

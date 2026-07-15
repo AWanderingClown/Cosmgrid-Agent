@@ -1,7 +1,7 @@
 /**
  * Skill 域专属 capability 治理：content blocklist patterns。
  *
- * 中立 capability 注册表（ALL_CAPABILITIES / capabilitiesForToolKind / enforceCapabilities）
+ * 中立 capability 注册表（ALL_CAPABILITIES / checkSkillToolAccess）
  * 在 lib/llm/capability-registry.ts；本文件只承担 Skill 域的内容审查黑名单词（K12）。
  *
  * 注册新 skill 时调 findBlockedPhrase(systemGuidance)，命中任意一条 → 拒绝注册。
@@ -10,10 +10,9 @@
 
 export {
   ALL_CAPABILITIES,
-  capabilitiesForToolKind,
-  enforceCapabilities,
+  checkSkillToolAccess,
   type Capability,
-  type CapabilityCheck,
+  type SkillToolAccessCheck,
 } from "@/lib/llm/capability-registry";
 
 /**

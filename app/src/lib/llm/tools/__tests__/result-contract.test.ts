@@ -291,6 +291,68 @@ describe("redactSecret: secret-like 字段被 [REDACTED] 替换", () => {
 });
 
 // =====================================================================
+// 3b. 厂商 API Key 前缀脱敏（D3）：sk-ant- / sk-proj- / AIza / gsk_ 必须被 [REDACTED]
+// =====================================================================
+
+describe("redactApiKeys: 厂商 API Key 前缀脱敏（D3）", () => {
+  it("clipAndRedact 抹掉 Anthropic sk-ant-api03- 前缀 key", () => {
+    const out = clipAndRedact("response: sk-ant-api03-ABCD1234efgh5678IJKL9012mnop", 10_000);
+    expect(out).toContain("[REDACTED]");
+    expect(out).not.toContain("sk-ant-api03-");
+    expect(out).not.toContain("ABCD1234efgh5678IJKL9012mnop");
+  });
+
+  it("clipAndRedact 抹掉 OpenAI sk-proj- 前缀 key", () => {
+    const out = clipAndRedact("token sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789", 10_000);
+    expect(out).toContain("[REDACTED]");
+    expect(out).not.toContain("sk-proj-");
+    expect(out).not.toContain("AbCdEfGhIjKlMnOpQrStUvWxYz0123456789");
+  });
+
+  it("clipAndRedact 抹掉 OpenAI 老式 sk-<20+字符> key", () => {
+    const out = clipAndRedact("key=sk-abcdefghijklmnopqrstuvwxyz0123456789", 10_000);
+    expect(out).toContain("[REDACTED]");
+    // sk- 后跟 ≥20 位才会命中；短 sk- 不应误伤
+    expect(out).not.toContain("abcdefghijklmnopqrstuvwxyz0123456789");
+  });
+
+  it("clipAndRedact 抹掉 Google AIza 前缀 key", () => {
+    const out = clipAndRedact("credential: AIzaSyA1B2c3D4e5F6g7H8i9J0kLmNoPqRsTuV", 10_000);
+    expect(out).toContain("[REDACTED]");
+    expect(out).not.toContain("AIzaSy");
+    expect(out).not.toContain("A1B2c3D4e5F6g7H8i9J0kLmNoPqRsTuV");
+  });
+
+  it("clipAndRedact 抹掉 Grok gsk_ 前缀 key", () => {
+    const out = clipAndRedact("xoxb-gsk_9a8B7c6D5e4F3g2H1i0J", 10_000);
+    expect(out).toContain("[REDACTED]");
+    expect(out).not.toContain("gsk_");
+    expect(out).not.toContain("9a8B7c6D5e4F3g2H1i0J");
+  });
+
+  it("truncateForContext 出口同样脱敏厂商 key（output + summary 双向）", () => {
+    const r = successResult({
+      output: "sk-ant-api03-SECRETBODY1234567890 inside output",
+      summary: "完成 gsk_VENDORSECRET9876543210 in summary",
+    });
+    const t = truncateForContext(r, 10_000);
+    // output 经由 clipAndRedact
+    expect(t.output).toContain("[REDACTED]");
+    expect(t.output).not.toContain("sk-ant-api03-");
+    // summary 也要脱敏（D3 修复点）
+    expect(t.summary).toContain("[REDACTED]");
+    expect(t.summary).not.toContain("gsk_");
+  });
+
+  it("普通 token=xxx / Authorization: Bearer xxx 仍走原有 redactSecret 通道", () => {
+    const out = clipAndRedact("api_key=sk-1234567890abcdefgh", 10_000);
+    expect(out).toContain("api_key=[REDACTED]");
+    const out2 = clipAndRedact("Authorization: Bearer abcdefghijklmnopqrstuvwxyz1234", 10_000);
+    expect(out2).toContain("Authorization: Bearer [REDACTED]");
+  });
+});
+
+// =====================================================================
 // 4. truncateForContext: 截断后保留结构化头部
 // =====================================================================
 

@@ -13,8 +13,11 @@ import { bashTool } from "../bash-tool";
 import { executeTool } from "../executor";
 import type { ToolContext } from "../types";
 
+const dbMocks = vi.hoisted(() => ({
+  create: vi.fn().mockResolvedValue("id"),
+}));
 vi.mock("../../../db", () => ({
-  toolExecutions: { create: vi.fn().mockResolvedValue("id") },
+  toolExecutions: { create: dbMocks.create },
 }));
 
 const policyStoreMocks = vi.hoisted(() => ({
@@ -32,13 +35,16 @@ vi.mock("@/lib/policy/policy-store", () => ({
   policyStore: policyStoreMocks,
 }));
 
+let runArgsSpy: ReturnType<typeof vi.fn>;
 let runSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
-  runSpy = vi.fn().mockResolvedValue({ stdout: "ok", stderr: "", code: 0 });
+  runArgsSpy = vi.fn().mockResolvedValue({ stdout: "ok", stderr: "", code: 0 });
+  // run（sh -c）保留但 AI 工具不应再调用它——D2 强保证：所有执行都走 runArgs。
+  runSpy = vi.fn().mockResolvedValue({ stdout: "", stderr: "", code: 0 });
   const adapter: ShellAdapter = {
     run: runSpy as any,
-    runArgs: vi.fn().mockResolvedValue({ stdout: "", stderr: "", code: 0 }),
+    runArgs: runArgsSpy as any,
   };
   setShellAdapter(adapter);
 });
@@ -89,17 +95,49 @@ describe("bash 工具 — 安全闸", () => {
 });
 
 describe("bash 工具 — 执行", () => {
-  it("白名单 + 确认 → 在 workspace 执行，返回 stdout + exit", async () => {
+  it("白名单 + 确认 → 走 runArgs（program+args，不经 sh -c），返回 stdout + exit", async () => {
     const confirm = vi.fn().mockResolvedValue(true);
     const r = await executeTool(bashTool, { command: "pnpm test" }, ctx(confirm));
     expect(r.status).toBe("success");
-    expect(runSpy).toHaveBeenCalledWith("pnpm test", "/ws");
+    expect(runArgsSpy).toHaveBeenCalledWith(["pnpm", "test"], "/ws");
+    // D2 强保证：AI 工具不再走 sh -c
+    expect(runSpy).not.toHaveBeenCalled();
     expect(r.output).toContain("ok");
     expect(r.output).toContain("exit code: 0");
   });
 
+  // 2026-07-15 review 修复回归测试：userConfirmed 必须反映"是不是真的弹过确认框"，
+  // 不能靠 status/tool.readOnly 反推——bash 工具整体 readOnly=false，但只读命令
+  // （git status 这类）会跳过 requireApprovalAsV2，旧的反推逻辑会把这种"系统免确认"
+  // 误记成"用户确认过"。
+  it("只读命令免确认执行 → userConfirmed 应为 false（系统判定安全免确认，不是用户点了同意），且落库的审计记录也如实记这个 false", async () => {
+    dbMocks.create.mockClear();
+    const confirm = vi.fn();
+    const r = await executeTool(bashTool, { command: "git status" }, ctx(confirm));
+    expect(r.status).toBe("success");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(r.userConfirmed).toBe(false);
+    // 真正的 bug 点在这里：persistToolExecution 落库前不能靠 status/tool.readOnly 反推，
+    // 必须原样透传工具自己报的 userConfirmed，不能被"bash 整体 readOnly=false"污染成 true。
+    expect(dbMocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "bash", userConfirmed: false }),
+    );
+  });
+
+  it("写命令真的弹过确认框并被同意 → userConfirmed 应为 true，落库审计记录也一致", async () => {
+    dbMocks.create.mockClear();
+    const confirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command: "pnpm install" }, ctx(confirm));
+    expect(r.status).toBe("success");
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(r.userConfirmed).toBe(true);
+    expect(dbMocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "bash", userConfirmed: true }),
+    );
+  });
+
   it("非零退出码 → status=error", async () => {
-    runSpy.mockResolvedValue({ stdout: "", stderr: "test failed", code: 1 });
+    runArgsSpy.mockResolvedValue({ stdout: "", stderr: "test failed", code: 1 });
     const r = await executeTool(bashTool, { command: "pnpm test" }, ctx(vi.fn().mockResolvedValue(true)));
     expect(r.status).toBe("error");
     expect(r.output).toContain("stderr");
@@ -107,9 +145,52 @@ describe("bash 工具 — 执行", () => {
   });
 
   it("执行抛错 → status=error", async () => {
-    runSpy.mockRejectedValue(new Error("spawn failed"));
+    runArgsSpy.mockRejectedValue(new Error("spawn failed"));
     const r = await executeTool(bashTool, { command: "git status" }, ctx(vi.fn().mockResolvedValue(true)));
     expect(r.status).toBe("error");
     expect(r.output).toMatch(/spawn failed/);
+  });
+});
+
+describe("D2：bash 工具走 program+args，组合/注入命令被拦截", () => {
+  it("合法简单命令：参数里的 shell 元字符被当普通字符串，不触发第二条命令", async () => {
+    // echo 是只读命令，免确认；参数 "a && b | c" 含 shell 元字符但被引号包住，
+    // runArgs 原样传给 echo，绝不会被解释成第二条命令。
+    const r = await executeTool(bashTool, { command: 'echo "a && b | c"' }, ctx());
+    expect(r.status).toBe("success");
+    expect(runArgsSpy).toHaveBeenCalledWith(["echo", "a && b | c"], "/ws");
+    expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it("组合命令 echo hi; rm -rf ~ 被拦截（含 ; 运算符 → 不走 sh -c）", async () => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command: "echo hi; rm -rf ~" }, ctx(confirm));
+    expect(r.status).toBe("denied");
+    expect(runArgsSpy).not.toHaveBeenCalled();
+    expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it("管道组合命令 pnpm test | grep foo 被拦截（| 是 shell 运算符，bash 工具层拒绝）", async () => {
+    // pnpm 与 grep 都在白名单 → executor 的 checkCommand 会放行；
+    // 但 bash 工具层按 D2 拒绝任何需要 shell 解释的组合命令。
+    const confirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command: "pnpm test | grep foo" }, ctx(confirm));
+    expect(r.status).toBe("denied");
+    expect(runArgsSpy).not.toHaveBeenCalled();
+    expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it("含命令替换 $() 的命令被拦截", async () => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command: "echo $(whoami)" }, ctx(confirm));
+    expect(r.status).toBe("denied");
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
+
+  it("含重定向 > 的命令被拦截", async () => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command: "echo hi > out.txt" }, ctx(confirm));
+    expect(r.status).toBe("denied");
+    expect(runArgsSpy).not.toHaveBeenCalled();
   });
 });

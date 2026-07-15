@@ -100,6 +100,48 @@ describe("JsonRpcClient", () => {
     await expect(promise).rejects.toThrow("process crashed");
   });
 
+  // 2026-07-15 review 修复回归测试：transport.send() 本身永久挂起（对应 Rust 侧
+  // write_rpc_stdin 因子进程不读 stdin 而卡死的场景）。旧实现在 `return promise` 之前
+  // `await transport.send()`，send() 卡住时 call() 永远走不到 return，调用方拿不到那个
+  // 会被 timeout 保护的 promise 引用，表现为永久挂起而不是超时错误。
+  it("send() 永久挂起时仍能被超时兜底，不会导致调用方永久挂起", async () => {
+    vi.useFakeTimers();
+    try {
+      class HangingTransport implements JsonRpcTransport {
+        onMessage(): void {}
+        onClose(): void {}
+        onError(): void {}
+        send(): Promise<void> {
+          return new Promise(() => {}); // 永远不 resolve/reject，模拟 write_rpc_stdin 卡死
+        }
+      }
+      const transport = new HangingTransport();
+      const client = new JsonRpcClient(transport, { timeoutMs: 50 });
+      const promise = client.call("stuck");
+      const assertion = expect(promise).rejects.toThrow("timed out");
+
+      await vi.advanceTimersByTimeAsync(51);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("send() 失败（同步/异步拒绝）时正确清理 pending 并 reject，不留下悬空计时器", async () => {
+    class RejectingTransport implements JsonRpcTransport {
+      onMessage(): void {}
+      onClose(): void {}
+      onError(): void {}
+      send(): Promise<void> {
+        return Promise.reject(new Error("write_rpc_stdin failed"));
+      }
+    }
+    const transport = new RejectingTransport();
+    const client = new JsonRpcClient(transport, { timeoutMs: 10_000 });
+    const promise = client.call("bad-write");
+    await expect(promise).rejects.toThrow("write_rpc_stdin failed");
+  });
+
   it("responds to server-initiated requests", async () => {
     const transport = new FakeTransport();
     const client = new JsonRpcClient(transport);

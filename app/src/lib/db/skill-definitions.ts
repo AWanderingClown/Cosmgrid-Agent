@@ -168,7 +168,7 @@ export const skillDefinitions = {
          acceptance_criteria = excluded.acceptance_criteria,
          source = excluded.source,
          review_status = excluded.review_status,
-         reviewed_by = excluded.review_by ?? skill_definitions.reviewed_by,
+         reviewed_by = COALESCE(excluded.reviewed_by, skill_definitions.reviewed_by),
          reviewed_at = excluded.reviewed_at,
          updated_at = excluded.updated_at`,
       [
@@ -229,30 +229,5 @@ export const skillDefinitions = {
       [source],
     );
     return rows[0]?.n ?? 0;
-  },
-
-  /** 内置 seed：项目启动时按 builtin version 戳幂等 seed（已存在就不覆盖）。 */
-  async seedBuiltinIfMissing(input: {
-    id: string;
-    builtinVersion: string;
-    label: string;
-    purpose: string;
-    triggerPhases: ReadonlyArray<string>;
-    triggerKeywords: ReadonlyArray<string>;
-    requiredCapabilities: ReadonlyArray<string>;
-    systemGuidance: ReadonlyArray<string>;
-    acceptanceCriteria: ReadonlyArray<unknown>;
-  }): Promise<"inserted" | "skipped"> {
-    const existing = await this.getById(input.id);
-    if (existing) return "skipped";
-    await this.upsert({
-      ...input,
-      builtinVersion: input.builtinVersion,
-      source: "builtin",
-      reviewStatus: "approved",
-      reviewedBy: "builtin-seed",
-      reviewedAt: now(),
-    });
-    return "inserted";
   },
 };

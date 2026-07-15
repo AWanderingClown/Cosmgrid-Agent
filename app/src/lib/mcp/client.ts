@@ -48,6 +48,15 @@ async function getLocalSession(server: McpServerRow, workspacePath?: string): Pr
   await disposeStaleLocalConfigSessions(server.id, scope.configFingerprint);
   let promise = localSessions.get(key);
   if (!promise) {
+    // 2026-07-15 review 修复：进程崩溃/被 kill（比如 write_rpc_stdin 超时自动终止，见
+    // rpc.rs）后，之前这里完全没反应——localSessions 缓存的条目原样留着指向已死的
+    // client/transport，之后同 workspace 的调用要么快速失败于"session not found"要么再次
+    // 悬挂，用户必须重启 app 才能恢复。onDead 挂上 transport 的 onClose/onError，进程一
+    // 终止/一报错就把这个 key 从缓存里 evict；只在"当前仍是这一份 promise"时才删，避免
+    // 旧会话延迟触发的事件误删掉中途已经建好的新会话。
+    const onDead = () => {
+      if (localSessions.get(key) === promise) localSessions.delete(key);
+    };
     promise = (async () => {
       if (!server.command) throw new Error(`MCP server ${server.name} has no command`);
       const transport = new TauriRpcTransport({
@@ -59,6 +68,8 @@ async function getLocalSession(server: McpServerRow, workspacePath?: string): Pr
         framing: "newline",
       });
       const client = new JsonRpcClient(transport, { timeoutMs: 30_000 });
+      transport.onClose(onDead);
+      transport.onError(onDead);
       await transport.start();
       await client.call("initialize", {
         protocolVersion: MCP_PROTOCOL_VERSION,

@@ -1,14 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { finalizeStreamedChatTurn } from "@/pages/chat/stream-finalization";
+import { VERIFY_ACCEPTANCE_CRITERIA } from "@/lib/llm/evidence/verify-acceptance-criteria";
 import type { ChatMessage } from "@/pages/chat/types";
 
 const mocks = vi.hoisted(() => ({
   writeCache: vi.fn(),
   saveSnapshot: vi.fn(),
   listByMessage: vi.fn(),
+  listByConversation: vi.fn(),
   completeCurrentWorkflowNode: vi.fn(),
   failCurrentWorkflowNode: vi.fn(),
   repairCurrentWorkflowNode: vi.fn(),
+  verifyTask: vi.fn(),
 }));
 
 vi.mock("@/lib/llm/semantic-cache", () => ({
@@ -21,6 +24,7 @@ vi.mock("@/lib/db", () => ({
   },
   toolExecutions: {
     listByMessage: mocks.listByMessage,
+    listByConversation: mocks.listByConversation,
   },
 }));
 
@@ -28,6 +32,13 @@ vi.mock("@/lib/workflow/reducer", () => ({
   completeCurrentWorkflowNode: mocks.completeCurrentWorkflowNode,
   failCurrentWorkflowNode: mocks.failCurrentWorkflowNode,
   repairCurrentWorkflowNode: mocks.repairCurrentWorkflowNode,
+}));
+
+// 2026-07-14：verifyTask 单独 mock 掉——只关心 stream-finalization.ts 按 phase 传对了
+// acceptanceCriteria（该不该传 VERIFY_ACCEPTANCE_CRITERIA），verifyTask 自身的判定逻辑
+// 已经在 task-verifier.test.ts 里直接、完整地测过，这里不重复。
+vi.mock("@/lib/llm/evidence/task-verifier", () => ({
+  verifyTask: mocks.verifyTask,
 }));
 
 function makeSnapshot(phase: string, overrides: Record<string, unknown> = {}) {
@@ -43,9 +54,20 @@ describe("finalizeStreamedChatTurn", () => {
     mocks.writeCache.mockReset();
     mocks.saveSnapshot.mockReset().mockResolvedValue(undefined);
     mocks.listByMessage.mockReset().mockResolvedValue([]);
+    mocks.listByConversation.mockReset().mockResolvedValue([]);
     mocks.completeCurrentWorkflowNode.mockReset().mockReturnValue({ runId: "run-1", currentNodeId: null });
     mocks.failCurrentWorkflowNode.mockReset().mockReturnValue({ runId: "run-1", currentNodeId: "node-1" });
     mocks.repairCurrentWorkflowNode.mockReset().mockReturnValue({ runId: "run-1", currentNodeId: "execute" });
+    mocks.verifyTask.mockReset().mockReturnValue({
+      status: "passes",
+      metCriteria: [],
+      failedCriteria: [],
+      linkedClaims: [],
+      conflicts: [],
+      decidedAt: "2026-07-14T00:00:00.000Z",
+      decisionEvidenceIds: [],
+      humanSummary: "ok",
+    });
   });
 
   it("更新工具调用数、持久化助手消息，并写入语义缓存", async () => {
@@ -119,6 +141,10 @@ describe("finalizeStreamedChatTurn", () => {
       applyWorkflowSnapshot,
     });
 
+    // 2026-07-15 review 修复：工作流验收现在是 fire-and-forget 后台跑（不阻塞 isStreaming
+    // 归位），finalizeStreamedChatTurn 的 await 结束不代表这段副作用已经跑完，要显式等它。
+    await vi.waitFor(() => expect(applyWorkflowSnapshot).toHaveBeenCalled());
+
     // 阶段3（2026-07-11）：completeCurrentWorkflowNode 现在额外接收 evidenceIds / verification
     // 参数（兼容可选）；这里用 toMatchObject 而非 toHaveBeenCalledWith——避免新增 evidenceIds 空数组
     // 之类参数触发误报。
@@ -165,6 +191,7 @@ describe("finalizeStreamedChatTurn", () => {
       applyWorkflowSnapshot,
     });
 
+    await vi.waitFor(() => expect(applyWorkflowSnapshot).toHaveBeenCalled());
     expect(mocks.completeCurrentWorkflowNode).not.toHaveBeenCalled();
     expect(mocks.failCurrentWorkflowNode).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -205,6 +232,7 @@ describe("finalizeStreamedChatTurn", () => {
       applyWorkflowSnapshot: vi.fn(),
     });
 
+    await vi.waitFor(() => expect(mocks.failCurrentWorkflowNode).toHaveBeenCalled());
     expect(mocks.completeCurrentWorkflowNode).not.toHaveBeenCalled();
     expect(mocks.failCurrentWorkflowNode).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: expect.objectContaining({ failureCode: "harness_dirty" }) }),
@@ -239,6 +267,7 @@ describe("finalizeStreamedChatTurn", () => {
       applyWorkflowSnapshot,
     });
 
+    await vi.waitFor(() => expect(applyWorkflowSnapshot).toHaveBeenCalled());
     expect(mocks.completeCurrentWorkflowNode).not.toHaveBeenCalled();
     expect(mocks.failCurrentWorkflowNode).not.toHaveBeenCalled();
     expect(mocks.repairCurrentWorkflowNode).toHaveBeenCalledWith(
@@ -283,6 +312,7 @@ describe("finalizeStreamedChatTurn", () => {
       applyWorkflowSnapshot,
     });
 
+    await vi.waitFor(() => expect(applyWorkflowSnapshot).toHaveBeenCalled());
     expect(mocks.repairCurrentWorkflowNode).not.toHaveBeenCalled();
     expect(mocks.failCurrentWorkflowNode).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: expect.objectContaining({ status: "blocked" }) }),
@@ -322,11 +352,266 @@ describe("finalizeStreamedChatTurn", () => {
       applyWorkflowSnapshot,
     });
 
+    // needs_user 分支不调用任何一个"完成/失败/重试"reducer，没有可以正向 waitFor 的信号——
+    // 用宏任务 tick 让 fire-and-forget 后台任务里已经排队的微任务（listByMessage 的
+    // .then 链）跑完，再确认后续分支确实什么都没做。
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(mocks.listByMessage).toHaveBeenCalledWith("assistant-1");
     expect(mocks.completeCurrentWorkflowNode).not.toHaveBeenCalled();
     expect(mocks.failCurrentWorkflowNode).not.toHaveBeenCalled();
     expect(mocks.repairCurrentWorkflowNode).not.toHaveBeenCalled();
     expect(mocks.saveSnapshot).not.toHaveBeenCalled();
     expect(applyWorkflowSnapshot).not.toHaveBeenCalled();
+  });
+
+  describe("2026-07-14：verify 阶段真实判定接入——按 phase 传对 acceptanceCriteria", () => {
+    it("verify 阶段 → verifyTask 收到 VERIFY_ACCEPTANCE_CRITERIA", async () => {
+      const workflowSnapshot = makeSnapshot("verify");
+
+      await finalizeStreamedChatTurn({
+        text: "hello",
+        assistantMessage: { id: "assistant-1", role: "assistant", content: "" },
+        assistantId: "assistant-1",
+        streamingResult: {
+          fullContent: "8 项测试全部通过",
+          lastModelId: "model-1",
+          lastToolCallCount: 1,
+          harnessDirty: false,
+        },
+        conversationId: "conv-1",
+        cacheEligible: false,
+        taskRole: "standard",
+        shouldCompleteWorkflowNode: true,
+        workflowSnapshot,
+        workflowRunId: "run-1",
+        controllerAborted: false,
+        persistAssistant: vi.fn(),
+        setMessages: vi.fn((updater) => updater([])),
+        applyWorkflowSnapshot: vi.fn(),
+      });
+
+      await vi.waitFor(() => expect(mocks.verifyTask).toHaveBeenCalled());
+      expect(mocks.verifyTask).toHaveBeenCalledWith(
+        expect.objectContaining({ acceptanceCriteria: VERIFY_ACCEPTANCE_CRITERIA }),
+      );
+    });
+
+    it("execute 阶段 → verifyTask 收到空数组（不受 verify 判定标准影响）", async () => {
+      const workflowSnapshot = makeSnapshot("execute");
+
+      await finalizeStreamedChatTurn({
+        text: "hello",
+        assistantMessage: { id: "assistant-1", role: "assistant", content: "" },
+        assistantId: "assistant-1",
+        streamingResult: {
+          fullContent: "已经改完代码了",
+          lastModelId: "model-1",
+          lastToolCallCount: 1,
+          harnessDirty: false,
+        },
+        conversationId: "conv-1",
+        cacheEligible: false,
+        taskRole: "standard",
+        shouldCompleteWorkflowNode: true,
+        workflowSnapshot,
+        workflowRunId: "run-1",
+        controllerAborted: false,
+        persistAssistant: vi.fn(),
+        setMessages: vi.fn((updater) => updater([])),
+        applyWorkflowSnapshot: vi.fn(),
+      });
+
+      await vi.waitFor(() => expect(mocks.verifyTask).toHaveBeenCalled());
+      expect(mocks.verifyTask).toHaveBeenCalledWith(
+        expect.objectContaining({ acceptanceCriteria: [] }),
+      );
+    });
+  });
+
+  describe("2026-07-14：真门控——verify 阶段细对账 fails 时真的打回/锁死，不再只是展示文字", () => {
+    it("verification.status='fails' + repairAttempts 未到上限 → 打回 execute（retryable），不完成节点", async () => {
+      mocks.verifyTask.mockReturnValue({
+        status: "fails",
+        metCriteria: [],
+        failedCriteria: ["lint_pass"],
+        linkedClaims: [],
+        conflicts: [],
+        decidedAt: "2026-07-14T00:00:00.000Z",
+        decisionEvidenceIds: [],
+        humanSummary: "未满足验收：ESLint 无 error。",
+      });
+      const workflowSnapshot = makeSnapshot("verify", { repairAttempts: 0 });
+
+      await finalizeStreamedChatTurn({
+        text: "hello",
+        assistantMessage: { id: "assistant-1", role: "assistant", content: "" },
+        assistantId: "assistant-1",
+        streamingResult: {
+          fullContent: "8 项测试全部通过，lint 也过了",
+          lastModelId: "model-1",
+          lastToolCallCount: 1,
+          harnessDirty: false,
+        },
+        conversationId: "conv-1",
+        cacheEligible: false,
+        taskRole: "standard",
+        shouldCompleteWorkflowNode: true,
+        workflowSnapshot,
+        workflowRunId: "run-1",
+        controllerAborted: false,
+        persistAssistant: vi.fn(),
+        setMessages: vi.fn((updater) => updater([])),
+        applyWorkflowSnapshot: vi.fn(),
+      });
+
+      await vi.waitFor(() => expect(mocks.repairCurrentWorkflowNode).toHaveBeenCalled());
+      expect(mocks.completeCurrentWorkflowNode).not.toHaveBeenCalled();
+      expect(mocks.repairCurrentWorkflowNode).toHaveBeenCalledWith(
+        expect.objectContaining({
+          snapshot: workflowSnapshot,
+          outcome: expect.objectContaining({
+            status: "retryable",
+            failureCode: "acceptance_criteria_failed",
+          }),
+        }),
+      );
+      expect(mocks.saveSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: "workflow.node_repair_retry" }),
+      );
+    });
+
+    it("verification.status='fails' + repairAttempts 已到上限（2）→ blocked，锁死等人工介入", async () => {
+      mocks.verifyTask.mockReturnValue({
+        status: "fails",
+        metCriteria: [],
+        failedCriteria: ["lint_pass"],
+        linkedClaims: [],
+        conflicts: [],
+        decidedAt: "2026-07-14T00:00:00.000Z",
+        decisionEvidenceIds: [],
+        humanSummary: "未满足验收：ESLint 无 error。",
+      });
+      const workflowSnapshot = makeSnapshot("verify", { repairAttempts: 2 });
+
+      await finalizeStreamedChatTurn({
+        text: "hello",
+        assistantMessage: { id: "assistant-1", role: "assistant", content: "" },
+        assistantId: "assistant-1",
+        streamingResult: {
+          fullContent: "8 项测试全部通过",
+          lastModelId: "model-1",
+          lastToolCallCount: 1,
+          harnessDirty: false,
+        },
+        conversationId: "conv-1",
+        cacheEligible: false,
+        taskRole: "standard",
+        shouldCompleteWorkflowNode: true,
+        workflowSnapshot,
+        workflowRunId: "run-1",
+        controllerAborted: false,
+        persistAssistant: vi.fn(),
+        setMessages: vi.fn((updater) => updater([])),
+        applyWorkflowSnapshot: vi.fn(),
+      });
+
+      await vi.waitFor(() => expect(mocks.failCurrentWorkflowNode).toHaveBeenCalled());
+      expect(mocks.completeCurrentWorkflowNode).not.toHaveBeenCalled();
+      expect(mocks.repairCurrentWorkflowNode).not.toHaveBeenCalled();
+      expect(mocks.failCurrentWorkflowNode).toHaveBeenCalledWith(
+        expect.objectContaining({
+          snapshot: workflowSnapshot,
+          outcome: expect.objectContaining({
+            status: "blocked",
+            failureCode: "acceptance_criteria_failed",
+          }),
+        }),
+      );
+      expect(mocks.saveSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: "workflow.node_blocked" }),
+      );
+    });
+
+    it("verification.status='inconclusive'（证据看不清）→ 不触发降级，仍正常完成节点", async () => {
+      mocks.verifyTask.mockReturnValue({
+        status: "inconclusive",
+        metCriteria: [],
+        failedCriteria: [],
+        linkedClaims: [],
+        conflicts: [],
+        decidedAt: "2026-07-14T00:00:00.000Z",
+        decisionEvidenceIds: [],
+        humanSummary: "证据不充分，需要人工复核。",
+      });
+      const workflowSnapshot = makeSnapshot("verify", { repairAttempts: 0 });
+
+      await finalizeStreamedChatTurn({
+        text: "hello",
+        assistantMessage: { id: "assistant-1", role: "assistant", content: "" },
+        assistantId: "assistant-1",
+        streamingResult: {
+          fullContent: "已经验证过了",
+          lastModelId: "model-1",
+          lastToolCallCount: 1,
+          harnessDirty: false,
+        },
+        conversationId: "conv-1",
+        cacheEligible: false,
+        taskRole: "standard",
+        shouldCompleteWorkflowNode: true,
+        workflowSnapshot,
+        workflowRunId: "run-1",
+        controllerAborted: false,
+        persistAssistant: vi.fn(),
+        setMessages: vi.fn((updater) => updater([])),
+        applyWorkflowSnapshot: vi.fn(),
+      });
+
+      await vi.waitFor(() => expect(mocks.completeCurrentWorkflowNode).toHaveBeenCalled());
+      expect(mocks.repairCurrentWorkflowNode).not.toHaveBeenCalled();
+      expect(mocks.failCurrentWorkflowNode).not.toHaveBeenCalled();
+      expect(mocks.completeCurrentWorkflowNode).toHaveBeenCalled();
+    });
+
+    it("非 verify 阶段（execute）即使 verifyTask 返回 fails，也不触发降级（防御性范围校验）", async () => {
+      mocks.verifyTask.mockReturnValue({
+        status: "fails",
+        metCriteria: [],
+        failedCriteria: ["lint_pass"],
+        linkedClaims: [],
+        conflicts: [],
+        decidedAt: "2026-07-14T00:00:00.000Z",
+        decisionEvidenceIds: [],
+        humanSummary: "未满足验收：ESLint 无 error。",
+      });
+      const workflowSnapshot = makeSnapshot("execute", { repairAttempts: 0 });
+
+      await finalizeStreamedChatTurn({
+        text: "hello",
+        assistantMessage: { id: "assistant-1", role: "assistant", content: "" },
+        assistantId: "assistant-1",
+        streamingResult: {
+          fullContent: "已经改完代码了",
+          lastModelId: "model-1",
+          lastToolCallCount: 1,
+          harnessDirty: false,
+        },
+        conversationId: "conv-1",
+        cacheEligible: false,
+        taskRole: "standard",
+        shouldCompleteWorkflowNode: true,
+        workflowSnapshot,
+        workflowRunId: "run-1",
+        controllerAborted: false,
+        persistAssistant: vi.fn(),
+        setMessages: vi.fn((updater) => updater([])),
+        applyWorkflowSnapshot: vi.fn(),
+      });
+
+      await vi.waitFor(() => expect(mocks.completeCurrentWorkflowNode).toHaveBeenCalled());
+      expect(mocks.repairCurrentWorkflowNode).not.toHaveBeenCalled();
+      expect(mocks.failCurrentWorkflowNode).not.toHaveBeenCalled();
+      expect(mocks.completeCurrentWorkflowNode).toHaveBeenCalled();
+    });
   });
 });

@@ -139,6 +139,41 @@ describe("executor helper coverage", () => {
     expect("denied" in denied).toBe(true);
   });
 
+  it("K7 能力门控：只读阶段允许集 active 时，写工具被拦、读工具放行", async () => {
+    // read_project/plan 阶段策略：只授予读 + 命令，不授予写。
+    const auditCaps = ["read_files", "inspect_git", "run_readonly_checks"];
+    const ctx: ToolContext = { ...baseCtx, activeCaps: auditCaps };
+
+    // 写工具 → 拦截
+    const deniedWrite = await runSecurityPrecheck(
+      toolWithSecurity({ kind: "write-path", pathField: "file_path" }),
+      { file_path: "a.ts" },
+      ctx,
+    );
+    expect("denied" in deniedWrite).toBe(true);
+    if ("denied" in deniedWrite) {
+      expect(deniedWrite.reasonCode).toBe("SKILL_CAPABILITY_DENIED");
+    }
+
+    // 读工具 → 放行（read-path 恒放行，即便 skill 只声明了这些 cap）
+    const readOk = await runSecurityPrecheck(
+      toolWithSecurity({ kind: "read-path", pathField: "file_path" }),
+      { file_path: "a.ts" },
+      ctx,
+    );
+    expect("denied" in readOk).toBe(false);
+  });
+
+  it("K7 能力门控：不设 activeCaps 时完全不门控（无阶段策略保持全放行）", async () => {
+    const deniedWrite = await runSecurityPrecheck(
+      toolWithSecurity({ kind: "write-path", pathField: "file_path" }),
+      { file_path: "a.ts" },
+      baseCtx, // 无 activeCaps
+    );
+    // 不因 K7 被拦（write-path 的 path-safety 对 /tmp 工作区内的相对路径放行）
+    expect("denied" in deniedWrite).toBe(false);
+  });
+
   it("maybeBuildDoomLoopResult returns null before threshold and error after repeated calls", () => {
     const ctx = { ...baseCtx, messageId: "helper-doom-loop" };
     expect(maybeBuildDoomLoopResult(ctx, "read", { file_path: "a.ts" }, '{"file_path":"a.ts"}')).toBeNull();

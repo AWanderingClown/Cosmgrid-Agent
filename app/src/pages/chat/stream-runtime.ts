@@ -6,6 +6,9 @@ import {
   type StreamUsage,
   type StreamWithFallbackOptions,
 } from "@/lib/llm/chat-fallback";
+import { buildQuotaGuardFromAggregates } from "@/lib/llm/quota-guard";
+import { tokenPlans } from "@/lib/db/token-plans";
+import { usageEvents } from "@/lib/db/usage-events";
 import {
   detectIntentNoToolCall,
   isClean,
@@ -66,6 +69,26 @@ export async function runChatStreamRuntime(
   let convo = args.initialMessages;
   let forceToolChoiceRequired = false;
 
+  // D4：额度熔断守卫——额度耗尽的模型在 streamWithFallback 入口被跳过，让后备模型续跑；
+  // 所有模型额度都耗尽则直接报错（与 cooldown 分开）。DB 不可用（CLI/测试）时静默回退
+  // 到不熔断，保持原有行为。
+  //
+  // 2026-07-15 review 修复：这里每次发消息都要跑一遍，原来走 usageEvents.list() 把
+  // usage_events 全表原始记录拉进 JS 再 reduce，历史越多越卡。改用 SQL 侧
+  // GROUP BY (provider_id, api_credential_id) 聚合（aggregateByProviderCredential +
+  // buildQuotaGuardFromAggregates），返回的行数只跟"用过几种 provider+credential 组合"
+  // 成正比，跟 usage_events 总行数无关。
+  let quotaGuard: StreamWithFallbackOptions["quotaGuard"];
+  try {
+    const [plans, aggregates] = await Promise.all([
+      tokenPlans.list(),
+      usageEvents.aggregateByProviderCredential(),
+    ]);
+    quotaGuard = await buildQuotaGuardFromAggregates(args.chain, plans, aggregates);
+  } catch {
+    quotaGuard = undefined;
+  }
+
   for (let attempt = 0; ; attempt++) {
     args.setStreamActivityPhase?.("streaming");
     streamingState.fullContent = "";
@@ -107,6 +130,7 @@ export async function runChatStreamRuntime(
             ...(forceToolChoiceRequired ? { toolChoice: "required" as const } : {}),
           }
           : {}),
+        ...(quotaGuard ? { quotaGuard } : {}),
       },
     );
     streamingState.lastResultModelId = result.usedModelId;

@@ -29,10 +29,13 @@ export async function lookupCache(
   query: string,
   threshold = SIMILARITY_THRESHOLD,
 ): Promise<CacheHit | null> {
-  const rows = await semanticCache.listValid();
+  // D9（2026-07-15）：只拉当前 embedding provider 的未过期缓存，避免把别的算法版本
+  // 的整批 vec 拉回 JS 再在下面逐个 skip（providerName 不匹配直接 continue）。
+  // providerName 是 vec 兼容性的硬边界，过滤它既正确又能走 idx_semantic_cache_lookup。
+  const provider = getEmbeddingProvider();
+  const rows = await semanticCache.listValid({ providerName: provider.name });
   if (rows.length === 0) return null;
 
-  const provider = getEmbeddingProvider();
   const qvec = await provider.embed(query);
 
   let best: CacheHit | null = null;

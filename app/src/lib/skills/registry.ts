@@ -1,10 +1,17 @@
 import type { SkillDefinition, SkillId } from "./types";
 
 /**
- * 内置技能 seed（不修改）。阶段 1b 由 lib/db/skill-definitions.ts:seedBuiltinIfMissing
- * 在项目启动 seed 进 DB 一次，selector 从 DB 读，不再直接读这个常量。
+ * 内置技能 seed（不修改）。阶段 1b 由 lib/skills/seed.ts:seedBuiltinSkills
+ * 在项目启动按 SKILL_BUILTIN_VERSION 戳 upsert 进 DB，selector 从 DB 读，不再直接读这个常量。
  *
  * 字段 source='builtin' / reviewStatus='approved' —— selector 只装 approved。
+ *
+ * ⚠️ 2026-07-14 迁移状态：下面 3 条（project_audit/plan_execution/verification_closure）
+ * 本质是"工作流阶段行为纪律"，不是真 skill——它们的 systemGuidance/acceptanceCriteria 文本
+ * 已原样迁移到 lib/workflow/phase-guidance.ts，由工作流原生注入，不再经过 skill 选择
+ * （lib/skills/selector.ts 的 RETIRED_PHASE_SKILL_IDS 已把这 3 个 id 挡在选择入口之外）。
+ * 这里 + DB 里的行仍保留，只是为了不动历史审计记录；步骤3 退休整套 DB 注册/审核系统时
+ * 会一并清理。不要再往这 3 条加新内容——新的阶段行为纪律改动请去 phase-guidance.ts。
  */
 export const CORE_SKILLS: SkillDefinition[] = [
   {
@@ -12,7 +19,9 @@ export const CORE_SKILLS: SkillDefinition[] = [
     label: "项目审计",
     purpose: "读取真实项目状态，建立事实清单和缺口判断。",
     triggerPhases: ["read_project", "plan"],
-    triggerKeywords: ["看项目", "读项目", "分析项目", "审计", "现状", "缺口", "问题"],
+    // "问题" 曾在此列，但太宽泛——任何含"问题"的提问都会选中只读审计 skill，
+    // K7 门控生效后会误拦本轮写工具（2026-07-14 移除）。
+    triggerKeywords: ["看项目", "读项目", "分析项目", "审计", "现状", "缺口"],
     requiredCapabilities: ["read_files", "inspect_git", "run_readonly_checks"],
     systemGuidance: [
       "先读取项目文件、配置、测试和文档，再下结论。",
@@ -74,8 +83,8 @@ export const CORE_SKILLS: SkillDefinition[] = [
   },
 ];
 
-/** 内置 seed 版本戳——seedBuiltinIfMissing 用它判断是否需要重 seed。 */
-export const SKILL_BUILTIN_VERSION = "builtin-2026-07-12";
+/** 内置 seed 版本戳——seedBuiltinSkills 用它判断是否需要重 seed（版本变了就刷新内置行）。 */
+export const SKILL_BUILTIN_VERSION = "builtin-2026-07-14";
 
 /**
  * 同步查找。生产代码不要走这个（用 lib/db/skill-definitions.ts.listActive()）。

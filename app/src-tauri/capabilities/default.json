@@ -15,12 +15,14 @@
     "allow-kill-rpc-process",
     "allow-resolve-cli-program",
     "allow-run-shell-command",
+    "allow-run-shell-args",
     "allow-fetch-url-backend",
     "allow-fetch-url-rendered",
     "allow-git-commit-file",
     "allow-git-read",
     "allow-init-shadow-git-repo",
     "allow-resolve-realpath",
+    "allow-grant-workspace-fs-access",
     "allow-set-menu-language",
     "sql:default",
     "sql:allow-load",
@@ -35,35 +37,112 @@
     "store:allow-load",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "https://*" }, { "url": "http://*" }]
+      "allow": [{ "url": "https://*" }]
     },
     {
       "identifier": "fs:allow-read-file",
-      "allow": [{ "path": "**" }]
+      "allow": [{ "path": "$HOME/**" }],
+      "deny": [
+        { "path": "$HOME/.ssh" },
+        { "path": "$HOME/.ssh/**" },
+        { "path": "$HOME/.aws" },
+        { "path": "$HOME/.aws/**" },
+        { "path": "$HOME/.gnupg" },
+        { "path": "$HOME/.gnupg/**" },
+        { "path": "$HOME/.env*" },
+        { "path": "**/.env*" },
+        { "path": "**/secrets.*" }
+      ]
     },
     {
       "identifier": "fs:allow-read-text-file",
-      "allow": [{ "path": "**" }]
+      "allow": [{ "path": "$HOME/**" }],
+      "deny": [
+        { "path": "$HOME/.ssh" },
+        { "path": "$HOME/.ssh/**" },
+        { "path": "$HOME/.aws" },
+        { "path": "$HOME/.aws/**" },
+        { "path": "$HOME/.gnupg" },
+        { "path": "$HOME/.gnupg/**" },
+        { "path": "$HOME/.env*" },
+        { "path": "**/.env*" },
+        { "path": "**/secrets.*" }
+      ]
     },
     {
       "identifier": "fs:allow-read-dir",
-      "allow": [{ "path": "**" }]
+      "allow": [{ "path": "$HOME/**" }],
+      "deny": [
+        { "path": "$HOME/.ssh" },
+        { "path": "$HOME/.ssh/**" },
+        { "path": "$HOME/.aws" },
+        { "path": "$HOME/.aws/**" },
+        { "path": "$HOME/.gnupg" },
+        { "path": "$HOME/.gnupg/**" },
+        { "path": "$HOME/.env*" },
+        { "path": "**/.env*" },
+        { "path": "**/secrets.*" }
+      ]
     },
     {
       "identifier": "fs:allow-exists",
-      "allow": [{ "path": "**" }]
+      "allow": [{ "path": "$HOME/**" }],
+      "deny": [
+        { "path": "$HOME/.ssh" },
+        { "path": "$HOME/.ssh/**" },
+        { "path": "$HOME/.aws" },
+        { "path": "$HOME/.aws/**" },
+        { "path": "$HOME/.gnupg" },
+        { "path": "$HOME/.gnupg/**" },
+        { "path": "$HOME/.env*" },
+        { "path": "**/.env*" },
+        { "path": "**/secrets.*" }
+      ]
     },
     {
       "identifier": "fs:allow-stat",
-      "allow": [{ "path": "**" }]
+      "allow": [{ "path": "$HOME/**" }],
+      "deny": [
+        { "path": "$HOME/.ssh" },
+        { "path": "$HOME/.ssh/**" },
+        { "path": "$HOME/.aws" },
+        { "path": "$HOME/.aws/**" },
+        { "path": "$HOME/.gnupg" },
+        { "path": "$HOME/.gnupg/**" },
+        { "path": "$HOME/.env*" },
+        { "path": "**/.env*" },
+        { "path": "**/secrets.*" }
+      ]
     },
     {
       "identifier": "fs:allow-write-text-file",
-      "allow": [{ "path": "$HOME/**" }]
+      "allow": [{ "path": "$HOME/**" }],
+      "deny": [
+        { "path": "$HOME/.ssh" },
+        { "path": "$HOME/.ssh/**" },
+        { "path": "$HOME/.aws" },
+        { "path": "$HOME/.aws/**" },
+        { "path": "$HOME/.gnupg" },
+        { "path": "$HOME/.gnupg/**" },
+        { "path": "$HOME/.env*" },
+        { "path": "**/.env*" },
+        { "path": "**/secrets.*" }
+      ]
     },
     {
       "identifier": "fs:allow-mkdir",
-      "allow": [{ "path": "$HOME/**" }]
+      "allow": [{ "path": "$HOME/**" }],
+      "deny": [
+        { "path": "$HOME/.ssh" },
+        { "path": "$HOME/.ssh/**" },
+        { "path": "$HOME/.aws" },
+        { "path": "$HOME/.aws/**" },
+        { "path": "$HOME/.gnupg" },
+        { "path": "$HOME/.gnupg/**" },
+        { "path": "$HOME/.env*" },
+        { "path": "**/.env*" },
+        { "path": "**/secrets.*" }
+      ]
     },
     "dialog:allow-open"
   ]

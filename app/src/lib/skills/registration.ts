@@ -13,6 +13,13 @@
  *   - approveSkill() / rejectSkill() 审核入口
  *   - 所有变更写 skill_audit_log + 改 skill_definitions
  *   - 异常用 SkillRegistrationError 抛，含 code 给 UI 文案
+ *
+ * ⚠️ 2026-07-14 重要提醒（workflow/skill 解耦第 0 步之后）：这里注册/审核的
+ * requiredCapabilities 字段**不再参与 K7 执行期门控**——门控现在完全由当前工作流阶段
+ * （lib/workflow/phase-capabilities.ts）决定，跟被选中的 skill 声明了什么无关。
+ * 也就是说，本文件这套注册+审核流程目前只保证"内容不含退化诱导词 + 数量受限"，
+ * 不再保证"审核通过的 skill 运行时工具权限被收窄到它声明的范围"。这个字段目前是
+ * 展示性的，不是安全边界；详见 registerSkill() 里 EMPTY_REQUIRED_CAPABILITIES 校验旁的说明。
  */
 
 import { z } from "zod";
@@ -107,10 +114,15 @@ export async function registerSkill(input: {
     );
   }
 
-  // K7 真强制配套：requiredCapabilities 必须非空数组。
-  // 空 caps 在 K7 enforcement 路径里被作为"未约束能力"放过一切工具调用，等于零审核
-  // 安全口子（reviewer F-03）。这是 §4.3 K12 审核机制完整性的最后一道闸：
-  // 阻止攻击者注册"声明空能力 + 注入退化诱导 guidance"的 Skill 让 AI 用任何工具。
+  // ⚠️ 2026-07-14 事实更正（workflow/skill 解耦第 0 步之后）：下面这段校验保留，但下面
+  // 这句"空 caps 会放过一切工具调用"描述的是解耦前的旧行为，现在已经不成立——
+  // K7 的 activeCaps 完全来自当前工作流阶段（lib/workflow/phase-capabilities.ts），
+  // 不再读任何 skill 的 requiredCapabilities。也就是说：不管这里注册的 skill 声明了什么
+  // capability（包括这条 EMPTY_REQUIRED_CAPABILITIES 校验拦下的空数组），它对"这个 skill
+  // 被选中时能不能写文件/跑命令"没有任何实际约束力——真正决定权限的是当前 workflow phase。
+  // 校验本身继续保留是好事（schema 完整性、非空约束仍值得强制），但审核者/未来读这段代码的人
+  // 不要误以为"审核通过 = 这个 skill 的工具权限被强制收窄"，那个保证目前不存在。
+  // K7 真强制配套：requiredCapabilities 必须非空数组（历史校验，语义见上）。
   if (!Array.isArray(input.requiredCapabilities) || input.requiredCapabilities.length === 0) {
     throw new SkillRegistrationError(
       "Skill 必须声明至少一个 requiredCapabilities；空数组等于不约束，等于绕过 K7 enforcement",

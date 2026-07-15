@@ -69,6 +69,32 @@ describe("TauriRpcTransport", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  // 2026-07-15 review 修复回归测试：原来 onClose/onError 各自只存一个函数引用，后注册的
+  // 会覆盖先注册的——JsonRpcClient 构造时注册一份用来 reject 所有 pending 调用，会话缓存层
+  // （lsp-session.ts/mcp/client.ts）也要注册一份用来在进程终止时把自己从缓存 evict，两者
+  // 都必须收到通知，不能互相覆盖。
+  it("onClose/onError 支持注册多个监听器，全部都会被调用，不会互相覆盖", async () => {
+    const instance = transport();
+    const closeA = vi.fn();
+    const closeB = vi.fn();
+    const errorA = vi.fn();
+    const errorB = vi.fn();
+    instance.onMessage(() => {});
+    instance.onClose(closeA);
+    instance.onClose(closeB);
+    instance.onError(errorA);
+    instance.onError(errorB);
+    await instance.start();
+
+    mocks.eventHandler?.({ payload: { type: "error", sessionId: "session-1", message: "boom" } });
+    mocks.eventHandler?.({ payload: { type: "terminated", sessionId: "session-1", code: 1 } });
+
+    expect(closeA).toHaveBeenCalledTimes(1);
+    expect(closeB).toHaveBeenCalledTimes(1);
+    expect(errorA).toHaveBeenCalledTimes(1);
+    expect(errorB).toHaveBeenCalledTimes(1);
+  });
+
   it("writes both supported frame formats and disposes", async () => {
     const newline = transport("newline");
     await newline.start();

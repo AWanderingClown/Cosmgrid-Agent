@@ -19,6 +19,7 @@ export type { ModelEndpoint, StreamUsage } from "./chat-fallback-contracts";
 export type SwitchReason =
   | { kind: "error"; category: LlmErrorCategory }
   | { kind: "cooldown" }
+  | { kind: "quota" }
   | { kind: "recovery"; reason: string };
 
 /** 流式过程的回调钩子 */
@@ -106,6 +107,21 @@ export interface StreamWithFallbackOptions {
     beforeTokens: number;
     afterTokens: number;
   } | null;
+  /**
+   * D4：额度熔断守卫。提供"额度已耗尽的模型 modelId 集合"——这些模型在入口直接被跳过
+   * （触发 onSwitched({kind:"quota"})），让后备模型续跑；所有模型额度都耗尽时抛
+   * `All models exhausted quota: ...` 错误。与 cooldown 完全独立（reason 分开）。
+   * 不提供则默认不熔断（保持原行为，CLI 等无 DB 路径安全）。
+   */
+  quotaGuard?: QuotaGuard;
+}
+
+/**
+ * D4 额度熔断守卫：给出"额度已耗尽"的模型集合。实现方（stream-runtime）从 token_plans +
+ * usage_events + computeTokenPlanUsageMap 计算；调用方只认这个窄接口，不耦合 DB。
+ */
+export interface QuotaGuard {
+  getExhaustedModelIds(): Promise<Set<string>> | Set<string>;
 }
 
 /**

@@ -25,6 +25,7 @@ import { useChatAttachments } from "@/pages/chat/useChatAttachments";
 import { useChatInput } from "@/pages/chat/useChatInput";
 import { useChatStream } from "@/pages/chat/useChatStream";
 import { useConversations } from "@/pages/chat/useConversations";
+import { shouldRouteNextActionAsChatMessage } from "@/pages/chat/next-action-dispatch";
 import { useModelSelection } from "@/pages/chat/useModelSelection";
 import { useOrchestration } from "@/pages/chat/useOrchestration";
 import { useWorkPanel } from "@/pages/chat/useWorkPanel";
@@ -103,6 +104,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     chainAbortRef,
     applyOrchestration,
     applyWorkflowSnapshot,
+    pickNextAction,
     loadWorkflowForConversation,
   } = useOrchestration({ conversationId });
 
@@ -469,6 +471,37 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     if (inputRef.current) inputRef.current.style.height = "auto";
   }
 
+  // Task #9：只在 reducer 明确产生 "pick_next_step" 这种待选决策时才把 nextActions 递给
+  // 输入框卡片——pendingDecision 还有 resolve_ambiguity 等其它 kind，那些目前没有专门的按钮
+  // UI（用户还是打字处理），不能不分青红皂白地把 nextActions 塞进来。
+  const pendingNextActions =
+    workflowSnapshot?.pendingDecision?.kind === "pick_next_step" && workflowSnapshot.nextActions.length > 0
+      ? workflowSnapshot.nextActions
+      : null;
+
+  // Task #9 独立复检发现的真 bug（HIGH）：debate 阶段有一条独立的执行入口 runDebateRuntime，
+  // 只由 shouldRunDebateTurn 检查"这条消息文本"里有没有博弈关键词来触发（debate-runtime.ts），
+  // 跟 workflowSnapshot.currentNodeId 完全解耦——applyNextActionChoice 只会把 currentNodeId
+  // 挪到 debate 节点，不会真的启动博弈。用户点了"开启多模型博弈"按钮后，如果下一句只说
+  // "继续"，博弈根本不会发生，静默走回单模型问答——跟 Task #9 本来要修的"分类器猜错就走错
+  // 分支"是同一类症状，只是换了个触发点。
+  // 直接确定性推进（pickNextAction）对 debate 这一个 action 不成立，因为它不是"挪个指针，
+  // 等下一轮正常对话捡起来"，而是"现在就要真的跑一次多模型博弈"。修法：把按钮文案（本身就含
+  // "博弈"关键词，isExplicitDebateRequest 能命中）当一条真实用户消息入队，走跟手打字完全
+  // 相同的 handleSend 管线（intent classifier → applyTurnIntentDecision 推进阶段 →
+  // shouldRunDebateTurn 判定为真 → runDebateRuntime 真正执行），而不是绕开这整条现成、
+  // 经过验证的链路。其余四个 next action（make_plan/review_plan/execute_plan/
+  // verify_changes）没有独立 runtime，只是挪阶段指针给下一轮正常对话的工具能力门控用，
+  // 确定性推进对它们是安全、正确的，不受这次修复影响。
+  function handlePickNextAction(actionId: string): void {
+    const action = pendingNextActions?.find((a) => a.id === actionId);
+    if (action && shouldRouteNextActionAsChatMessage(action)) {
+      setPendingQueue((q) => [...q, { text: t(action.labelKey) }]);
+      return;
+    }
+    void pickNextAction(actionId);
+  }
+
   const selectedModel = availableModels.find(m => m.id === selectedModelId);
   const activeModelLabel = getActiveAssistantModelLabel(
     messages,
@@ -624,6 +657,8 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         onResolveConfirm={resolveConfirm}
         pendingQuestion={pendingQuestion}
         onResolveQuestion={resolveAskUser}
+        pendingNextActions={pendingNextActions}
+        onPickNextAction={handlePickNextAction}
       />
       </div>
 

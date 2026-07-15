@@ -1,6 +1,7 @@
 // Harness 工程实施计划阶段1 —— 节点完成门控测试（先写失败测试，再实现最小结构）。
 import { describe, expect, it } from "vitest";
-import { MAX_REPAIR_ATTEMPTS, verifyNodeOutcome } from "../node-verifier";
+import { MAX_REPAIR_ATTEMPTS, verifyNodeOutcome, applyVerifyRepairLoop } from "../node-verifier";
+import type { NodeOutcome } from "../node-outcome";
 
 describe("verifyNodeOutcome", () => {
   it("Harness 判定编造（harnessDirty=true）→ failed，不管是哪个阶段", () => {
@@ -153,5 +154,55 @@ describe("verifyNodeOutcome", () => {
       toolExecutionIds: ["te-1", "te-2"],
     });
     expect(outcome.toolExecutionIds).toEqual(["te-1", "te-2"]);
+  });
+});
+
+// 2026-07-14：applyVerifyRepairLoop 导出后独立单测（此前只在 verifyNodeOutcome 内部被间接
+// 测到）——stream-finalization.ts 现在也直接调用它，把细对账 fails 结果降级成 retryable/
+// blocked，复用同一套 MAX_REPAIR_ATTEMPTS 上限，不是另开一条不受控的重试路径。
+describe("applyVerifyRepairLoop（导出复用，细对账/粗筛共用同一套受控重试上限）", () => {
+  function failedOutcome(over: Partial<NodeOutcome> = {}): NodeOutcome {
+    return {
+      status: "failed",
+      summary: "验收未通过",
+      evidenceIds: [],
+      artifactIds: [],
+      toolExecutionIds: [],
+      failureCode: "acceptance_criteria_failed",
+      ...over,
+    };
+  }
+
+  it("非 verify 阶段：failed 原样返回，不进入修复循环", () => {
+    const result = applyVerifyRepairLoop(failedOutcome(), { phase: "execute", repairAttempts: 0 });
+    expect(result.status).toBe("failed");
+  });
+
+  it("verify 阶段 + status 不是 failed：原样返回（不误伤 passed/needs_user 等状态）", () => {
+    const result = applyVerifyRepairLoop(
+      { status: "passed", summary: "ok", evidenceIds: [], artifactIds: [], toolExecutionIds: [] },
+      { phase: "verify", repairAttempts: 0 },
+    );
+    expect(result.status).toBe("passed");
+  });
+
+  it("verify 阶段 + failed + repairAttempts 未到上限 → retryable，保留原 failureCode", () => {
+    const result = applyVerifyRepairLoop(failedOutcome(), { phase: "verify", repairAttempts: 0 });
+    expect(result.status).toBe("retryable");
+    expect(result.failureCode).toBe("acceptance_criteria_failed");
+  });
+
+  it("verify 阶段 + failed + repairAttempts 已达上限 → blocked，stopReason 说明原因", () => {
+    const result = applyVerifyRepairLoop(failedOutcome(), {
+      phase: "verify",
+      repairAttempts: MAX_REPAIR_ATTEMPTS,
+    });
+    expect(result.status).toBe("blocked");
+    expect(result.stopReason).toBe("repair_attempts_exhausted");
+  });
+
+  it("不传 repairAttempts（undefined）时按 0 处理，不会误判成已达上限", () => {
+    const result = applyVerifyRepairLoop(failedOutcome(), { phase: "verify" });
+    expect(result.status).toBe("retryable");
   });
 });

@@ -284,4 +284,59 @@ describe("deriveChainNodeGraph — workflow 阶段节点", () => {
     expect(byRole.execute).toMatchObject({ stepName: "执行方案", status: "active", modelName: "dynamic" });
     expect(graph.nodes.map((node) => node.role)).toContain("leader");
   });
+
+  // 2026-07-15 review 修复回归测试：节点 status 是 "waiting_user"（用户拒绝写权限确认/
+  // 主动中止后，reducer.ts 的 markCurrentWorkflowNodeNeedsUser 会把节点改成这个状态）时，
+  // 不该跟 running/ready 一样被渲染成 "active"（看起来还在进行中）——用户已经停下来了。
+  it("节点 status 为 waiting_user 时不渲染成 active（已经停下来了，不是还在进行中）", () => {
+    const workflow: WorkflowSnapshot = {
+      version: 1,
+      runId: "run-1",
+      conversationId: "conv-1",
+      status: "waiting_user",
+      intent: {
+        objective: "执行方案",
+        requestedOutcome: "按方案落地",
+        taskKind: "feature",
+        executionMode: "execute_directly",
+        reviewRequested: false,
+        debateRequested: false,
+        verificationRequired: true,
+        securitySensitive: false,
+        needsWorkspace: true,
+        stickyUntil: [],
+      },
+      currentNodeId: "execute",
+      nodes: [
+        {
+          id: "execute",
+          phase: "execute",
+          title: "执行方案",
+          status: "waiting_user",
+          optional: false,
+          dependsOn: ["plan"],
+          assignedRoles: [],
+          autoAdvance: "never",
+        },
+      ],
+      nextActions: [],
+      context: { projectFacts: [], changedFiles: [], riskLevel: "low" },
+    };
+
+    const graph = deriveChainNodeGraph({
+      orchestration: null,
+      workflowSnapshot: workflow,
+      selectedModelId: "m3",
+      selectedModelName: "MiniMax-M3",
+      availableModels: models,
+      chainRunning: false,
+      chainExecutedRoles: [],
+      chainSkippedRoles: [],
+      chainAbortedRole: null,
+    });
+
+    const byRole = Object.fromEntries(graph.nodes.map((node) => [node.role, node]));
+    expect(byRole.execute?.status).not.toBe("active");
+    expect(byRole.execute?.status).toBe("aborted");
+  });
 });

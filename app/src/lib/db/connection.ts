@@ -6,6 +6,24 @@ export interface DbHandle {
   select<T>(query: string, bindValues?: unknown[]): Promise<T>;
 }
 
+/**
+ * ⚠️ 事务边界铁律（D5 / 方案 Plan B，2026-07-15 收口）：
+ *
+ * tauri-plugin-sql 底层是 sqlx 连接池（多连接）。跨多次 `execute` 手写
+ * `BEGIN` / `COMMIT` / `ROLLBACK` 是**危险的**——每条 `execute` 可能落到池里不同连接，
+ * BEGIN 与 COMMIT 不在同一连接上，事务根本不生效，更严重的是会有一方连接长期持写锁，
+ * 导致别处查询死锁 / "database is locked"。所以这里**不提供也不允许**手写跨 execute 事务。
+ *
+ * 需要"一批写要么全成要么全不成"时，改用下列安全写法（任选）：
+ *   1. 单条 SQL 完成（UPSERT / INSERT OR REPLACE / 一条带多值的 INSERT）；
+ *   2. 幂等重写：先 DELETE 再单批 INSERT（billing.replaceSourceEntries 即此模式，已验证）；
+ *   3. 拆成独立小写，单条失败可重试（withBusyRetry 已兜底瞬时锁冲突）。
+ *
+ * 不要在 db/ 下新增任何 "BEGIN" / "COMMIT" / "ROLLBACK" / "TRANSACTION" 字符串字面量。
+ * 需要真正事务时再单独评估（Rust 侧单连接事务），不要在前端拼。
+ */
+
+
 let _dbPromise: Promise<DbHandle> | null = null;
 
 const BUSY_ERROR_RE = /database is locked|database table is locked|SQLITE_BUSY/i;

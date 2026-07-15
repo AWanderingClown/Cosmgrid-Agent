@@ -1,6 +1,7 @@
 import type { FsAdapter } from "@/lib/llm/tools/fs-adapter";
-import type { WorkflowSnapshot } from "./types";
+import type { WorkflowPhase, WorkflowSnapshot } from "./types";
 import { formatPlanChecklistStatus, parsePlanChecklist } from "./plan-checklist";
+import { guidanceForPhase } from "./phase-guidance";
 
 const MAX_PLAN_CHARS = 12_000;
 
@@ -10,6 +11,13 @@ const PLAN_REFERENCE_RE =
 function currentPhase(snapshot: WorkflowSnapshot): string {
   const node = snapshot.nodes.find((n) => n.id === snapshot.currentNodeId);
   return node?.phase ?? snapshot.status;
+}
+
+/** 强类型版本，只在能明确对应到 WorkflowPhase 时返回值，供 guidanceForPhase 消费——
+ *  跟 currentPhase() 的展示字符串（可能落到 snapshot.status，不是合法 WorkflowPhase）分开，
+ *  避免把非法值传进阶段行为纪律的 switch。 */
+function currentNodePhase(snapshot: WorkflowSnapshot): WorkflowPhase | undefined {
+  return snapshot.nodes.find((n) => n.id === snapshot.currentNodeId)?.phase;
 }
 
 function joinPath(dir: string, name: string): string {
@@ -93,10 +101,11 @@ export function buildWorkflowContextPreamble(args: {
     );
   }
 
-  if (phase === "execute") {
-    parts.push(
-      "\n执行阶段要求：先对齐方案来源，再改代码；阶段检查只是执行过程的一部分，不要每个阶段都停下来等用户确认。执行完成后继续验证，除非遇到权限、安全、范围或构建测试阻塞。",
-    );
+  // 2026-07-14 步骤2：阶段行为纪律统一走 guidanceForPhase（原 project_audit/plan_execution/
+  // verification_closure 三个"伪 skill"的 systemGuidance 迁移到此，见 phase-guidance.ts 头部注释）。
+  const guidance = guidanceForPhase(currentNodePhase(snapshot));
+  if (guidance.length > 0) {
+    parts.push(`\n当前阶段行为要求：\n${guidance.map((g) => `- ${g}`).join("\n")}`);
   }
 
   return parts.join("\n");

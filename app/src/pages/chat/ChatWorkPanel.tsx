@@ -30,6 +30,7 @@ function switchReasonKey(reason: ChatMessage["switchReason"]): string {
   if (!reason) return "unknown";
   if (reason.kind === "cooldown") return "cooldown";
   if (reason.kind === "recovery") return "recovery";
+  if (reason.kind === "quota") return "quota";
   return reason.category;
 }
 

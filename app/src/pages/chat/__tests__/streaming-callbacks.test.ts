@@ -137,4 +137,54 @@ describe("createStreamingTurnCallbacks", () => {
       switchReason: { kind: "error", category: "timeout" },
     });
   });
+
+  // 2026-07-15 review 修复回归测试：原来只有 onDelta 检查了 aborted，其余六个回调完全
+  // 没查，用户停止/切会话后如果上一轮 streamWithFallback 仍在跑，这些回调会继续往
+  // setSwitchNotice/setLastUsage 这类跨会话共享的顶层 state 里写数据——用户已经切到别
+  // 的会话，界面却冒出上一轮"已切换到 XXX"提示条，或"上次调用消耗"显示的是别的会话
+  // 残留的调用结果。这里锁住：signal 已 abort 后，六个回调全都不应该再写任何全局状态。
+  it("controller 已 abort 后，onSwitched/onRecovered/onStatus/onInvocationAudit/onResolvedModel/onUsage 全部不应该再写任何全局状态", () => {
+    const controller = new AbortController();
+    const state = createStreamingTurnState("model-a");
+    const harness = createMessageHarness();
+    const notices: string[] = [];
+    let lastUsageCalls = 0;
+    const callbacks = createStreamingTurnCallbacks({
+      assistantId: "assistant-1",
+      controller,
+      state,
+      t,
+      setMessages: harness.setMessages,
+      setSwitchNotice: (notice) => notices.push(notice ?? ""),
+      setLastUsage: () => {
+        lastUsageCalls++;
+      },
+    });
+
+    controller.abort();
+    const messagesBefore = harness.messages[0];
+
+    callbacks.onSwitched?.(endpoint("model-a"), endpoint("model-b", "kimi-k2", "Kimi K2"), { kind: "cooldown" });
+    callbacks.onRecovered?.("context_replay");
+    callbacks.onStatus?.("正在重放上下文");
+    callbacks.onResolvedModel?.("kimi-k2-actual", endpoint("model-b"));
+    callbacks.onInvocationAudit?.({
+      modelId: "model-b",
+      modelName: "kimi-k2",
+      providerType: "openai",
+      providerKind: "api",
+      status: "success",
+      startedAt: "2026-07-07T00:00:00.000Z",
+      endedAt: "2026-07-07T00:00:01.000Z",
+      latencyMs: 1000,
+      finishReason: "stop",
+    });
+    callbacks.onUsage?.({ inputTokens: 10, outputTokens: 20, toolCallCount: 2 }, endpoint("model-b", "kimi-k2", "Kimi K2"), "stop", false);
+
+    expect(notices).toEqual([]);
+    expect(lastUsageCalls).toBe(0);
+    expect(harness.messages[0]).toEqual(messagesBefore);
+    expect(state.lastUsage).toBeUndefined();
+    expect(state.invocationAudits).toEqual([]);
+  });
 });

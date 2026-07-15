@@ -320,6 +320,43 @@ pub async fn spawn_rpc_process(
     Ok(())
 }
 
+/// 2026-07-15 review 修复：单次 `write_rpc_stdin` 的超时上限。LSP/MCP 子进程写请求
+/// 正常情况下毫秒级完成；给够余量应对子进程短暂繁忙，但不能没有上限。
+const RPC_STDIN_WRITE_TIMEOUT_SECS: u64 = 10;
+
+/// `kill_rpc_process` 命令和 `write_rpc_stdin` 超时兜底共用的"移出表 + 杀进程树"逻辑，
+/// 避免两处实现分叉。
+fn kill_rpc_session(children: &RpcChildren, session_id: &str) -> Result<bool, String> {
+    let child = children
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .remove(session_id);
+    match child {
+        Some(child) => {
+            kill_process_tree(child.pid).map_err(|e| e.to_string())?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+/// 2026-07-15 review 修复：原实现 `writer.write_all(...).await` 没有任何超时包裹——
+/// 如果子进程（LSP server 索引大项目时 CPU 繁忙、或已经死锁但还没退出）暂停读取 stdin，
+/// OS 管道缓冲区写满后 `write_all` 会永久 pending，且此时它持有 `stdin` 这把 session 内
+/// 唯一的 `tokio::sync::Mutex` 锁——后续这个 session 的所有 `write_rpc_stdin` 调用都会在
+/// `stdin.lock().await` 上排队，永久收不到响应，直到进程被外部 kill。
+///
+/// 把「拿锁 + 写 + flush」整段包进 `tokio::time::timeout`：超时后 `timeout()` 会 drop 掉
+/// 这个 future（连带释放持有的 `MutexGuard`），后续调用不会被这次卡死永久拖住。
+///
+/// 复检发现的遗漏（2026-07-15 二次修复）：`write_all` 不是原子操作，超时完全可能发生在
+/// payload 已经部分写进 OS 管道之后——这个 session 的 stdin 流从这一刻起处于未知的半条
+/// 消息状态，如果只返回错误、不处理这个 session，下一次 `write_rpc_stdin` 会把新 payload
+/// 直接接在这段脏数据后面，让子进程收到的整条 stdin 流永久错位（LSP 的 Content-Length
+/// framing 下会连累后续所有消息解析失败）。所以超时后不能只报错，必须主动杀掉这个 session
+/// （复用 `kill_rpc_session`，跟 `kill_rpc_process` 命令共用逻辑），让它不能再被写——调用方
+/// 后续对同一 session_id 的调用会快速拿到"RPC session not found"而不是继续复用一条脏流。
 #[tauri::command]
 pub async fn write_rpc_stdin(
     children: State<'_, RpcChildren>,
@@ -332,13 +369,30 @@ pub async fn write_rpc_stdin(
             .map(|child| Arc::clone(&child.stdin))
             .ok_or_else(|| format!("RPC session not found: {session_id}"))?
     };
-    let mut writer = stdin.lock().await;
-    writer
-        .write_all(payload.as_bytes())
-        .await
-        .map_err(|e| e.to_string())?;
-    writer.flush().await.map_err(|e| e.to_string())?;
-    Ok(())
+    let write_fut = async {
+        let mut writer = stdin.lock().await;
+        writer
+            .write_all(payload.as_bytes())
+            .await
+            .map_err(|e| e.to_string())?;
+        writer.flush().await.map_err(|e| e.to_string())
+    };
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(RPC_STDIN_WRITE_TIMEOUT_SECS),
+        write_fut,
+    )
+    .await;
+    match result {
+        Ok(inner) => inner,
+        Err(_) => {
+            // 超时：stdin 流可能已经写脏，这个 session 不能再被信任继续用，直接杀掉。
+            // kill 本身失败（比如进程已经自己退出）不影响把错误报给调用方。
+            let _ = kill_rpc_session(&children, &session_id);
+            Err(format!(
+                "write_rpc_stdin timed out after {RPC_STDIN_WRITE_TIMEOUT_SECS}s (session {session_id})：子进程可能已卡死，stdin 流可能已写脏，session 已自动终止，请重建会话"
+            ))
+        }
+    }
 }
 
 #[tauri::command]
@@ -346,18 +400,7 @@ pub fn kill_rpc_process(
     children: State<'_, RpcChildren>,
     session_id: String,
 ) -> Result<bool, String> {
-    let child = children
-        .0
-        .lock()
-        .map_err(|e| e.to_string())?
-        .remove(&session_id);
-    match child {
-        Some(child) => {
-            kill_process_tree(child.pid).map_err(|e| e.to_string())?;
-            Ok(true)
-        }
-        None => Ok(false),
-    }
+    kill_rpc_session(&children, &session_id)
 }
 
 #[cfg(test)]
