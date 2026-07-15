@@ -294,6 +294,11 @@
           "decision": "Verification Decision"
         }
       },
+      "agentJobs": {
+        "title": "Background Tasks",
+        "cancel": "Cancel",
+        "retry": "Retry"
+      },
       "eval": {
         "title": "Eval Harness",
         "sections": {

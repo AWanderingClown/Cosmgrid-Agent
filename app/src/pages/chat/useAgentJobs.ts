@@ -43,18 +43,21 @@ export function useAgentJobs(workflowRunId: string | null) {
     };
   }, [workflowRunId, fetchJobs]);
 
-  // 轮询 effect：有活跃任务时每 2s 刷新
+  const hasActiveJobs = jobs.some((j) => j.status === "running" || j.status === "queued");
+
+  // 轮询 effect：有活跃任务时每 2s 刷新。
+  // 依赖 hasActiveJobs 布尔（而非整个 jobs 数组）——否则每次 2s 轮询 setJobs 都会产生新
+  // 数组引用、触发 effect 重跑，导致 interval 被反复销毁重建、耗时抖动。改成只在
+  // "有无活跃任务"这个布尔翻转时才重建定时器。
   useEffect(() => {
-    if (!workflowRunId) return;
-    const hasActive = jobs.some((j) => j.status === "running" || j.status === "queued");
-    if (!hasActive) return;
+    if (!workflowRunId || !hasActiveJobs) return;
 
     const intervalId = setInterval(() => {
       void fetchJobs(workflowRunId);
     }, POLL_INTERVAL_MS);
 
     return () => clearInterval(intervalId);
-  }, [workflowRunId, jobs, fetchJobs]);
+  }, [workflowRunId, hasActiveJobs, fetchJobs]);
 
   // 取消任务（乐观更新）
   const cancelJob = useCallback(async (jobId: string, reason: string) => {

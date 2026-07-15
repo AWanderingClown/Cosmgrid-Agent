@@ -294,6 +294,11 @@
           "decision": "验收决定"
         }
       },
+      "agentJobs": {
+        "title": "后台任务",
+        "cancel": "取消",
+        "retry": "重试"
+      },
       "eval": {
         "title": "Eval Harness",
         "sections": {

@@ -14,5 +14,6 @@
       "expected": { "path": "docs/plan.md", "minBytes": 10 }
     }
   ],
-  "tags": ["smoke", "s1"]
+  "tags": ["smoke", "s1"],
+  "createdAt": "2026-07-15T00:00:00.000Z"
 }
