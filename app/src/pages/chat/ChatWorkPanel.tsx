@@ -7,6 +7,7 @@ import { ChainNodeGraph } from "@/components/work-panel/ChainNodeGraph";
 import type { ChainNodeView } from "@/components/work-panel/derive-chain-node-graph";
 import { WorkflowDiagnostics } from "@/components/work-panel/WorkflowDiagnostics";
 import { EvidencePanel } from "@/components/work-panel/EvidencePanel";
+import { AgentJobPanel } from "@/components/work-panel/AgentJobPanel";
 import { EvalPanel } from "@/components/work-panel/EvalPanel";
 import { IntentDiagnostics } from "@/components/work-panel/IntentDiagnostics";
 import { WorkArtifacts } from "@/components/work-panel/WorkArtifacts";
@@ -192,10 +193,18 @@ export function ChatWorkPanel({
             onMainModelChange={onMainModelChange}
             onNodeModelChange={onNodeModelChange}
           />
+          {/* 证据链面板：对所有用户开放。
+              普通用户（developerDiagnosticsEnabled=false）看到折叠精简版——
+              只显示 humanSummary 一行结论（通过/失败/证据不足）；
+              开发者看到展开的全量声明↔证据↔冲突↔验收决定。
+              组件内部已用 devMode prop 做分级，这里只负责不要把它锁进 dev 块。 */}
+          <EvidencePanel workflowSnapshot={workflowSnapshot} devMode={developerDiagnosticsEnabled} />
+          {/* 后台任务面板：显示当前 workflow 的 Agent Job 状态（运行/完成/失败/取消），
+              支持取消和重试。没有 job 时组件自身不渲染，保持面板轻量。 */}
+          <AgentJobPanel workflowRunId={workflowSnapshot?.runId ?? null} />
           {developerDiagnosticsEnabled && (
             <>
               <WorkflowDiagnostics workflowEvents={workflowEvents} workflowSnapshot={workflowSnapshot} toolCalls={toolCalls} messages={messages} />
-              <EvidencePanel workflowSnapshot={workflowSnapshot} devMode={true} />
               <EvalPanel runs={evalRuns} results={evalResults} devMode={true} />
               <IntentDiagnostics />
             </>

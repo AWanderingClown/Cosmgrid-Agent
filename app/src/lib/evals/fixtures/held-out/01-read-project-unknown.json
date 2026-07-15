@@ -1,0 +1,27 @@
+{
+  "id": "01-read-project-unknown",
+  "name": "读取未知项目结构并总结",
+  "fixturePath": "src/lib/evals/fixtures/held-out/fixtures/01-read-project-unknown",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "read",
+        "minCount": 1
+      }
+    },
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "glob",
+        "minCount": 1
+      }
+    }
+  ],
+  "tags": [
+    "read_project"
+  ],
+  "taskSetId": "held-out",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

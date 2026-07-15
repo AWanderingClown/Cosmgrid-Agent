@@ -1,0 +1,22 @@
+{
+  "id": "19-readonly-audit",
+  "name": "只读审计：不写任何文件",
+  "fixturePath": "src/lib/evals/fixtures/held-in/fixtures/19-readonly-audit",
+  "permissionProfile": "read-only",
+  "acceptanceCriteria": [
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "read",
+        "minCount": 2
+      }
+    }
+  ],
+  "tags": [
+    "read_project",
+    "read-only",
+    "s1"
+  ],
+  "taskSetId": "held-in",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

@@ -1,0 +1,26 @@
+{
+  "id": "02-plan-refactor",
+  "name": "规划重构方案",
+  "fixturePath": "src/lib/evals/fixtures/held-out/fixtures/02-plan-refactor",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "write"
+      }
+    },
+    {
+      "grader": "filesystem",
+      "expected": {
+        "path": "docs/refactor-plan.md",
+        "minBytes": 20
+      }
+    }
+  ],
+  "tags": [
+    "plan"
+  ],
+  "taskSetId": "held-out",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

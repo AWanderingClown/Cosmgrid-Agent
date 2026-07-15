@@ -1,0 +1,28 @@
+{
+  "id": "10-readonly-security-audit",
+  "name": "只读安全审计",
+  "fixturePath": "src/lib/evals/fixtures/held-out/fixtures/10-readonly-security-audit",
+  "permissionProfile": "read-only",
+  "acceptanceCriteria": [
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "grep",
+        "minCount": 2
+      }
+    },
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "read",
+        "minCount": 1
+      }
+    }
+  ],
+  "tags": [
+    "read_project",
+    "read-only"
+  ],
+  "taskSetId": "held-out",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

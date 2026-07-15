@@ -1,0 +1,21 @@
+{
+  "id": "11-execute-bash-command",
+  "name": "执行：运行 bash 命令",
+  "fixturePath": "src/lib/evals/fixtures/held-in/fixtures/11-execute-bash-command",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "command-exit-code",
+      "expected": {
+        "commandPattern": "pnpm.*build",
+        "expectSuccess": true
+      }
+    }
+  ],
+  "tags": [
+    "execute",
+    "s3"
+  ],
+  "taskSetId": "held-in",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

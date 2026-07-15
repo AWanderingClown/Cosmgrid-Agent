@@ -1,0 +1,21 @@
+{
+  "id": "17-verify-evidence-fail",
+  "name": "验证：证据链失败（模型声称完成但无证据）",
+  "fixturePath": "src/lib/evals/fixtures/held-in/fixtures/17-verify-evidence-fail",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "evidence-complete",
+      "expected": {
+        "expectedStatus": "fails"
+      }
+    }
+  ],
+  "tags": [
+    "verify",
+    "negative",
+    "s6"
+  ],
+  "taskSetId": "held-in",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

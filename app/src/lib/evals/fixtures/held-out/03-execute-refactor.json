@@ -1,0 +1,27 @@
+{
+  "id": "03-execute-refactor",
+  "name": "执行重构",
+  "fixturePath": "src/lib/evals/fixtures/held-out/fixtures/03-execute-refactor",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "edit",
+        "minCount": 2
+      }
+    },
+    {
+      "grader": "command-exit-code",
+      "expected": {
+        "commandPattern": "tsc.*--noEmit",
+        "expectSuccess": true
+      }
+    }
+  ],
+  "tags": [
+    "execute"
+  ],
+  "taskSetId": "held-out",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

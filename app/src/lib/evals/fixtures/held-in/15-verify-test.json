@@ -1,0 +1,27 @@
+{
+  "id": "15-verify-test",
+  "name": "验证：测试全部通过",
+  "fixturePath": "src/lib/evals/fixtures/held-in/fixtures/15-verify-test",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "command-exit-code",
+      "expected": {
+        "commandPattern": "vitest.*run",
+        "expectSuccess": true
+      }
+    },
+    {
+      "grader": "evidence-complete",
+      "expected": {
+        "expectedStatus": "passes"
+      }
+    }
+  ],
+  "tags": [
+    "verify",
+    "s6"
+  ],
+  "taskSetId": "held-in",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

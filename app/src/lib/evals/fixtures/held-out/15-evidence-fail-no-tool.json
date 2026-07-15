@@ -1,0 +1,20 @@
+{
+  "id": "15-evidence-fail-no-tool",
+  "name": "模型空话无工具调用（应判失败）",
+  "fixturePath": "src/lib/evals/fixtures/held-out/fixtures/15-evidence-fail-no-tool",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "evidence-complete",
+      "expected": {
+        "expectedStatus": "fails"
+      }
+    }
+  ],
+  "tags": [
+    "verify",
+    "negative"
+  ],
+  "taskSetId": "held-out",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

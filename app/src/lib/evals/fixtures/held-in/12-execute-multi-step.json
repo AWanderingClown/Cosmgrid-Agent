@@ -1,0 +1,28 @@
+{
+  "id": "12-execute-multi-step",
+  "name": "执行：多步骤（写文件 + 跑命令）",
+  "fixturePath": "src/lib/evals/fixtures/held-in/fixtures/12-execute-multi-step",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "write",
+        "minCount": 1
+      }
+    },
+    {
+      "grader": "command-exit-code",
+      "expected": {
+        "commandPattern": "pnpm.*test",
+        "expectSuccess": true
+      }
+    }
+  ],
+  "tags": [
+    "execute",
+    "s3"
+  ],
+  "taskSetId": "held-in",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

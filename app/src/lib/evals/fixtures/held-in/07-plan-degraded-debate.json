@@ -1,0 +1,21 @@
+{
+  "id": "07-plan-degraded-debate",
+  "name": "博弈失败后降级执行方案",
+  "fixturePath": "src/lib/evals/fixtures/held-in/fixtures/07-plan-degraded-debate",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "workflow-artifact",
+      "expected": {
+        "expectedKind": "degraded_debate"
+      }
+    }
+  ],
+  "tags": [
+    "plan",
+    "debate",
+    "s2"
+  ],
+  "taskSetId": "held-in",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

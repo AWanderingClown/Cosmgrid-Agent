@@ -1,0 +1,19 @@
+{
+  "id": "09-verify-bugfix",
+  "name": "验证 bug 修复（测试通过）",
+  "fixturePath": "src/lib/evals/fixtures/held-out/fixtures/09-verify-bugfix",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "evidence-complete",
+      "expected": {
+        "expectedStatus": "passes"
+      }
+    }
+  ],
+  "tags": [
+    "verify"
+  ],
+  "taskSetId": "held-out",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

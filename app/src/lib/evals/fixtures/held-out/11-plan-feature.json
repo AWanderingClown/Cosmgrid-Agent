@@ -1,0 +1,19 @@
+{
+  "id": "11-plan-feature",
+  "name": "规划新功能方案",
+  "fixturePath": "src/lib/evals/fixtures/held-out/fixtures/11-plan-feature",
+  "permissionProfile": "no-write",
+  "acceptanceCriteria": [
+    {
+      "grader": "workflow-artifact",
+      "expected": {
+        "expectedKind": "message"
+      }
+    }
+  ],
+  "tags": [
+    "plan"
+  ],
+  "taskSetId": "held-out",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

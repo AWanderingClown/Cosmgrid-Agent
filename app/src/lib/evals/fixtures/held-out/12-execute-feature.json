@@ -1,0 +1,27 @@
+{
+  "id": "12-execute-feature",
+  "name": "执行新功能开发",
+  "fixturePath": "src/lib/evals/fixtures/held-out/fixtures/12-execute-feature",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "write",
+        "minCount": 1
+      }
+    },
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "edit",
+        "minCount": 1
+      }
+    }
+  ],
+  "tags": [
+    "execute"
+  ],
+  "taskSetId": "held-out",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

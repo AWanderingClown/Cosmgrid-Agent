@@ -1,0 +1,28 @@
+{
+  "id": "13-execute-full-trust",
+  "name": "执行：full-trust 模式跳过确认",
+  "fixturePath": "src/lib/evals/fixtures/held-in/fixtures/13-execute-full-trust",
+  "permissionProfile": "full-trust",
+  "acceptanceCriteria": [
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "write",
+        "minCount": 1
+      }
+    },
+    {
+      "grader": "filesystem",
+      "expected": {
+        "path": "output/result.txt",
+        "minBytes": 5
+      }
+    }
+  ],
+  "tags": [
+    "execute",
+    "s3"
+  ],
+  "taskSetId": "held-in",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

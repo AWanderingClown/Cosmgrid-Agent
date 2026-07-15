@@ -1,0 +1,27 @@
+{
+  "id": "06-execute-migration",
+  "name": "执行依赖迁移",
+  "fixturePath": "src/lib/evals/fixtures/held-out/fixtures/06-execute-migration",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "bash",
+        "minCount": 1
+      }
+    },
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "edit",
+        "minCount": 1
+      }
+    }
+  ],
+  "tags": [
+    "execute"
+  ],
+  "taskSetId": "held-out",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

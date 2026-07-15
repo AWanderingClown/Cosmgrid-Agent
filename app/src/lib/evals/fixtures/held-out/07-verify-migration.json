@@ -1,0 +1,26 @@
+{
+  "id": "07-verify-migration",
+  "name": "验证迁移后构建可用",
+  "fixturePath": "src/lib/evals/fixtures/held-out/fixtures/07-verify-migration",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "command-exit-code",
+      "expected": {
+        "commandPattern": "pnpm.*build",
+        "expectSuccess": true
+      }
+    },
+    {
+      "grader": "evidence-complete",
+      "expected": {
+        "expectedStatus": "passes"
+      }
+    }
+  ],
+  "tags": [
+    "verify"
+  ],
+  "taskSetId": "held-out",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

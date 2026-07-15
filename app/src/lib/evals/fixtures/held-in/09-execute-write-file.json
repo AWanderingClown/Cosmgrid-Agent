@@ -1,0 +1,28 @@
+{
+  "id": "09-execute-write-file",
+  "name": "执行：创建新文件",
+  "fixturePath": "src/lib/evals/fixtures/held-in/fixtures/09-execute-write-file",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "write",
+        "minCount": 1
+      }
+    },
+    {
+      "grader": "filesystem",
+      "expected": {
+        "path": "src/new-module.ts",
+        "minBytes": 10
+      }
+    }
+  ],
+  "tags": [
+    "execute",
+    "s3"
+  ],
+  "taskSetId": "held-in",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

@@ -1,0 +1,20 @@
+{
+  "id": "08-plan-message-source",
+  "name": "方案来源为对话消息（无文件落盘）",
+  "fixturePath": "src/lib/evals/fixtures/held-in/fixtures/08-plan-message-source",
+  "permissionProfile": "no-write",
+  "acceptanceCriteria": [
+    {
+      "grader": "workflow-artifact",
+      "expected": {
+        "expectedKind": "message"
+      }
+    }
+  ],
+  "tags": [
+    "plan",
+    "s1"
+  ],
+  "taskSetId": "held-in",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

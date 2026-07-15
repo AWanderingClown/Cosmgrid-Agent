@@ -1,0 +1,21 @@
+{
+  "id": "18-verify-evidence-inconclusive",
+  "name": "验证：证据不足（无法判定）",
+  "fixturePath": "src/lib/evals/fixtures/held-in/fixtures/18-verify-evidence-inconclusive",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "evidence-complete",
+      "expected": {
+        "expectedStatus": "inconclusive"
+      }
+    }
+  ],
+  "tags": [
+    "verify",
+    "negative",
+    "s6"
+  ],
+  "taskSetId": "held-in",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

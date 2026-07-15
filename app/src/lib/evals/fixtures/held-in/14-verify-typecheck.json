@@ -1,0 +1,27 @@
+{
+  "id": "14-verify-typecheck",
+  "name": "验证：类型检查通过",
+  "fixturePath": "src/lib/evals/fixtures/held-in/fixtures/14-verify-typecheck",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "command-exit-code",
+      "expected": {
+        "commandPattern": "tsc.*--noEmit",
+        "expectSuccess": true
+      }
+    },
+    {
+      "grader": "evidence-complete",
+      "expected": {
+        "expectedStatus": "passes"
+      }
+    }
+  ],
+  "tags": [
+    "verify",
+    "s6"
+  ],
+  "taskSetId": "held-in",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

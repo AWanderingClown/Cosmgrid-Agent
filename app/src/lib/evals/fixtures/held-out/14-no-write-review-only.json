@@ -1,0 +1,21 @@
+{
+  "id": "14-no-write-review-only",
+  "name": "只评审不写文件",
+  "fixturePath": "src/lib/evals/fixtures/held-out/fixtures/14-no-write-review-only",
+  "permissionProfile": "no-write",
+  "acceptanceCriteria": [
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "read",
+        "minCount": 1
+      }
+    }
+  ],
+  "tags": [
+    "read_project",
+    "no-write"
+  ],
+  "taskSetId": "held-out",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

@@ -1,0 +1,33 @@
+{
+  "id": "13-verify-feature",
+  "name": "验证新功能（类型+测试+构建）",
+  "fixturePath": "src/lib/evals/fixtures/held-out/fixtures/13-verify-feature",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "command-exit-code",
+      "expected": {
+        "commandPattern": "tsc.*--noEmit",
+        "expectSuccess": true
+      }
+    },
+    {
+      "grader": "command-exit-code",
+      "expected": {
+        "commandPattern": "vitest.*run",
+        "expectSuccess": true
+      }
+    },
+    {
+      "grader": "evidence-complete",
+      "expected": {
+        "expectedStatus": "passes"
+      }
+    }
+  ],
+  "tags": [
+    "verify"
+  ],
+  "taskSetId": "held-out",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "10-execute-edit-file",
+  "name": "执行：编辑已有文件",
+  "fixturePath": "src/lib/evals/fixtures/held-in/fixtures/10-execute-edit-file",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "tool-execution",
+      "expected": {
+        "toolName": "edit",
+        "minCount": 1
+      }
+    }
+  ],
+  "tags": [
+    "execute",
+    "s3"
+  ],
+  "taskSetId": "held-in",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

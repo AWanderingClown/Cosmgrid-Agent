@@ -1,0 +1,19 @@
+{
+  "id": "05-plan-migration",
+  "name": "规划依赖迁移方案",
+  "fixturePath": "src/lib/evals/fixtures/held-out/fixtures/05-plan-migration",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "workflow-artifact",
+      "expected": {
+        "expectedKind": "file"
+      }
+    }
+  ],
+  "tags": [
+    "plan"
+  ],
+  "taskSetId": "held-out",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}

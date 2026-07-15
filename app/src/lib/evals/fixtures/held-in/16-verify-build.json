@@ -1,0 +1,27 @@
+{
+  "id": "16-verify-build",
+  "name": "验证：构建产物可用",
+  "fixturePath": "src/lib/evals/fixtures/held-in/fixtures/16-verify-build",
+  "permissionProfile": "default",
+  "acceptanceCriteria": [
+    {
+      "grader": "command-exit-code",
+      "expected": {
+        "commandPattern": "tauri.*build",
+        "expectSuccess": true
+      }
+    },
+    {
+      "grader": "evidence-complete",
+      "expected": {
+        "expectedStatus": "passes"
+      }
+    }
+  ],
+  "tags": [
+    "verify",
+    "s6"
+  ],
+  "taskSetId": "held-in",
+  "createdAt": "2026-07-15T00:00:00.000Z"
+}
