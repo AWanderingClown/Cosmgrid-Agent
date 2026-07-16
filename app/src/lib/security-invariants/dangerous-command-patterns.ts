@@ -25,6 +25,10 @@ export const DANGEROUS_COMMAND_PATTERNS: ReadonlyArray<DangerousCommandPattern> 
   { re: />\s*\/dev\/sd|>\s*\/dev\/disk/i, reason: "写裸设备" },
   { re: /\bcurl\b[^|]*\|\s*(sh|bash|zsh)\b/i, reason: "curl 管道执行远程脚本" },
   { re: /\bwget\b[^|]*\|\s*(sh|bash|zsh)\b/i, reason: "wget 管道执行远程脚本" },
+  // 2026-07-16：全 parity 档把 bash/sh/curl/wget 放进白名单后，任何"输出/下载管道给解释器执行"
+  // 都是经典 RCE 向量（curl x | python、echo b64 | base64 -d | bash、git log | sh 等）。直接运行
+  // 脚本（bash x.sh / python x.py，无管道）不受影响，仍放行。
+  { re: /\|\s*(sh|bash|zsh|python3?|node|ruby|perl|php|deno|bun)\b/i, reason: "管道给解释器执行（潜在远程/动态代码执行）" },
   { re: /\beval\b/i, reason: "eval 动态执行" },
   { re: /\bshutdown\b|\breboot\b|\bhalt\b/i, reason: "关机/重启" },
   { re: /\bgit\s+push\b/i, reason: "git push 推远端（需人工，禁止自动）" },

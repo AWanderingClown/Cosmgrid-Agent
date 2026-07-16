@@ -83,10 +83,19 @@ describe("policy/command-allowlist", () => {
       expect(BUILTIN_ALLOWED_PROGRAMS.has("pip")).toBe(true);
     });
 
-    it("内置不含危险程序（黑名单仍走 security-invariants 通道，独立保证）", () => {
+    it("内置不含提权 / 破坏性 / 远程访问程序（黑名单 + 默认拒绝独立保证）", () => {
       expect(BUILTIN_ALLOWED_PROGRAMS.has("rm")).toBe(false);
       expect(BUILTIN_ALLOWED_PROGRAMS.has("sudo")).toBe(false);
-      expect(BUILTIN_ALLOWED_PROGRAMS.has("curl")).toBe(false);
+      // 远程访问 / 进程控制 / 系统守护类仍留在白名单外（非开发主循环，需要时走 override）。
+      expect(BUILTIN_ALLOWED_PROGRAMS.has("ssh")).toBe(false);
+      expect(BUILTIN_ALLOWED_PROGRAMS.has("systemctl")).toBe(false);
+    });
+
+    // 2026-07-16 全 parity 档：开发工具链 + shell + 网络抓取进白名单，危险用法仍由黑名单挡。
+    it("内置含全 parity 档补的开发工具链 / shell / 网络抓取", () => {
+      for (const p of ["make", "docker", "gcc", "java", "cargo", "go", "bash", "sh", "curl", "wget", "pytest"]) {
+        expect(BUILTIN_ALLOWED_PROGRAMS.has(p)).toBe(true);
+      }
     });
   });
 

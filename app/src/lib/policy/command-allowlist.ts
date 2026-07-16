@@ -22,8 +22,10 @@ import { scopeToKey } from "./scope-key";
  * 内置允许程序（v3.1：补 pip3）。
  *
  * 设计原则（与 command-safety.ts 顶部注释 §1 一致）：
- *   - 只放开发常用 + 只读命令；不放网络/提权/破坏性（黑名单管）。
- *   - 危险用法（rm -rf / sudo / curl|sh 等）由 DANGEROUS_PATTERNS 拦截，与白名单互补。
+ *   - 放开发常用工具链 + shell 解释器 + 网络抓取（2026-07-16 全 parity 档）；提权/破坏性/
+ *     远程访问（sudo / rm -rf / ssh / systemctl 等）仍由黑名单或"默认拒绝"挡。
+ *   - 危险用法（rm -rf / sudo / chmod 777 / 管道给解释器 / git push 等）由 DANGEROUS_PATTERNS
+ *     拦截，与白名单互补——白名单放程序名，黑名单挡危险用法，两者正交。
  *   - 新增白名单条目（永远内置侧）必须经过 PR 评审 + harness eval，禁止偷偷扩列。
  *
  * 引擎化后这条 Set 是 policyDefinition.builtin；用户/项目可通过 DB 追加但不删除。
@@ -39,6 +41,19 @@ export const BUILTIN_ALLOWED_PROGRAMS: ReadonlySet<string> = Object.freeze(
     "sort", "uniq", "cut", "tr", "column", "comm", "paste", "seq", "nl",
     "diff", "cmp", "file", "stat", "tree", "du", "basename", "dirname", "realpath", "readlink",
     "sed", "awk", "mkdir", "touch", "cp", "mv", "jq",
+    // 2026-07-16 全 parity 档：补齐主流开发工具链 + shell 解释器 + 网络抓取，
+    // 让 AI 能像 Claude Code 一样跑任意语言项目的构建 / 测试 / 打包 / 依赖拉取。
+    // 危险用法（rm -rf / sudo / chmod 777 / 管道给解释器 / git push / publish 等）仍由
+    // DANGEROUS_COMMAND_PATTERNS 黑名单硬挡，与白名单互补，安全底线不放宽。
+    "make", "cmake", "ninja",
+    "gcc", "g++", "cc", "clang", "clang++", "rustc",
+    "java", "javac", "mvn", "gradle", "kotlin", "kotlinc",
+    "ruby", "gem", "bundle", "php", "composer", "bun", "deno", "dotnet", "swift", "perl",
+    "docker", "docker-compose", "podman", "kubectl",
+    "pytest", "ruff", "mypy", "black", "flake8", "poetry", "uv", "uvx", "pyright",
+    "bash", "sh", "zsh",
+    "curl", "wget",
+    "tar", "zip", "unzip", "gzip", "gunzip",
   ]),
 );
 
@@ -55,7 +70,7 @@ const allowedProgramsOverrideSchema = z.array(z.string().min(1));
 export const commandAllowlistPolicy: PolicyDefinition<Set<string>> = {
   key: "command.allowed_programs",
   builtin: new Set(BUILTIN_ALLOWED_PROGRAMS),
-  builtinVersion: "builtin-2026-07-12",
+  builtinVersion: "builtin-2026-07-16",
   mergeKind: "union",
   scopesAllowed: ["project", "global"], // distribution scope 是发版内置，用户切不到
 
