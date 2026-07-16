@@ -36,6 +36,44 @@ export interface ModelAttemptResult {
 }
 
 /**
+ * 把 ChatMsg[] 里的多条 system 消息抽出来合并成一个字符串，剩下的对话消息（user/assistant）
+ * 单独返回，供 API 路径用 AI SDK 的 `system` 参数发送。
+ *
+ * 为什么（2026-07-16 工程化根因修复）：Vercel AI SDK 官方明确警告"不要把 system 消息塞进
+ * messages 数组，要用 system 参数"（既有 prompt injection 安全风险，也是非标准用法）。
+ * 我们上游 buildChatPromptMessages 一直产出 10+ 条并排的 {role:"system"} 塞进 messages——
+ * dump 真实请求体证实发给模型的是 system×N → user 的畸形序列。Claude/GPT 容错强能扛，但
+ * MiniMax-M3 等国内 reasoning 模型的 chat template 渲染连续多条 system 时会退化，第一个
+ * token 就吐轮次控制特殊 token（如 <|user_mask|>）然后 stop，连工具都来不及调用。
+ *
+ * 隔离性：只在"发给模型前的最后一步"做这个打包转换。上游的 prompt 组装、上下文压缩、
+ * 记忆注入、工具挂载、消息持久化全部不受影响——它们照旧产出/处理含 system 的 ChatMsg[]，
+ * 这里只把最终要发出去的 system 从 messages 数组挪到标准的 system 参数。CLI 路径不用这个
+ * （claude/codex 自带协议，见下方 isCliProviderType 分支）。
+ */
+export function splitSystemFromMessages(messages: ChatMsg[]): {
+  system: string | undefined;
+  rest: ModelMessage[];
+} {
+  const systemTexts: string[] = [];
+  const rest: ChatMsg[] = [];
+  for (const m of messages) {
+    if (m.role === "system") {
+      // system 的 content 正常是纯字符串；防御性处理数组型 content（跟 CLI 路径同款折叠）。
+      systemTexts.push(
+        typeof m.content === "string"
+          ? m.content
+          : m.content.filter((p) => p.type === "text").map((p) => ("text" in p ? p.text : "")).join(""),
+      );
+    } else {
+      rest.push(m);
+    }
+  }
+  const system = systemTexts.length > 0 ? systemTexts.join("\n\n") : undefined;
+  return { system, rest: rest as unknown as ModelMessage[] };
+}
+
+/**
  * 对着一个 ModelEndpoint 跑一次调用（CLI 或 API，按 target.providerType 分流）。
  * - CLI 路径：spawn 本机 claude/codex，遇到可恢复截断会原生 resume 一次
  * - API 路径：Vercel AI SDK streamText，多步 agentic 工具调用 + doom-loop 检测
@@ -215,9 +253,14 @@ export async function runModelAttempt(
   let stepCount = 0;
 
   try {
+    // 2026-07-16 工程化根因修复：把多条 system 消息从 messages 数组抽出、合并成标准的
+    // system 参数（见 splitSystemFromMessages 注释）。修复 MiniMax-M3 等模型收到 system×N
+    // 畸形序列时退化吐 <|user_mask|> 特殊 token、连工具都调不了的问题。
+    const { system, rest } = splitSystemFromMessages(attemptMessages);
     const result = streamText({
       model: lm,
-      messages: attemptMessages as unknown as ModelMessage[],
+      ...(system ? { system } : {}),
+      messages: rest,
       maxOutputTokens: options.maxOutputTokens ?? resolveMaxOutputTokens(target.modelName),
       maxRetries: 3,
       ...(options.tools ? {

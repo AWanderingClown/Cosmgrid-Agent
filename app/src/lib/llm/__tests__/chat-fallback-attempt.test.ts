@@ -10,7 +10,7 @@ vi.mock("../provider-factory", () => ({
 }));
 vi.mock("../db", () => ({ cliSessions: { upsert: vi.fn() } }));
 
-import { runModelAttempt } from "../chat-fallback-attempt";
+import { runModelAttempt, splitSystemFromMessages } from "../chat-fallback-attempt";
 import type { ModelEndpoint } from "../chat-fallback-types";
 
 const target: ModelEndpoint = {
@@ -137,5 +137,67 @@ describe("runModelAttempt - stepCount 真实步数统计（假收尾判定用，
     );
 
     expect(result.stepCount).toBe(0);
+  });
+});
+
+// 2026-07-16 工程化根因修复回归测试：多条 system 消息必须合并成 AI SDK 的 system 参数，
+// 不能作为并排的 {role:"system"} 塞进 messages 数组——否则 MiniMax-M3 等模型的 chat
+// template 渲染 system×N 序列时会退化吐 <|user_mask|> 特殊 token（dump 真实请求体确认）。
+describe("splitSystemFromMessages（system 消息打包契约）", () => {
+  it("多条 system 合并成一条 system 字符串（\\n\\n 连接），rest 只留对话消息、顺序不变", () => {
+    const { system, rest } = splitSystemFromMessages([
+      { role: "system", content: "规则A" },
+      { role: "system", content: "规则B" },
+      { role: "user", content: "你好" },
+      { role: "assistant", content: "在" },
+      { role: "system", content: "压缩摘要（也是 system）" },
+      { role: "user", content: "打开163" },
+    ]);
+    expect(system).toBe("规则A\n\n规则B\n\n压缩摘要（也是 system）");
+    expect(rest.map((m) => (m as { role: string }).role)).toEqual(["user", "assistant", "user"]);
+  });
+
+  it("没有 system 消息时 system 为 undefined（streamText 就不带 system 参数）", () => {
+    const { system, rest } = splitSystemFromMessages([{ role: "user", content: "hi" }]);
+    expect(system).toBeUndefined();
+    expect(rest).toHaveLength(1);
+  });
+
+  it("数组型 content 的 system（多模态 part）折叠成纯文本", () => {
+    const { system } = splitSystemFromMessages([
+      { role: "system", content: [{ type: "text", text: "图片守卫规则" }] as never },
+    ]);
+    expect(system).toBe("图片守卫规则");
+  });
+});
+
+// 接线断言：runModelAttempt 的 API 路径必须把 system 走 streamText 的 system 参数，
+// messages 里不再含任何 system 消息。
+describe("runModelAttempt - API 路径把 system 走独立参数（不塞 messages）", () => {
+  it("streamText 收到的 system 是合并字符串，messages 里没有 system", async () => {
+    let captured: { system?: string; messages?: Array<{ role: string }> } | undefined;
+    mocks.streamText.mockImplementationOnce((args: { system?: string; messages?: Array<{ role: string }> }) => {
+      captured = args;
+      return {
+        fullStream: (async function* () {})(),
+        usage: Promise.resolve({ inputTokens: 1, outputTokens: 1 }),
+        finishReason: Promise.resolve("stop"),
+      };
+    });
+
+    await runModelAttempt(
+      target,
+      [
+        { role: "system", content: "系统规则1" },
+        { role: "system", content: "系统规则2" },
+        { role: "user", content: "打开163看新闻" },
+      ],
+      { onDelta: () => {} },
+      {},
+    );
+
+    expect(captured?.system).toBe("系统规则1\n\n系统规则2");
+    expect(captured?.messages?.some((m) => m.role === "system")).toBe(false);
+    expect(captured?.messages?.map((m) => m.role)).toEqual(["user"]);
   });
 });
