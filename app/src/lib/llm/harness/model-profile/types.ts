@@ -1,5 +1,14 @@
 // Harness 工程实施计划 阶段6 — 模型 Harness Profile 类型定义。
 //
+// ⚠️ 储备状态（2026-07-16 审查确认，非漏接的死代码，勿删）：
+//   本模块（resolver / aggregator / apply）当前**未接入主链路**，是有意保留的前瞻储备。
+//   不接线的根因：`model_harness_profiles` 表没有任何生产写入口（无 create/insert/upsert）
+//   → 表永远空 → resolveModelHarnessProfile 永远返回 null，即使接线也是空转 no-op。
+//   整个闭环 aggregate(弱点)→建议 event→写表→resolve→apply 依赖 eval 常态化产出数据，
+//   但 eval 无 CI 只手动跑，闭环从没有起点。各处已有硬编码 model 判断
+//   （output-budget / model-aware-compaction）覆盖了当前实际需求。
+//   接线前置条件：eval harness 常态化跑并把 FailureKind 数据喂给 aggregator。
+//
 // 设计动机：阶段 1-5 让 Harness 有门控 / 工具结构化 / 证据链 / Eval 指标 / 上下文资产，
 // 但"模型可以热插拔但不同模型有不同弱点"未解。阶段 6 引入模型专属 Harness Profile。
 //

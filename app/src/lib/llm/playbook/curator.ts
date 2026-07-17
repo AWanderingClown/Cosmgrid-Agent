@@ -63,15 +63,23 @@ function detectConflict(aContent: string, bContent: string): boolean {
 
 const HIGH_CONFIDENCE_THRESHOLD = 0.95;
 
+const HARMFUL_LOOP_THRESHOLD = 3;
+
 export function curateCandidates(
   candidates: PlaybookCandidate[],
   existing: PlaybookItem[],
 ): CuratorDecision[] {
   const decisions: CuratorDecision[] = [];
-  // existing 索引：按 kind + normalized title 查重
+  // exact-title 查重索引：按 kind + normalized title。
+  // 必须同时收 active + candidate——requiresConfirm 的 create 落 status='candidate'，
+  // 若 candidate 不进索引，同一事件每轮重新 reflect 都会再落一条新 candidate 行，
+  // project_memories 无限膨胀（2026-07-17 复检抓到的 HIGH，同 price-catalog 膨胀事故类）。
+  // harmful_count 高的条目不参与查重/相似度比较（避免死循环：被踩条目挡住新条目 → 新条目
+  // 永远进不来 → 用户反复踩同一条）。
   const byKey = new Map<string, PlaybookItem>();
   for (const item of existing) {
-    if (item.status !== "active") continue;
+    if (item.status !== "active" && item.status !== "candidate") continue;
+    if (item.harmfulCount > HARMFUL_LOOP_THRESHOLD) continue;
     byKey.set(`${item.kind}::${item.title.trim().toLowerCase()}`, item);
   }
 
@@ -89,10 +97,15 @@ export function curateCandidates(
       continue;
     }
 
-    // 2. 相似度 ≥ 0.8 + 同一 kind → supersede
+    // 2. 相似度 ≥ 0.8 + 同一 kind → supersede。
+    //    排除 sourceKind='manual'：用户手写的记忆绝不被自动提炼的条目免确认 supersede
+    //    （manual 条目掉到规则 4-7 走 create+confirm，宁可近重复也不静默覆盖用户资产）；
+    //    排除 harmful_count 高的条目（同 byKey 的死循环理由）。
     const similar = existing.find(
       (it) => it.kind === cand.kind
         && it.status === "active"
+        && it.sourceKind !== "manual"
+        && it.harmfulCount <= HARMFUL_LOOP_THRESHOLD
         && titleSimilarity(it.title.trim().toLowerCase(), cand.title.trim().toLowerCase()) >= 0.8,
     );
     if (similar) {
@@ -106,10 +119,11 @@ export function curateCandidates(
       continue;
     }
 
-    // 3. 内容矛盾 → mark_disputed 老条目 + create 新条目
+    // 3. 内容矛盾 → mark_disputed 老条目 + create 新条目（harmful 条目同样不参与）
     const contradicted = existing.find(
       (it) => it.kind === cand.kind
         && it.status === "active"
+        && it.harmfulCount <= HARMFUL_LOOP_THRESHOLD
         && detectConflict(it.content, cand.content),
     );
     if (contradicted) {

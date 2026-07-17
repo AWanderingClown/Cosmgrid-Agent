@@ -11,9 +11,23 @@
 import { runEvalSuite } from "../src/lib/evals/runner";
 import { listFixtureFiles } from "../src/lib/evals/fixture-loader";
 import { aggregateEvalMetrics } from "../src/lib/evals/metrics";
+import { getLanguageModel } from "../src/lib/llm/provider-factory";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
+
+// LLM judge 模型（eval:full 软标准用）：三个环境变量齐全才构造，缺任一 = 纯 deterministic。
+//   EVAL_JUDGE_PROVIDER  anthropic / openai / google / openai-compatible
+//   EVAL_JUDGE_MODEL     judge 模型名
+//   EVAL_JUDGE_API_KEY   对应 key（CLI 环境拿不到 app keychain，只能显式传）
+//   EVAL_JUDGE_BASE_URL  可选，openai-compatible 必填
+function resolveJudgeModel(): unknown | undefined {
+  const provider = process.env.EVAL_JUDGE_PROVIDER;
+  const model = process.env.EVAL_JUDGE_MODEL;
+  const apiKey = process.env.EVAL_JUDGE_API_KEY;
+  if (!provider || !model || !apiKey) return undefined;
+  return getLanguageModel(provider, model, apiKey, process.env.EVAL_JUDGE_BASE_URL);
+}
 
 interface CliArgs {
   taskSet: "held-in" | "held-out" | "manual";
@@ -53,6 +67,13 @@ async function main() {
     process.exit(1);
   }
 
+  const judgeModel = resolveJudgeModel();
+  if (!judgeModel && args.taskSet === "held-out") {
+    console.warn(
+      "[eval] EVAL_JUDGE_PROVIDER/MODEL/API_KEY 未配齐，llm-judge B 档将 inconclusive（A 档短路不受影响）",
+    );
+  }
+
   const { runId, results } = await runEvalSuite({
     taskSetId: args.taskSet,
     fixtureDir,
@@ -61,7 +82,11 @@ async function main() {
       taskSetId: args.taskSet,
       modelId: args.modelId,
       harnessVersion: args.harnessVersion,
+      judgeModel,
     },
+    // CLI 跑在纯 Node：DB 走 tauri-plugin-sql 需要 WebView window，落库必挂。
+    // 指标聚合只用内存 results，不依赖 DB；落库版历史对比走 app 内 EvalPanel。
+    persist: false,
   });
 
   // 聚合 11 指标

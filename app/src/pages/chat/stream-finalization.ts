@@ -7,6 +7,7 @@ import { verifyNodeOutcome, applyVerifyRepairLoop } from "@/lib/workflow/node-ve
 import { verifyTask } from "@/lib/llm/evidence/task-verifier";
 import { VERIFY_ACCEPTANCE_CRITERIA } from "@/lib/llm/evidence/verify-acceptance-criteria";
 import { reportTaskOutcome, nodeOutcomeToTaskOutcome } from "@/lib/evals/task-outcome-reporter";
+import { recordPlaybookEventSafe, runPlaybookPipeline } from "@/lib/llm/playbook/pipeline";
 import type { VerificationResult } from "@/lib/llm/evidence/types";
 import type { WorkflowSnapshot } from "@/lib/workflow/types";
 import type { ChatMessage } from "@/pages/chat/types";
@@ -35,6 +36,8 @@ export interface FinalizeStreamedChatTurnArgs {
   assistantMessage: ChatMessage;
   streamingResult: StreamingFinalizationResult;
   conversationId: string | null;
+  /** 阶段5 Playbook：事件写入/消费管道需要（null = 无项目绑定，跳过 playbook） */
+  projectId: string | null;
   cacheEligible: boolean;
   taskRole: string;
   shouldCompleteWorkflowNode: boolean;
@@ -239,6 +242,33 @@ async function runWorkflowVerificationInBackground(
           interventionKind: mapped.interventionKind ?? undefined,
           finalSummary: finalContent.slice(0, 200),
         });
+
+        // 阶段5 Playbook 断点①②（2026-07-17 接线）：失败/需介入的 outcome 旁路写事件，
+        // 然后跑消费管道（reflect → curate → 落库）。事件必须先 await 写完再消费，
+        // 否则 pipeline 读不到本轮事件；整体仍在后台函数里，不阻塞 isStreaming 归位。
+        if (args.projectId) {
+          if (taskOutcomeStatus === "failed" || taskOutcomeStatus === "blocked") {
+            await recordPlaybookEventSafe({
+              projectId: args.projectId,
+              conversationId: args.conversationId,
+              messageId: args.assistantId,
+              kind: "outcome_failed",
+              payload: { failureCode: outcome?.failureCode ?? "unknown" },
+            });
+          } else if (taskOutcomeStatus === "needs_user") {
+            await recordPlaybookEventSafe({
+              projectId: args.projectId,
+              conversationId: args.conversationId,
+              messageId: args.assistantId,
+              kind: "outcome_needs_user",
+              payload: { interventionKind: mapped.interventionKind ?? "awaiting_user" },
+            });
+          }
+          void runPlaybookPipeline({
+            projectId: args.projectId,
+            conversationId: args.conversationId,
+          });
+        }
       }
   } catch {
     // workflow 状态更新失败不影响正常回答

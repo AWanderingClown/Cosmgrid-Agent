@@ -31,6 +31,7 @@ import {
 } from "@/lib/db";
 import { getApiKey } from "@/lib/keystore";
 import { generateCheckpointDraft } from "@/lib/llm/checkpoint-generator";
+import { recordPlaybookEventSafe, runPlaybookPipeline } from "@/lib/llm/playbook/pipeline";
 import { getLanguageModel } from "@/lib/llm/provider-factory";
 import { formatTime, roleLabel } from "./project-detail-utils";
 
@@ -195,6 +196,28 @@ export function CreateCheckpointDialog({
         doNotRepeat: fields.doNotRepeat.trim() || null,
         acceptanceCriteria: fields.acceptanceCriteria.trim() || null,
       });
+      // 阶段5 Playbook 事件源（2026-07-17 接线）：检查点里的失败经验（failedAttempts /
+      // doNotRepeat）是最高价值的 lesson 来源——旁路写事件，Reflector 提炼 confidence=0.9。
+      // 字段是自由文本，按行拆成条目；旁路 fire-and-forget，失败不影响保存流程。
+      const failedAttempts = fields.failedAttempts.trim();
+      const doNotRepeat = fields.doNotRepeat.trim();
+      if (failedAttempts || doNotRepeat) {
+        const toLines = (s: string) => s.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+        void (async () => {
+          // 先写完事件再消费（pipeline 读的是 project 级最近事件）
+          await recordPlaybookEventSafe({
+            projectId,
+            conversationId: null,
+            messageId: null,
+            kind: "checkpoint_failed",
+            payload: {
+              failedAttempts: toLines(failedAttempts),
+              doNotRepeat: toLines(doNotRepeat),
+            },
+          });
+          await runPlaybookPipeline({ projectId });
+        })();
+      }
       reset();
       onOpenChange(false);
       onCreated();

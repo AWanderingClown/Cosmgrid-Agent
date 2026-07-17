@@ -198,6 +198,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     debateParticipants,
     lastUsage,
     handleStop,
+    usedPlaybookMemories,
   } = useChatStream({
     conversationId,
     conversationList,
@@ -683,6 +684,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           streamElapsedMs={streamElapsedMs}
           activeModelLabel={activeModelLabel}
           messages={messages}
+          playbookMemories={usedPlaybookMemories}
         />
       )}
     </div>

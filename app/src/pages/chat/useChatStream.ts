@@ -40,6 +40,8 @@ import { attachActiveSkillToWorkflow, attachPlanSourceToWorkflow } from "@/lib/w
 import { buildWorkflowContextPreamble, readDesktopPlanForExecution } from "@/lib/workflow/execution-context";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
 import { buildChatMemoryPreambles } from "@/lib/memory/chat-memory-preamble";
+import { recordMemoriesUsed } from "@/lib/llm/playbook/feedback";
+import type { ProjectMemory } from "@/lib/db/memory";
 import { createOptimisticUserTurn } from "@/pages/chat/optimistic-turn";
 import { runSemanticCacheRuntime } from "@/pages/chat/cache-runtime";
 import { runDebateRuntime } from "@/pages/chat/debate-runtime";
@@ -154,6 +156,8 @@ export function useChatStream(opts: UseChatStreamOptions) {
   const [switchNotice, setSwitchNotice] = useState<string | null>(null);
   const [cacheNotice, setCacheNotice] = useState<string | null>(null);
   const [harnessNotice, setHarnessNotice] = useState<string | null>(null);
+  // 阶段5 Playbook：本轮注入 prompt 的记忆条目（WorkPanel 赞踩列表数据源）
+  const [usedPlaybookMemories, setUsedPlaybookMemories] = useState<ProjectMemory[]>([]);
   const [persistNotice, setPersistNotice] = useState<string | null>(null);
   const [debateParticipants, setDebateParticipants] = useState<{ modelId: string; modelName: string }[] | null>(null);
   const [lastUsage, setLastUsage] = useState<ChatUsage | null>(null);
@@ -611,6 +615,12 @@ export function useChatStream(opts: UseChatStreamOptions) {
       if (memoryPreambles.aborted) return;
       projectMemoryPreamble = memoryPreambles.projectMemoryPreamble;
       crossProjectPreamble = memoryPreambles.crossProjectPreamble;
+      // 阶段5 Playbook 断点③（2026-07-17 接线）：记录本轮注入的记忆（last_used_at 加权数据源），
+      // 并把条目交给 WorkPanel 赞踩列表。旁路 fire-and-forget，失败不阻塞发送。
+      setUsedPlaybookMemories(memoryPreambles.usedMemories);
+      if (memoryPreambles.usedMemoryIds.length > 0) {
+        void recordMemoriesUsed(memoryPreambles.usedMemoryIds);
+      }
 
       const promptRuntime = await prepareChatPromptRuntime({
         messages: newMessages,
@@ -681,6 +691,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
           assistantMessage: assistantMsg,
           streamingResult,
           conversationId: convId,
+          projectId: currentProjectId,
           cacheEligible,
           taskRole,
           shouldCompleteWorkflowNode,
@@ -834,5 +845,6 @@ export function useChatStream(opts: UseChatStreamOptions) {
     streamActivityPhase,
     streamError,
     switchNotice,
+    usedPlaybookMemories,
   };
 }

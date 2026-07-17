@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   failCurrentWorkflowNode: vi.fn(),
   repairCurrentWorkflowNode: vi.fn(),
   verifyTask: vi.fn(),
+  recordPlaybookEventSafe: vi.fn(),
+  runPlaybookPipeline: vi.fn(),
 }));
 
 vi.mock("@/lib/llm/semantic-cache", () => ({
@@ -41,6 +43,13 @@ vi.mock("@/lib/llm/evidence/task-verifier", () => ({
   verifyTask: mocks.verifyTask,
 }));
 
+// 阶段5 Playbook：pipeline 单独 mock——只验证 stream-finalization 的触发条件
+// （什么 outcome 写什么事件、事件先写后消费），管道内部逻辑在 pipeline.test.ts 直接测。
+vi.mock("@/lib/llm/playbook/pipeline", () => ({
+  recordPlaybookEventSafe: mocks.recordPlaybookEventSafe,
+  runPlaybookPipeline: mocks.runPlaybookPipeline,
+}));
+
 function makeSnapshot(phase: string, overrides: Record<string, unknown> = {}) {
   return {
     runId: "run-1",
@@ -68,6 +77,8 @@ describe("finalizeStreamedChatTurn", () => {
       decisionEvidenceIds: [],
       humanSummary: "ok",
     });
+    mocks.recordPlaybookEventSafe.mockReset().mockResolvedValue(undefined);
+    mocks.runPlaybookPipeline.mockReset().mockResolvedValue(null);
   });
 
   it("更新工具调用数、持久化助手消息，并写入语义缓存", async () => {
@@ -87,6 +98,7 @@ describe("finalizeStreamedChatTurn", () => {
         harnessDirty: false,
       },
       conversationId: "conv-1",
+      projectId: null,
       cacheEligible: true,
       taskRole: "standard",
       shouldCompleteWorkflowNode: false,
@@ -130,6 +142,7 @@ describe("finalizeStreamedChatTurn", () => {
         harnessDirty: false,
       },
       conversationId: "conv-1",
+      projectId: null,
       cacheEligible: false,
       taskRole: "standard",
       shouldCompleteWorkflowNode: true,
@@ -180,6 +193,7 @@ describe("finalizeStreamedChatTurn", () => {
         harnessDirty: false,
       },
       conversationId: "conv-1",
+      projectId: null,
       cacheEligible: false,
       taskRole: "standard",
       shouldCompleteWorkflowNode: true,
@@ -221,6 +235,7 @@ describe("finalizeStreamedChatTurn", () => {
         harnessDirty: true,
       },
       conversationId: "conv-1",
+      projectId: null,
       cacheEligible: false,
       taskRole: "standard",
       shouldCompleteWorkflowNode: true,
@@ -256,6 +271,7 @@ describe("finalizeStreamedChatTurn", () => {
         harnessDirty: false,
       },
       conversationId: "conv-1",
+      projectId: null,
       cacheEligible: false,
       taskRole: "standard",
       shouldCompleteWorkflowNode: true,
@@ -301,6 +317,7 @@ describe("finalizeStreamedChatTurn", () => {
         harnessDirty: false,
       },
       conversationId: "conv-1",
+      projectId: null,
       cacheEligible: false,
       taskRole: "standard",
       shouldCompleteWorkflowNode: true,
@@ -341,6 +358,7 @@ describe("finalizeStreamedChatTurn", () => {
         harnessDirty: false,
       },
       conversationId: "conv-1",
+      projectId: null,
       cacheEligible: false,
       taskRole: "standard",
       shouldCompleteWorkflowNode: true,
@@ -379,6 +397,7 @@ describe("finalizeStreamedChatTurn", () => {
           harnessDirty: false,
         },
         conversationId: "conv-1",
+      projectId: null,
         cacheEligible: false,
         taskRole: "standard",
         shouldCompleteWorkflowNode: true,
@@ -410,6 +429,7 @@ describe("finalizeStreamedChatTurn", () => {
           harnessDirty: false,
         },
         conversationId: "conv-1",
+      projectId: null,
         cacheEligible: false,
         taskRole: "standard",
         shouldCompleteWorkflowNode: true,
@@ -453,6 +473,7 @@ describe("finalizeStreamedChatTurn", () => {
           harnessDirty: false,
         },
         conversationId: "conv-1",
+      projectId: null,
         cacheEligible: false,
         taskRole: "standard",
         shouldCompleteWorkflowNode: true,
@@ -504,6 +525,7 @@ describe("finalizeStreamedChatTurn", () => {
           harnessDirty: false,
         },
         conversationId: "conv-1",
+      projectId: null,
         cacheEligible: false,
         taskRole: "standard",
         shouldCompleteWorkflowNode: true,
@@ -556,6 +578,7 @@ describe("finalizeStreamedChatTurn", () => {
           harnessDirty: false,
         },
         conversationId: "conv-1",
+      projectId: null,
         cacheEligible: false,
         taskRole: "standard",
         shouldCompleteWorkflowNode: true,
@@ -597,6 +620,7 @@ describe("finalizeStreamedChatTurn", () => {
           harnessDirty: false,
         },
         conversationId: "conv-1",
+      projectId: null,
         cacheEligible: false,
         taskRole: "standard",
         shouldCompleteWorkflowNode: true,
@@ -612,6 +636,68 @@ describe("finalizeStreamedChatTurn", () => {
       expect(mocks.repairCurrentWorkflowNode).not.toHaveBeenCalled();
       expect(mocks.failCurrentWorkflowNode).not.toHaveBeenCalled();
       expect(mocks.completeCurrentWorkflowNode).toHaveBeenCalled();
+    });
+  });
+
+  // 阶段5 Playbook 接线点（2026-07-17）：验证触发条件与时序，管道内部逻辑在 pipeline.test.ts
+  describe("playbook 事件接线", () => {
+    function playbookArgs(over: Record<string, unknown> = {}) {
+      return {
+        text: "hello",
+        assistantMessage: { id: "assistant-1", role: "assistant" as const, content: "" },
+        assistantId: "assistant-1",
+        streamingResult: {
+          fullContent: "final answer",
+          lastModelId: "model-1",
+          lastToolCallCount: 0,
+          harnessDirty: false,
+        },
+        conversationId: "conv-1",
+        projectId: "p-1",
+        cacheEligible: false,
+        taskRole: "standard",
+        shouldCompleteWorkflowNode: true,
+        workflowSnapshot: makeSnapshot("execute"),
+        workflowRunId: "run-1",
+        controllerAborted: false,
+        persistAssistant: vi.fn(),
+        setMessages: vi.fn((updater) => updater([])),
+        applyWorkflowSnapshot: vi.fn(),
+        ...over,
+      };
+    }
+
+    it("execute 阶段验收 failed → 写 outcome_failed 事件（先于 pipeline）再消费", async () => {
+      // execute 阶段 0 工具调用 → verifyNodeOutcome 判 failed（no_tool_evidence）
+      await finalizeStreamedChatTurn(playbookArgs());
+      await vi.waitFor(() => expect(mocks.runPlaybookPipeline).toHaveBeenCalled());
+      expect(mocks.recordPlaybookEventSafe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: "p-1",
+          conversationId: "conv-1",
+          kind: "outcome_failed",
+        }),
+      );
+      // 时序：事件写入调用发生在 pipeline 消费之前
+      const eventOrder = mocks.recordPlaybookEventSafe.mock.invocationCallOrder[0]!;
+      const pipelineOrder = mocks.runPlaybookPipeline.mock.invocationCallOrder[0]!;
+      expect(eventOrder).toBeLessThan(pipelineOrder);
+      expect(mocks.runPlaybookPipeline).toHaveBeenCalledWith({ projectId: "p-1", conversationId: "conv-1" });
+    });
+
+    it("passed 路径不写 outcome 事件，但仍跑 pipeline（消费 summary_dropped 等旁路事件）", async () => {
+      await finalizeStreamedChatTurn(
+        playbookArgs({ workflowSnapshot: makeSnapshot("plan") }),  // plan 阶段 0 工具也 passed
+      );
+      await vi.waitFor(() => expect(mocks.runPlaybookPipeline).toHaveBeenCalled());
+      expect(mocks.recordPlaybookEventSafe).not.toHaveBeenCalled();
+    });
+
+    it("projectId=null → 事件与 pipeline 都不触发", async () => {
+      await finalizeStreamedChatTurn(playbookArgs({ projectId: null }));
+      await vi.waitFor(() => expect(mocks.failCurrentWorkflowNode).toHaveBeenCalled());
+      expect(mocks.recordPlaybookEventSafe).not.toHaveBeenCalled();
+      expect(mocks.runPlaybookPipeline).not.toHaveBeenCalled();
     });
   });
 });

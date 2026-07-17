@@ -39,6 +39,15 @@ export interface EvalCase {
   /** 限定允许的模型（不传 = 全部） */
   allowedModels?: string[];
   acceptanceCriteria: AcceptanceCriterion[];
+  /**
+   * 回放软标准判定（LLM judge）：该 case 要评估的 assistant 最终回复文本。
+   * 不传 = 纯 deterministic 评测（不调 LLM judge，向后兼容默认行为）。
+   * 传了 + config.judgeModel 存在 → runner 在 deterministic graders 后调 llmJudgeSoftCriteria，
+   * 检出 fabrication 一票否决（passed=false）；inconclusive（null）不翻案只记录。
+   */
+  assistantOutput?: string;
+  /** 回放软标准判定：assistantOutput 对应那一轮的工具调用次数（A/B 档分流用，默认 0） */
+  toolCallCount?: number;
   /** 单 case 预算上限（USD），超限 → 立即 fail + BUDGET_EXCEEDED */
   budgetUsd?: number;
   /** 单 case 超时（秒），超限 → 立即 fail + TIMEOUT */

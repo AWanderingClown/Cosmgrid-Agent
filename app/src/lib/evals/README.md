@@ -75,8 +75,9 @@ EvalMetrics (11 指标)
 
 - `__tests__/graders.test.ts` 11 case（5 grader × 2 + 1 tool-execution input 匹配）
 - `__tests__/metrics.test.ts` 9 case（11 指标全覆盖 + 0 attempts 边界）
-- `__tests__/fixture-loader.test.ts` 计划：5 case（valid / missing / invalid-zod / cleanup / held-out）
-- 阶段 4 完整实施时 + `__tests__/{runner,llm-judge,task-outcome-reporter,compare}.test.ts`
+- `__tests__/fixture-loader.test.ts`（valid / missing / invalid-zod / cleanup / held-out）
+- `__tests__/runner.test.ts` runner × llm-judge 集成（2026-07-17 接线：A 档否决 / 向后兼容 / B 档认可 / inconclusive 不翻案）
+- 未来补 `__tests__/{llm-judge,task-outcome-reporter,compare}.test.ts`
 
 ## CI 接入
 
@@ -84,6 +85,8 @@ EvalMetrics (11 指标)
 pnpm test:eval       # vitest 单测（CI 必跑）
 pnpm eval:fast       # 20 held-in deterministic（CI PR check，秒级）
 pnpm eval:full       # held-in + held-out + llm-judge（workflow_dispatch / nightly）
+                     # llm-judge B 档需配 EVAL_JUDGE_PROVIDER / EVAL_JUDGE_MODEL / EVAL_JUDGE_API_KEY
+                     # （可选 EVAL_JUDGE_BASE_URL）；未配齐 = B 档 inconclusive，A 档短路照常
 pnpm eval:real-machine # 真机 Tauri 安装包（独立环境）
 ```
 

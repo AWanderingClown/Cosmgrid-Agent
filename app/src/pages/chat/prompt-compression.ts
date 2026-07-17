@@ -6,7 +6,8 @@ import {
 import { resolveContextBudget } from "@/lib/llm/model-limits";
 import { summarizeDroppedHistory, type HistorySummary } from "@/lib/llm/history-summarizer";
 import type { LanguageModel } from "@/lib/llm/provider-factory";
-import { conversationSummaries } from "@/lib/db";
+import { conversationSummaries, conversations } from "@/lib/db";
+import { recordPlaybookEventSafe } from "@/lib/llm/playbook/pipeline";
 
 export interface PromptCompressionResult {
   messages: ChatMsg[];
@@ -120,21 +121,47 @@ export async function applyPromptCompressionWithSummary(args: {
   // 用共享 holder 拿结构化摘要（不能用闭包内的 let 变量，TS 在 await 之后 narrow 失败）
   const summaryForPersistence = pendingSummaryHolder.summary;
   if (args.persistence && summaryForPersistence) {
+    const persistence = args.persistence;
     void conversationSummaries
       .create({
-        conversationId: args.persistence.conversationId,
+        conversationId: persistence.conversationId,
         summary: summaryForPersistence.summary,
         keyDecisions: summaryForPersistence.keyDecisions,
         factsEstablished: summaryForPersistence.factsEstablished,
         openThreads: summaryForPersistence.openThreads,
-        modelId: args.persistence.modelId ?? null,
-        tokenCount: args.persistence.tokenCount ?? null,
+        modelId: persistence.modelId ?? null,
+        tokenCount: persistence.tokenCount ?? null,
       })
       .catch((err) => {
         // 落库失败仅记录——不影响主流程；用户口径 §7 "上下文永不丢失"做不到
         // 但承诺"摘要文本已经在 system 消息里发给当前模型了"
         console.warn("[prompt-compression] 摘要落库失败，已忽略:", err);
       });
+
+    // 阶段5 Playbook 事件源（2026-07-17 接线）：被压缩丢弃的 keyDecisions / openThreads
+    // 有随摘要滚动丢失的风险 → 旁路写 summary_dropped 事件让 Reflector 沉淀成长期记忆。
+    // projectId 从 conversation 反查（压缩层没有 projectId 上下文）；无项目绑定则跳过。
+    // 消费不在这里触发——同一轮 stream-finalization 的 runPlaybookPipeline 会一并消费。
+    if (summaryForPersistence.keyDecisions.length > 0 || summaryForPersistence.openThreads.length > 0) {
+      void (async () => {
+        try {
+          const conv = await conversations.getById(persistence.conversationId);
+          if (!conv?.projectId) return;
+          await recordPlaybookEventSafe({
+            projectId: conv.projectId,
+            conversationId: persistence.conversationId,
+            messageId: null,
+            kind: "summary_dropped",
+            payload: {
+              keyDecisions: summaryForPersistence.keyDecisions,
+              openThreads: summaryForPersistence.openThreads,
+            },
+          });
+        } catch (err) {
+          console.warn("[prompt-compression] summary_dropped 事件写入失败，已忽略:", err);
+        }
+      })();
+    }
   }
 
   return {

@@ -308,6 +308,10 @@
       },
       "playbook": {
         "title": "上下文 Playbook",
+        "usedTitle": "本轮注入记忆（{{count}}）",
+        "helpful": "有帮助",
+        "harmful": "误导/有害",
+        "feedbackDone": "已反馈",
         "curator": {
           "confirm": "确认 Playbook 候选条目",
           "superseded": "已 superseded 老条目",

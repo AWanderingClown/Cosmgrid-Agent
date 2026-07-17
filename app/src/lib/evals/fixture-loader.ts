@@ -8,7 +8,7 @@
 // 设计原则：fail fast + fail loud —— 任何 schema 不符都直接抛错，不静默通过。
 // 这样 dev 改代码时如果误传错 fixture，CLI 第一行就报错而不是 silent fail。
 
-import { readFileSync, existsSync, cpSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { z } from "zod";
@@ -28,6 +28,9 @@ const EvalCaseSchema = z.object({
       expected: z.unknown(),
     }),
   ).min(1),
+  // 回放软标准（LLM judge）字段——zod 默认剥离未声明键，漏在 schema 外会被静默丢掉
+  assistantOutput: z.string().optional(),
+  toolCallCount: z.number().int().nonnegative().optional(),
   budgetUsd: z.number().positive().optional(),
   timeoutSeconds: z.number().int().positive().optional(),
   tags: z.array(z.string()).optional(),
@@ -88,7 +91,6 @@ export function loadHeldOutFromUrl(_url: string): EvalCase {
 
 /** 扫描 fixture 目录返回所有 .json 文件名（不含 .gitkeep / manifest.json） */
 export function listFixtureFiles(dir: string): string[] {
-  const { readdirSync } = require("node:fs") as typeof import("node:fs");
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((f: string) => f.endsWith(".json") && f !== "manifest.json")

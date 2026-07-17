@@ -49,6 +49,15 @@ interface ProjectMemoryRow {
   content: string;
   importance: number;
   tags: string | null;
+  source_kind?: ProjectMemory["sourceKind"];
+  source_ref?: string | null;
+  confidence?: number;
+  status?: ProjectMemory["status"];
+  helpful_count?: number;
+  harmful_count?: number;
+  last_used_at?: string | null;
+  supersedes_id?: string | null;
+  evidence_refs_json?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -63,6 +72,16 @@ function rowToProjectMemory(r: ProjectMemoryRow): ProjectMemory {
     content: r.content,
     importance: r.importance,
     tags: r.tags,
+    // 阶段5 Playbook 字段——漏映射会让 context-assembler 的 confidence/helpful/harmful 加权全部空转
+    sourceKind: r.source_kind ?? "legacy",
+    sourceRef: r.source_ref ?? null,
+    confidence: r.confidence ?? 0.5,
+    status: r.status ?? "active",
+    helpfulCount: r.helpful_count ?? 0,
+    harmfulCount: r.harmful_count ?? 0,
+    lastUsedAt: r.last_used_at ?? null,
+    supersedesId: r.supersedes_id ?? null,
+    evidenceRefsJson: r.evidence_refs_json ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -75,6 +94,13 @@ export interface CreateProjectMemoryInput {
   content: string;
   importance?: number;
   tags?: string | null;
+  // 阶段5 Playbook 字段（不传走 DDL 默认：manual 手建条目 / active / confidence 0.5）
+  sourceKind?: ProjectMemory["sourceKind"];
+  sourceRef?: string | null;
+  confidence?: number;
+  status?: ProjectMemory["status"];
+  supersedesId?: string | null;
+  evidenceRefsJson?: string | null;
 }
 
 export interface SearchProjectMemoriesOptions {
@@ -175,8 +201,11 @@ export const projectMemories = {
     const id = newId();
     const ts = now();
     await db.execute(
-      `INSERT INTO project_memories (id, project_id, kind, title, content, importance, tags, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      `INSERT INTO project_memories
+        (id, project_id, kind, title, content, importance, tags,
+         source_kind, source_ref, confidence, status, supersedes_id, evidence_refs_json,
+         created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
       [
         id,
         input.projectId,
@@ -185,6 +214,12 @@ export const projectMemories = {
         input.content,
         input.importance ?? 50,
         input.tags ?? null,
+        input.sourceKind ?? "manual",
+        input.sourceRef ?? null,
+        input.confidence ?? 0.5,
+        input.status ?? "active",
+        input.supersedesId ?? null,
+        input.evidenceRefsJson ?? null,
         ts,
         ts,
       ],
@@ -325,6 +360,29 @@ export const projectMemories = {
       "UPDATE project_memories SET status = 'archived', updated_at = $1 WHERE id = $2",
       [now(), targetId],
     );
+  },
+
+  async markActive(targetId: string): Promise<void> {
+    // Curator 确认 UI：candidate 转正 / disputed 裁决保留 → 回到 active 池重新进 prompt
+    const db = await getDb();
+    await db.execute(
+      "UPDATE project_memories SET status = 'active', updated_at = $1 WHERE id = $2",
+      [now(), targetId],
+    );
+  },
+
+  async listByProjectAndStatus(
+    projectId: string,
+    status: NonNullable<ProjectMemory["status"]>,
+    limit = 50,
+  ): Promise<ProjectMemory[]> {
+    // Curator 确认 UI：拉 candidate（待转正）/ disputed（待裁决）列表
+    const db = await getDb();
+    const rows = await db.select<ProjectMemoryRow[]>(
+      "SELECT * FROM project_memories WHERE project_id = $1 AND status = $2 ORDER BY updated_at DESC LIMIT $3",
+      [projectId, status, limit],
+    );
+    return rows.map(rowToProjectMemory);
   },
 
   async incrementHelpful(memoryId: string): Promise<void> {

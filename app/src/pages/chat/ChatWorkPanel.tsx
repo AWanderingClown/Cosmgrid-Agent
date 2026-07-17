@@ -8,6 +8,7 @@ import type { ChainNodeView } from "@/components/work-panel/derive-chain-node-gr
 import { WorkflowDiagnostics } from "@/components/work-panel/WorkflowDiagnostics";
 import { EvidencePanel } from "@/components/work-panel/EvidencePanel";
 import { AgentJobPanel } from "@/components/work-panel/AgentJobPanel";
+import { PlaybookPanel } from "@/components/work-panel/PlaybookPanel";
 import { EvalPanel } from "@/components/work-panel/EvalPanel";
 import { IntentDiagnostics } from "@/components/work-panel/IntentDiagnostics";
 import { WorkArtifacts } from "@/components/work-panel/WorkArtifacts";
@@ -57,6 +58,10 @@ interface ChatWorkPanelProps {
   streamElapsedMs: number;
   activeModelLabel: string;
   messages: ChatMessage[];
+  /** 阶段5 Playbook：本轮注入 prompt 的记忆条目（赞踩反馈列表） */
+  playbookMemories?: import("@/lib/db/memory").ProjectMemory[];
+  /** 阶段5 Playbook：当前项目 id（候选转正/冲突裁决区数据源） */
+  playbookProjectId?: string | null;
 }
 
 export function ChatWorkPanel({
@@ -81,6 +86,8 @@ export function ChatWorkPanel({
   streamElapsedMs,
   activeModelLabel,
   messages,
+  playbookMemories = [],
+  playbookProjectId = null,
 }: ChatWorkPanelProps) {
   const { t } = useTranslation();
   const [developerDiagnosticsEnabled] = useDeveloperDiagnosticsSetting();
@@ -202,6 +209,8 @@ export function ChatWorkPanel({
           {/* 后台任务面板：显示当前 workflow 的 Agent Job 状态（运行/完成/失败/取消），
               支持取消和重试。没有 job 时组件自身不渲染，保持面板轻量。 */}
           <AgentJobPanel workflowRunId={workflowSnapshot?.runId ?? null} />
+          {/* 阶段5 Playbook：候选转正/冲突裁决 + 本轮注入赞踩（全空不渲染） */}
+          <PlaybookPanel memories={playbookMemories} projectId={playbookProjectId} />
           {developerDiagnosticsEnabled && (
             <>
               <WorkflowDiagnostics workflowEvents={workflowEvents} workflowSnapshot={workflowSnapshot} toolCalls={toolCalls} messages={messages} />

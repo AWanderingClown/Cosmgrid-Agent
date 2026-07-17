@@ -3,7 +3,7 @@
 // 入口 `runEvalCase(case, ctx)`：
 // 1. 准备沙箱（fixture loader 拷贝）
 // 2. 跑所有 deterministic graders（顺序依赖）
-// 3. 调 LLM judge（如果 judgeModel 存在 + 内容含可能"软标准"信号）
+// 3. 调 LLM judge 软标准（仅当 case 提供回放 assistantOutput + config.judgeModel）：fabrication 一票否决
 // 4. 判定：所有 deterministic ok + LLM judge met → passed=true；任一 fail → passed=false；抛错 → passed=null
 // 5. pass_at_3：失败时重试最多 3 次（自动放宽 timeout 1.5x）
 // 6. 预算超限：累计 cost_usd 超过 case.budgetUsd 立即返回 passed=false + BUDGET_EXCEEDED
@@ -17,8 +17,10 @@
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { LanguageModel } from "ai";
 import { getGrader } from "./graders";
 import { loadEvalCase } from "./fixture-loader";
+import { llmJudgeSoftCriteria } from "./llm-judge";
 import type {
   EvalCase,
   EvalResult,
@@ -118,8 +120,31 @@ export async function runEvalCase(input: RunCaseInput): Promise<RunCaseOutput> {
               detail: `grader ${ac.grader} 抛错：${err instanceof Error ? err.message : String(err)}`,
             },
           });
-          attemptPassed = null;  // 抛错 = inconclusive
+          // 抛错 = inconclusive，但不翻案已判的 fail（否则 fail+抛错+judge 认可会被洗白成 true）
+          if (attemptPassed !== false) attemptPassed = null;
         }
+      }
+
+      // 3.5 LLM judge 软标准（仅当 case 提供回放 assistantOutput）：
+      //   deterministic grader 已判"有/无/对/错"，judge 补"声称做了但没做"这类软标准。
+      //   fabrication 检出 → 一票否决 passed=false；judge 认可且无其他判据 → 提升 null→true；
+      //   inconclusive（null，抛错/无 judgeModel）→ 不翻案，保持 deterministic 结论。
+      if (evalCase.assistantOutput !== undefined) {
+        const judge = await llmJudgeSoftCriteria({
+          finalContent: evalCase.assistantOutput,
+          toolCallCount: evalCase.toolCallCount ?? 0,
+          judgeModel: config.judgeModel as LanguageModel | undefined,
+        });
+        // ok 语义 = "未否决"；inconclusive（null）不计入判定，detail 显式标记防审计误读
+        attemptGraded.push({
+          grader: "llm-judge",
+          result: {
+            ok: judge.passed !== false,
+            detail: judge.passed === null ? `[inconclusive，不计入判定] ${judge.reason}` : judge.reason,
+          },
+        });
+        if (judge.passed === false) attemptPassed = false;
+        else if (judge.passed === true && attemptPassed === null) attemptPassed = true;
       }
 
       // 4. 落地 attempt
@@ -142,7 +167,12 @@ export async function runEvalCase(input: RunCaseInput): Promise<RunCaseOutput> {
     }
 
     // 6. 汇总
-    const finalPassed = attempts.find((a) => a.passed === true)?.passed ?? null;
+    // 任一 attempt 通过 → true（pass_at_N）；否则有明确失败 → false；全为 inconclusive → null。
+    const finalPassed = attempts.some((a) => a.passed === true)
+      ? true
+      : attempts.some((a) => a.passed === false)
+        ? false
+        : null;
     return {
       passed: finalPassed,
       attempts,

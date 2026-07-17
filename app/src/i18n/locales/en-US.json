@@ -308,6 +308,10 @@
       },
       "playbook": {
         "title": "Context Playbook",
+        "usedTitle": "Memories used this turn ({{count}})",
+        "helpful": "Helpful",
+        "harmful": "Misleading/harmful",
+        "feedbackDone": "Recorded",
         "curator": {
           "confirm": "Confirm Playbook candidate",
           "superseded": "Superseded old entry",
