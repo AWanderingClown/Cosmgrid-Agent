@@ -199,6 +199,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     lastUsage,
     handleStop,
     usedPlaybookMemories,
+    playbookPipelineTick,
   } = useChatStream({
     conversationId,
     conversationList,
@@ -685,6 +686,10 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
           activeModelLabel={activeModelLabel}
           messages={messages}
           playbookMemories={usedPlaybookMemories}
+          playbookRefreshTick={playbookPipelineTick}
+          playbookProjectId={
+            (conversationId ? conversationList.find((c) => c.id === conversationId)?.projectId : null) ?? null
+          }
         />
       )}
     </div>

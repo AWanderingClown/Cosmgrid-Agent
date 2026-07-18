@@ -1,9 +1,10 @@
-// 阶段5 Playbook — 接线管道测试（2026-07-17 断点①②接线时新增）。
+// 阶段5 Playbook — 接线管道测试（2026-07-17 断点①②接线 + 同日 Curator 确认 UI 补全）。
 //
-// 覆盖第一版落库纪律：
-// - requiresConfirm=false → status='active'；true → status='candidate'（不入 prompt）
+// 覆盖落库纪律：
+// - requiresConfirm=false → status='active'；true → status='candidate'（不入 prompt，
+//   等 PlaybookPanel 确认 UI 转正/拒绝）
 // - supersede → create 新条目（带 supersedesId）+ markSuperseded 老条目
-// - mark_disputed/mark_archived 第一版跳过（绝不静默动老条目）
+// - mark_disputed/mark_archived 真执行（PlaybookPanel 冲突裁决区承接后续 markActive/markArchived）
 // - checkpoint 断链回归：无 conversationId 时走 project 级消费
 // - 任何 DB 抛错 → 返回 null 不上抛（旁路语义）
 
@@ -84,6 +85,20 @@ describe("applyCuratorDecisions", () => {
     expect(stats.superseded).toBe(1);
     expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ supersedesId: "old-1", status: "active" }));
     expect(mocks.markSuperseded).toHaveBeenCalledWith("old-1", "new-mem-1");
+  });
+
+  it("普通 create 转发 newItem.supersedesId（2026-07-17 复检 HIGH 修复：disputed 配对 candidate 靠这个关联字段，漏转发 PlaybookPanel 就配不上对）", async () => {
+    await applyCuratorDecisions("p-1", [
+      {
+        action: "create",
+        newItem: { ...newItem, supersedesId: "disputed-old-1" },
+        reason: "",
+        requiresConfirm: true,
+      },
+    ]);
+    expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ supersedesId: "disputed-old-1", status: "candidate" }));
+    // 不该走 markSuperseded——这只是关联引用，不是真的 supersede 老条目
+    expect(mocks.markSuperseded).not.toHaveBeenCalled();
   });
 
   it("mark_disputed / mark_archived 真执行（确认 UI 承接裁决）；skip 不落库", async () => {
@@ -171,6 +186,43 @@ describe("runPlaybookPipeline", () => {
     const second = await runPlaybookPipeline({ projectId: "p-1", conversationId: "conv-1" });
     expect(second).toMatchObject({ candidates: 0, created: 0, skipped: 1 });
     expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it("端到端冲突配对：新 candidate 与已有 active 条目内容矛盾 → markDisputed 老条目 + create 新条目携带 supersedesId 指回老条目", async () => {
+    const summaryDroppedEvent = {
+      id: "evt-summary-1",
+      projectId: "p-1",
+      conversationId: "conv-1",
+      messageId: null,
+      kind: "summary_dropped" as const,
+      payloadJson: JSON.stringify({ keyDecisions: ["应该用 SmartRouter 评分选模型"], openThreads: [] }),
+      occurredAt: "2026-07-17T00:00:00.000Z",
+      createdAt: "2026-07-17T00:00:00.000Z",
+    };
+    mocks.listByConversation.mockResolvedValue([summaryDroppedEvent]);
+    mocks.listMemoriesByProject.mockResolvedValue([
+      {
+        id: "old-active-1",
+        projectId: "p-1",
+        kind: "context",
+        title: "模型选择策略",
+        content: "不应该用 SmartRouter 评分选模型",
+        importance: 60,
+        tags: null,
+        status: "active",
+        helpfulCount: 0,
+        harmfulCount: 0,
+        createdAt: "2026-07-17T00:00:00.000Z",
+        updatedAt: "2026-07-17T00:00:00.000Z",
+      },
+    ]);
+
+    const stats = await runPlaybookPipeline({ projectId: "p-1", conversationId: "conv-1" });
+    expect(stats).toMatchObject({ disputed: 1 });
+    expect(mocks.markDisputed).toHaveBeenCalledWith("old-active-1");
+    expect(mocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({ supersedesId: "old-active-1", status: "candidate" }),
+    );
   });
 });
 

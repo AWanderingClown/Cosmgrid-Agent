@@ -158,6 +158,9 @@ export function useChatStream(opts: UseChatStreamOptions) {
   const [harnessNotice, setHarnessNotice] = useState<string | null>(null);
   // 阶段5 Playbook：本轮注入 prompt 的记忆条目（WorkPanel 赞踩列表数据源）
   const [usedPlaybookMemories, setUsedPlaybookMemories] = useState<ProjectMemory[]>([]);
+  // 阶段5 Playbook：runPlaybookPipeline 后台跑完的次数计数——PlaybookPanel 拿它当 refetch 触发信号
+  // （单纯累加值，不承载业务含义，用于让下游 useEffect 依赖数组变化）
+  const [playbookPipelineTick, setPlaybookPipelineTick] = useState(0);
   const [persistNotice, setPersistNotice] = useState<string | null>(null);
   const [debateParticipants, setDebateParticipants] = useState<{ modelId: string; modelName: string }[] | null>(null);
   const [lastUsage, setLastUsage] = useState<ChatUsage | null>(null);
@@ -692,6 +695,9 @@ export function useChatStream(opts: UseChatStreamOptions) {
           streamingResult,
           conversationId: convId,
           projectId: currentProjectId,
+          // 阶段5 Playbook（2026-07-17 复检 MEDIUM 修复）：pipeline 后台跑完立刻通知 UI refetch，
+          // 不用等用户发下一条消息才看到本轮产生的候选/裁决条目。
+          onPlaybookMemoryChange: () => setPlaybookPipelineTick((tick) => tick + 1),
           cacheEligible,
           taskRole,
           shouldCompleteWorkflowNode,
@@ -846,5 +852,6 @@ export function useChatStream(opts: UseChatStreamOptions) {
     streamError,
     switchNotice,
     usedPlaybookMemories,
+    playbookPipelineTick,
   };
 }

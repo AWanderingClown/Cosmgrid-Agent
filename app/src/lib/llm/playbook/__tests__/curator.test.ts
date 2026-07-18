@@ -62,7 +62,7 @@ describe("curateCandidates", () => {
     expect(out[0]!.newItem?.title).toBe("关键决策：用 SQLite3");
   });
 
-  it("内容矛盾 → mark_disputed 老条目 + create 新条目，都要 confirm", () => {
+  it("内容矛盾 → mark_disputed 老条目 + create 新条目，都要 confirm；新条目携带 supersedesId 关联老条目", () => {
     const out = curateCandidates(
       [makeCandidate({ title: "路由策略", content: "应该走 SmartRouter 评分" })],
       [makeItem({ title: "模型选择", content: "不应该走 SmartRouter 评分" })],
@@ -70,6 +70,9 @@ describe("curateCandidates", () => {
     expect(out).toHaveLength(2);
     expect(out[0]).toMatchObject({ action: "mark_disputed", targetId: "mem-1", requiresConfirm: true });
     expect(out[1]).toMatchObject({ action: "create", requiresConfirm: true });
+    // 2026-07-17 复检 HIGH 修复：没有这个关联，PlaybookPanel 没法把 disputed 老条目和新
+    // candidate 配对展示、联动裁决——用户可能把两边都点"保留"，两条矛盾事实同时 active。
+    expect(out[1]!.newItem?.supersedesId).toBe("mem-1");
   });
 
   it("高 confidence(≥0.95) + kind=context → create 自动入（requiresConfirm=false）", () => {
@@ -115,5 +118,26 @@ describe("curateCandidates", () => {
       [makeItem({ harmfulCount: 5 })],
     );
     expect(out[0]!.action).toBe("create");
+  });
+
+  it("同一批多条 candidate 都跟同一个老条目矛盾 → 各自产生 mark_disputed+create，新条目都携带同一 supersedesId（PlaybookPanel 靠这个分组渲染，见 derive-playbook-groups.test.ts）", () => {
+    // existing 内容故意同时含"不应该"和"don't use "两个矛盾关键词，让两条 candidate
+    // 各自独立命中 detectConflict 的不同关键词对（"应该/不应该" 和 "prefer /don't use "），
+    // 真正验证 curator 对同一批里两条都冲突同一老条目的情况都会各自产生 mark_disputed，
+        // 而不是只处理第一条就停手（2026-07-17 三轮复检抓到的测试断言过松，已改用能让两条
+    // candidate 都真实触发矛盾判定的 fixture）。
+    const out = curateCandidates(
+      [
+        makeCandidate({ id: "cand-a", title: "路由策略A", content: "应该走 SmartRouter 评分" }),
+        makeCandidate({ id: "cand-b", title: "路由策略B", content: "prefer 权重收缩算法" }),
+      ],
+      [makeItem({ title: "模型选择", content: "不应该走 SmartRouter 评分，don't use 手写权重" })],
+    );
+    const disputedDecisions = out.filter((d) => d.action === "mark_disputed");
+    expect(disputedDecisions).toHaveLength(2);
+    expect(disputedDecisions.every((d) => d.targetId === "mem-1")).toBe(true);
+    const createDecisions = out.filter((d) => d.action === "create");
+    expect(createDecisions).toHaveLength(2);
+    expect(createDecisions.every((d) => d.newItem?.supersedesId === "mem-1")).toBe(true);
   });
 });

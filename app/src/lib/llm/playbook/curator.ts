@@ -135,8 +135,13 @@ export function curateCandidates(
       });
       decisions.push({
         action: "create",
-        newItem: candToItem(cand),
-        reason: `新增 candidate，替代 contradicted 的老条目`,
+        // 2026-07-17 复检 HIGH 修复：supersedesId 携带"这条新 candidate 是跟谁矛盾"的关联，
+        // 让 PlaybookPanel 能把 disputed 老条目和新 candidate 配对展示、联动裁决——
+        // 否则两边各自独立确认，可能被用户分别点成"都保留"，两条互相矛盾的事实同时 active。
+        // 注意：这里只是携带关联引用，不代表真的 supersede（老条目状态由 mark_disputed 决定，
+        // 不受这个字段影响；execute 时也不能走 markSuperseded，见 pipeline.ts create 分支）。
+        newItem: { ...candToItem(cand), supersedesId: contradicted.id },
+        reason: `新增 candidate，与 disputed 老条目（id=${contradicted.id}）配对，等用户联动裁决`,
         requiresConfirm: true,
       });
       continue;

@@ -12,8 +12,11 @@
 //   由 PlaybookPanel 确认 UI 转正 markActive / 拒绝 markArchived）
 // - supersede → create 新条目 + markSuperseded 老条目（curator 判定 requiresConfirm=false 才给；
 //   sourceKind='manual' 手建条目在 curator 层豁免）
-// - mark_disputed → markDisputed 老条目（退出 prompt 进入待裁决区，PlaybookPanel 裁决
-//   保留 markActive / 归档 markArchived——"冲突条目不会同时作为确定事实注入"的设计不变量）
+// - mark_disputed → markDisputed 老条目（退出 prompt 进入待裁决区）+ 伴生 create 的新
+//   candidate 携带 supersedesId 指回老条目 id（关联引用，非真 supersede）——PlaybookPanel
+//   靠这个字段把两者配对展示、互斥裁决：任一方点"保留/转正"，另一方自动 markArchived，
+//   绝不允许两条矛盾事实同时 active（2026-07-17 复检 HIGH：原来两边各自独立确认毫无关联，
+//   用户可能都点保留）
 // - mark_archived → markArchived（来自 harmful 反馈路径，降权不删，row + supersede 链保留）
 // - 重复消费防护：Curator 的 exact-title skip 幂等挡重，查重索引含 active+candidate
 //   （candidate 不可见会导致每轮重复落新行无限膨胀——2026-07-17 复检 HIGH，勿回退）
@@ -103,6 +106,9 @@ export async function applyCuratorDecisions(
         sourceRef: d.newItem.sourceRef,
         confidence: d.newItem.confidence,
         status,
+        // disputed 配对 candidate 会带 supersedesId（关联引用，非真 supersede，见 curator.ts
+        // mark_disputed 分支注释）；此处必须转发，否则 PlaybookPanel 无法联动裁决（2026-07-17 HIGH）。
+        supersedesId: d.newItem.supersedesId,
         evidenceRefsJson: d.newItem.evidenceRefsJson,
       });
       if (status === "candidate") stats.candidates += 1;

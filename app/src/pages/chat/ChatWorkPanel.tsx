@@ -62,6 +62,8 @@ interface ChatWorkPanelProps {
   playbookMemories?: import("@/lib/db/memory").ProjectMemory[];
   /** 阶段5 Playbook：当前项目 id（候选转正/冲突裁决区数据源） */
   playbookProjectId?: string | null;
+  /** 阶段5 Playbook：pipeline 后台跑完的计数信号（变化时 PlaybookPanel refetch 候选/裁决列表） */
+  playbookRefreshTick?: number;
 }
 
 export function ChatWorkPanel({
@@ -88,6 +90,7 @@ export function ChatWorkPanel({
   messages,
   playbookMemories = [],
   playbookProjectId = null,
+  playbookRefreshTick = 0,
 }: ChatWorkPanelProps) {
   const { t } = useTranslation();
   const [developerDiagnosticsEnabled] = useDeveloperDiagnosticsSetting();
@@ -210,7 +213,11 @@ export function ChatWorkPanel({
               支持取消和重试。没有 job 时组件自身不渲染，保持面板轻量。 */}
           <AgentJobPanel workflowRunId={workflowSnapshot?.runId ?? null} />
           {/* 阶段5 Playbook：候选转正/冲突裁决 + 本轮注入赞踩（全空不渲染） */}
-          <PlaybookPanel memories={playbookMemories} projectId={playbookProjectId} />
+          <PlaybookPanel
+            memories={playbookMemories}
+            projectId={playbookProjectId}
+            refreshTick={playbookRefreshTick}
+          />
           {developerDiagnosticsEnabled && (
             <>
               <WorkflowDiagnostics workflowEvents={workflowEvents} workflowSnapshot={workflowSnapshot} toolCalls={toolCalls} messages={messages} />
