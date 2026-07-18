@@ -78,11 +78,6 @@ export interface UseChatStreamOptions {
   workspacePath: string | null;
   setWorkspacePath: Dispatch<SetStateAction<string | null>>;
   permissionMode: "read" | "confirm" | "auto";
-  /**
-   * 检测到写意图但权限只读时，主动弹窗问用户要不要切到「确认后修改」——不传则退化成
-   * 只插一条文字提示（旧行为）。同一个会话只弹一次，见 handleSend 内 escalationPromptedRef。
-   */
-  escalatePermission?: () => Promise<boolean>;
   setPanelOpen: Dispatch<SetStateAction<boolean>>;
   // isStreaming 提到 ChatPage 顶层共享（hook C + hook E 都需要）
   isStreaming: boolean;
@@ -124,7 +119,6 @@ export function useChatStream(opts: UseChatStreamOptions) {
     workspacePath,
     setWorkspacePath,
     permissionMode,
-    escalatePermission,
     setPanelOpen,
     isStreaming,
     setIsStreaming,
@@ -165,8 +159,6 @@ export function useChatStream(opts: UseChatStreamOptions) {
   const [debateParticipants, setDebateParticipants] = useState<{ modelId: string; modelName: string }[] | null>(null);
   const [lastUsage, setLastUsage] = useState<ChatUsage | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  /** 写权限升级弹窗只在同一个会话里问一次——记已经问过（不管用户同意与否）的会话 id */
-  const escalationPromptedRef = useRef<Set<string>>(new Set());
 
   useStreamingTimer({ isStreaming, setStreamElapsedMs });
   useAutoScrollOnMessages({ messages, scrollRef, stickToBottomRef });
@@ -483,15 +475,15 @@ export function useChatStream(opts: UseChatStreamOptions) {
       let skillPreamble: string | null = null;
       let projectMemoryPreamble: string | null = null;
       let crossProjectPreamble: string | null = null;
-      const { effectivePermissionMode } = await resolveWriteGuardRuntime({
+      // 2026-07-18 写权限双层重构：权限档不再被"检测到写意图"临时升级——resolveWriteGuardRuntime
+      // 现在只做提示，不改权限档位本身，effectivePermissionMode 恒等于入参 permissionMode，
+      // 后面直接用 permissionMode 即可，不再需要从返回值里取。
+      await resolveWriteGuardRuntime({
         text,
         decision: cacheIntent,
         workspacePath: effectiveWorkspace,
         permissionMode,
-        conversationId: convId,
         assistantId,
-        promptedConversationIds: escalationPromptedRef.current,
-        escalatePermission,
         labels: {
           noWorkspace: t("chat.writeGuardNotice.noWorkspace"),
           readOnly: t("chat.writeGuardNotice.readOnly"),
@@ -525,14 +517,14 @@ export function useChatStream(opts: UseChatStreamOptions) {
         activeSkills: activeSkillDefs,
       });
 
-      const includeWriteTools = shouldExposeWriteTools(effectivePermissionMode);
+      const includeWriteTools = shouldExposeWriteTools(permissionMode);
       const workspaceRuntime = await prepareChatWorkspaceRuntime({
         workspacePath: effectiveWorkspace,
         primaryIsCli,
         includeWriteTools,
         conversationId: convId,
         assistantId,
-        permissionMode: effectivePermissionMode,
+        permissionMode,
         requestConfirm,
         requestAskUser,
         stopIfAborted,

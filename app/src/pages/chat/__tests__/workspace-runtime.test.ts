@@ -120,4 +120,54 @@ describe("prepareChatWorkspaceRuntime", () => {
 
     expect(result.aborted).toBe(true);
   });
+
+  // 写权限双层重构（2026-07-18）：confirm 是新默认档——有写工具，但写盘前必须走真实确认
+  // （不能像 auto 档那样自动放行）。这里验证传给 prepareWorkspaceToolRuntime 的 confirm
+  // 回调在 confirm 档位下就是调用方传入的 requestConfirm 本身（真人弹窗），不是自动 true。
+  it("confirm 档位（新默认）：有写工具，且写盘确认回调是真实 requestConfirm，不自动放行", async () => {
+    const requestConfirm = vi.fn(async () => true);
+
+    await prepareChatWorkspaceRuntime({
+      workspacePath: "/tmp/project",
+      primaryIsCli: false,
+      includeWriteTools: true,
+      conversationId: "conv-1",
+      assistantId: "assistant-1",
+      permissionMode: "confirm",
+      requestConfirm,
+      requestAskUser: vi.fn(),
+      getDesktopPath: async () => null,
+      stopIfAborted: () => false,
+    });
+
+    const passedArgs = mocks.prepareWorkspaceToolRuntime.mock.calls[0][0];
+    expect(passedArgs.includeWrite).toBe(true);
+    // confirm 档位：确认回调必须是调用方传入的 requestConfirm 本身，不是自动放行的 stub
+    expect(passedArgs.confirm).toBe(requestConfirm);
+    await passedArgs.confirm({ toolName: "write", summary: "写入 foo.ts" });
+    expect(requestConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto 档位：有写工具，写盘确认自动放行，不调用 requestConfirm", async () => {
+    const requestConfirm = vi.fn(async () => true);
+
+    await prepareChatWorkspaceRuntime({
+      workspacePath: "/tmp/project",
+      primaryIsCli: false,
+      includeWriteTools: true,
+      conversationId: "conv-1",
+      assistantId: "assistant-1",
+      permissionMode: "auto",
+      requestConfirm,
+      requestAskUser: vi.fn(),
+      getDesktopPath: async () => null,
+      stopIfAborted: () => false,
+    });
+
+    const passedArgs = mocks.prepareWorkspaceToolRuntime.mock.calls[0][0];
+    expect(passedArgs.confirm).not.toBe(requestConfirm);
+    const approved = await passedArgs.confirm({ toolName: "write", summary: "写入 foo.ts" });
+    expect(approved).toBe(true);
+    expect(requestConfirm).not.toHaveBeenCalled();
+  });
 });
