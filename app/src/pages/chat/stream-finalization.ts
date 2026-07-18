@@ -1,4 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
+import type { ModelMessage } from "ai";
 import { toolExecutions, workflowRuns } from "@/lib/db";
 import { writeCache } from "@/lib/llm/semantic-cache";
 import type { StreamUsage } from "@/lib/llm/chat-fallback";
@@ -20,6 +21,8 @@ interface StreamingFinalizationResult {
   lastToolCallCount: number;
   /** Harness 工程实施计划阶段1：本轮最终 Harness 判定，供节点验收门控消费。 */
   harnessDirty: boolean;
+  /** 结构化工具历史：本轮真实产出的结构化 ModelMessage，落库到 messages.parts 供下一轮回放。 */
+  responseMessages?: ModelMessage[];
 }
 
 type PersistAssistant = (
@@ -28,6 +31,8 @@ type PersistAssistant = (
   usage?: { inputTokens: number; outputTokens: number },
   kind?: ChatMessage["kind"],
   toolCallCount?: number | null,
+  /** 结构化 ModelMessage 部件的 JSON 串（回放真相源）；null/不传 = 纯文本轮，回放退化回 content */
+  parts?: string | null,
 ) => void;
 
 export interface FinalizeStreamedChatTurnArgs {
@@ -38,6 +43,13 @@ export interface FinalizeStreamedChatTurnArgs {
   conversationId: string | null;
   /** 阶段5 Playbook：事件写入/消费管道需要（null = 无项目绑定，跳过 playbook） */
   projectId: string | null;
+  /**
+   * 阶段5 Playbook：runPlaybookPipeline 后台跑完后的通知回调（无论成功/失败都调，成功/失败
+   * 都可能改变 candidate/disputed 列表，UI 侧收到后 refetch）。不传 = 不通知（测试/无 UI 场景）。
+   * 2026-07-17 复检 MEDIUM 修复：原来 UI 只在"下一轮对话开始"时才 refetch，本轮 pipeline
+   * 产生的候选要等用户发下一条消息才看得到；现在 pipeline 一跑完就主动通知。
+   */
+  onPlaybookMemoryChange?: () => void;
   cacheEligible: boolean;
   taskRole: string;
   shouldCompleteWorkflowNode: boolean;
@@ -264,10 +276,16 @@ async function runWorkflowVerificationInBackground(
               payload: { interventionKind: mapped.interventionKind ?? "awaiting_user" },
             });
           }
+          // .catch 兜底：runPlaybookPipeline 真实现内部已自己 try/catch 永不 reject，
+          // 但这里是 fire-and-forget（void，无 caller 会 await/catch），万一未来实现改了
+          // 契约或测试里 mock 直接 reject，没有这层兜底会变成 unhandled rejection。
+          // .finally 必须在 .catch 之后：保证不管成败，onPlaybookMemoryChange 都会被调用一次。
           void runPlaybookPipeline({
             projectId: args.projectId,
             conversationId: args.conversationId,
-          });
+          })
+            .catch(() => null)
+            .finally(() => args.onPlaybookMemoryChange?.());
         }
       }
   } catch {
@@ -286,12 +304,19 @@ export async function finalizeStreamedChatTurn(
         : message,
     ),
   );
+  // 结构化工具历史：只有本轮真调过工具（toolCallCount>0）才存 parts——纯问答轮存了也没意义、
+  // 徒增 DB。存的是 AI SDK 给的真实 assistant(tool-call)/tool(result)/文字消息序列，下一轮原样回放。
+  const structuredParts =
+    args.streamingResult.lastToolCallCount > 0 && args.streamingResult.responseMessages?.length
+      ? JSON.stringify(args.streamingResult.responseMessages)
+      : null;
   args.persistAssistant(
     finalContent,
     args.streamingResult.lastModelId,
     args.streamingResult.lastUsage,
     undefined,
     args.streamingResult.lastToolCallCount,
+    structuredParts,
   );
 
   // fire-and-forget：不 await，回复文字显示完、消息落库后就能让调用方把 isStreaming

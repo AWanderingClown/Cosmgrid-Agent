@@ -24,6 +24,8 @@ export interface PreparedTurnPersistence {
     usage?: { inputTokens: number; outputTokens: number },
     kind?: ChatMessage["kind"],
     toolCallCount?: number | null,
+    /** 结构化 ModelMessage 部件的 JSON 串（回放真相源）；null/不传 = 纯文本轮 */
+    parts?: string | null,
   ) => void;
 }
 
@@ -100,7 +102,7 @@ function buildResult(
     conversationId,
     userId,
     aborted,
-    persistAssistant: (content, modelId, usage, kind, toolCallCount) => {
+    persistAssistant: (content, modelId, usage, kind, toolCallCount, parts) => {
       if (!conversationId || !content) return;
       void messages
         .create({
@@ -112,6 +114,7 @@ function buildResult(
           outputTokens: usage?.outputTokens ?? 0,
           kind: kind && kind !== "chat" ? kind : null,
           toolCallCount: toolCallCount ?? null,
+          parts: parts ?? null,
         })
         .catch((error) => {
           console.error(

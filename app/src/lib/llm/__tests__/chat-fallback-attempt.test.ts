@@ -169,6 +169,33 @@ describe("splitSystemFromMessages（system 消息打包契约）", () => {
     ]);
     expect(system).toBe("图片守卫规则");
   });
+
+  it("结构化工具历史：assistant 带 parts → 展开成真实 ModelMessage 序列回放（不是 content 散文压平）", () => {
+    const parts = [
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: "c1", toolName: "read", input: { file_path: "a.md" } }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId: "c1", toolName: "read", output: { type: "text", value: "苹果" } }] },
+      { role: "assistant", content: [{ type: "text", text: "读完了" }] },
+    ];
+    const { rest } = splitSystemFromMessages([
+      { role: "user", content: "读 a.md" },
+      { role: "assistant", content: "读完了", parts: parts as never },
+      { role: "user", content: "再读 b.md" },
+    ]);
+    // 一条带 parts 的 assistant 轮展开成 3 条结构化消息，散文 content "读完了" 不作为单条回放
+    expect(rest.map((m) => (m as { role: string }).role)).toEqual([
+      "user", "assistant", "tool", "assistant", "user",
+    ]);
+    // 展开的是结构化 tool-call，不是散文
+    const toolCallMsg = rest[1] as { content: Array<{ type: string }> };
+    expect(toolCallMsg.content[0]?.type).toBe("tool-call");
+  });
+
+  it("结构化工具历史：assistant 无 parts → 退化回 {role, content} 文本（老消息兼容）", () => {
+    const { rest } = splitSystemFromMessages([
+      { role: "assistant", content: "纯文本回答" },
+    ]);
+    expect(rest).toEqual([{ role: "assistant", content: "纯文本回答" }]);
+  });
 });
 
 // 接线断言：runModelAttempt 的 API 路径必须把 system 走 streamText 的 system 参数，

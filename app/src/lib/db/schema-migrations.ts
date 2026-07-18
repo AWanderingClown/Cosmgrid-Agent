@@ -652,4 +652,16 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       );
     },
   },
+  {
+    version: "202607190001-message-structured-parts",
+    description:
+      "结构化工具历史（真根因修复）：给 messages 加 parts(JSON) 列，存本轮真实的结构化 " +
+      "ModelMessage 部件（text / tool-call / tool-result）。content 仍留给 UI 显示。" +
+      "病根：历史被压平成散文回放，MiniMax/GLM 等弱模型看不到「上一轮用了工具」，就照散文 " +
+      "编造结果（对照实验 A/C 结构化→原生调用；D/E/F 散文→编造，连 tool_choice:required 都拉不回）。" +
+      "向后兼容：老消息 parts 为 NULL，重建历史时退化回文本路径，行为不变。",
+    up: async (db) => {
+      await addColumnIfMissing(db, "messages", "parts", "TEXT");
+    },
+  },
 ];

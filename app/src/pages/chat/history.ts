@@ -67,6 +67,7 @@ export function dbMessagesToChat(hist: DbMessage[], models: ModelListItem[]): Ch
       chainStep: m.chainStepIndex && m.chainStepTotal ? { index: m.chainStepIndex, total: m.chainStepTotal } : undefined,
       chainDone: m.chainDone ?? undefined,
       toolCallCount: m.toolCallCount ?? undefined,
+      parts: m.parts ?? undefined,
     });
   }
   return out;

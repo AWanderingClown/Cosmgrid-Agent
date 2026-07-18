@@ -19,6 +19,8 @@ export interface MessageRow {
   chain_done: number | null;
   kind: string | null;
   tool_call_count: number | null;
+  /** 结构化 ModelMessage 部件（text/tool-call/tool-result）的 JSON 串；null = 旧数据/纯文本轮 */
+  parts: string | null;
   created_at: string;
 }
 
@@ -39,6 +41,8 @@ export interface DbMessage {
   kind?: string | null;
   /** 本轮真实工具调用次数；null = 未记录（旧数据/不适用），非工具场景不应据此判断 */
   toolCallCount?: number | null;
+  /** 结构化 ModelMessage 部件的 JSON 串（回放用真相源）；null = 旧数据/纯文本轮，回放退化回 content 文本 */
+  parts?: string | null;
   createdAt: string;
 }
 
@@ -59,6 +63,7 @@ function mapMessageRow(r: MessageRow): DbMessage {
     chainDone: r.chain_done === null ? null : r.chain_done === 1,
     kind: r.kind,
     toolCallCount: r.tool_call_count,
+    parts: r.parts,
     createdAt: r.created_at,
   };
 }
@@ -88,6 +93,8 @@ export const messages = {
     chainDone?: boolean | null;
     kind?: string | null;
     toolCallCount?: number | null;
+    /** 结构化 ModelMessage 部件的 JSON 串（回放真相源）；不传/null = 纯文本轮 */
+    parts?: string | null;
   }): Promise<DbMessage> {
     const db = await getDb();
     const id = newId();
@@ -95,8 +102,8 @@ export const messages = {
     await db.execute(
       `INSERT INTO messages
         (id, conversation_id, role, content, model_id, input_tokens, output_tokens, cost, attachments,
-         actor_role, chain_step_index, chain_step_total, chain_done, kind, tool_call_count, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+         actor_role, chain_step_index, chain_step_total, chain_done, kind, tool_call_count, parts, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
       [
         id,
         input.conversationId,
@@ -113,6 +120,7 @@ export const messages = {
         input.chainDone === undefined || input.chainDone === null ? null : boolToInt(input.chainDone),
         input.kind ?? null,
         input.toolCallCount ?? null,
+        input.parts ?? null,
         ts,
       ]
     );

@@ -39,6 +39,7 @@ import { hydrateUserTierBaseline } from "@/lib/policy/user-tier-baseline";
 import { hydrateDebateMarkers } from "@/lib/policy/debate-markers";
 import { isNormalFinishReason, isRecoverableTruncation, isToolStepTruncation } from "./finish-reason";
 import { hasEffectiveOutput } from "./response-completeness";
+import type { ModelMessage } from "ai";
 import type { StepToolCall } from "./harness/doom-loop";
 import type { ChatMsg } from "./context-compressor";
 import {
@@ -216,6 +217,9 @@ export async function streamWithFallback(
     toolCallCount: 0,
   };
   let aggregateToolCalls: StepToolCall[] = [];
+  // 结构化工具历史真相源：整条链（含所有续接批次）累积的真实 ModelMessage，成功时一次交给
+  // caller 落库到 messages.parts。切模型时跟 aggregateToolCalls 一起清零（新模型从头累积）。
+  let aggregateResponseMessages: ModelMessage[] = [];
   // 整条链（含所有续接批次）的起始时间，用于工具步数截断的总耗时红线。
   const chainStartedAt = Date.now();
 
@@ -246,6 +250,7 @@ export async function streamWithFallback(
           (aggregateUsage.cacheWriteInputTokens ?? 0) + (attempt.streamUsage.cacheWriteInputTokens ?? 0);
         aggregateUsage.toolCallCount += attempt.streamUsage.toolCallCount;
         aggregateToolCalls.push(...attempt.toolCalls);
+        if (attempt.responseMessages) aggregateResponseMessages.push(...attempt.responseMessages);
 
         if (attempt.wasAborted) {
           callbacks.onInvocationAudit?.(buildLlmInvocationAuditEvent({
@@ -348,6 +353,7 @@ export async function streamWithFallback(
             toolCallCount: 0,
           };
           aggregateToolCalls = [];
+          aggregateResponseMessages = [];
           usedIndex++;
           break;
         }
@@ -375,6 +381,7 @@ export async function streamWithFallback(
             toolCallCount: 0,
           };
           aggregateToolCalls = [];
+          aggregateResponseMessages = [];
           usedIndex++;
           break;
         }
@@ -390,6 +397,7 @@ export async function streamWithFallback(
         callbacks.onFinalToolCalls?.(
           aggregateToolCalls.map((tc) => ({ toolName: tc.toolName, input: tc.input })),
         );
+        callbacks.onResponseMessages?.(aggregateResponseMessages);
         recordFinalUsage({
           target,
           usage: aggregateUsage,
@@ -446,6 +454,7 @@ export async function streamWithFallback(
           toolCallCount: 0,
         };
         aggregateToolCalls = [];
+        aggregateResponseMessages = [];
         usedIndex++;
         break;
       }

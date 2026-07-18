@@ -123,6 +123,8 @@ describe("initSchema", () => {
       "202607170001-agent-jobs",
       "202607180001-harness-candidates",
       "202607180002-harness-version-single-active",
+      // 结构化工具历史（2026-07-17 真根因修复）：messages.parts(JSON) 列
+      "202607190001-message-structured-parts",
     ]);
 
     const usageColumns = await adapter.select<Array<{ name: string }>>("PRAGMA table_info(usage_events)");
@@ -1437,6 +1439,63 @@ describe("projectMemories", () => {
     expect(result.hits.length).toBeGreaterThanOrEqual(1);
     expect(result.preamble).toContain("其他项目");
     expect(result.preamble).toContain("legacy-chat");
+  });
+
+  // 阶段5 Playbook Curator 确认 UI（2026-07-17）：candidate 转正 / disputed 裁决全生命周期
+  it("Curator 全生命周期：create(candidate) → listByProjectAndStatus 可见 → markActive 转正 → 从 candidate 列表消失", async () => {
+    const proj = await db.projects.create({ name: "curator-lifecycle" });
+    const created = await db.projectMemories.create({
+      projectId: proj.id,
+      kind: "lesson",
+      title: "不要重复：改 db.execute",
+      content: "会顶掉测试 mock。",
+      importance: 80,
+      status: "candidate",
+      sourceKind: "checkpoint",
+      confidence: 0.9,
+    });
+    expect(created.status).toBe("candidate");
+
+    const candidates = await db.projectMemories.listByProjectAndStatus(proj.id, "candidate");
+    expect(candidates.map((m) => m.id)).toContain(created.id);
+    const disputedBefore = await db.projectMemories.listByProjectAndStatus(proj.id, "disputed");
+    expect(disputedBefore).toHaveLength(0);
+
+    await db.projectMemories.markActive(created.id);
+    const afterApprove = await db.projectMemories.getById(created.id);
+    expect(afterApprove!.status).toBe("active");
+    const candidatesAfter = await db.projectMemories.listByProjectAndStatus(proj.id, "candidate");
+    expect(candidatesAfter.map((m) => m.id)).not.toContain(created.id);
+    // 转正后应该出现在 listActiveByProject（context-assembler 的检索源）
+    const activeList = await db.projectMemories.listActiveByProject(proj.id);
+    expect(activeList.map((m) => m.id)).toContain(created.id);
+  });
+
+  it("Curator 冲突裁决：markDisputed 退出 active → listByProjectAndStatus('disputed') 可见 → markArchived 归档", async () => {
+    const proj = await db.projects.create({ name: "curator-dispute" });
+    const item = await db.projectMemories.create({
+      projectId: proj.id,
+      kind: "context",
+      title: "路由策略",
+      content: "应该走 SmartRouter 评分",
+      importance: 60,
+      status: "active",
+    });
+
+    await db.projectMemories.markDisputed(item.id);
+    const afterDisputed = await db.projectMemories.getById(item.id);
+    expect(afterDisputed!.status).toBe("disputed");
+    // disputed 退出 active 池，不再被检索注入 prompt
+    const activeList = await db.projectMemories.listActiveByProject(proj.id);
+    expect(activeList.map((m) => m.id)).not.toContain(item.id);
+    const disputedList = await db.projectMemories.listByProjectAndStatus(proj.id, "disputed");
+    expect(disputedList.map((m) => m.id)).toContain(item.id);
+
+    await db.projectMemories.markArchived(item.id);
+    const afterArchived = await db.projectMemories.getById(item.id);
+    expect(afterArchived!.status).toBe("archived");
+    const disputedAfter = await db.projectMemories.listByProjectAndStatus(proj.id, "disputed");
+    expect(disputedAfter.map((m) => m.id)).not.toContain(item.id);
   });
 });
 

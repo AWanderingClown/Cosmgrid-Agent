@@ -118,9 +118,80 @@ describe("finalizeStreamedChatTurn", () => {
       { inputTokens: 1, outputTokens: 2, toolCallCount: 1 },
       undefined,
       1,
+      // 结构化工具历史：本例 streamingResult 未带 responseMessages → parts 传 null（退化文本回放）
+      null,
     );
     expect(mocks.writeCache).toHaveBeenCalledWith("hello", "final answer", "model-result", "standard");
     expect(setMessages.mock.results[0]?.value[0]).toMatchObject({ toolCallCount: 1 });
+  });
+
+  it("结构化工具历史：toolCallCount>0 且带 responseMessages → persistAssistant 收到 JSON 化的 parts", async () => {
+    const setMessages = vi.fn((updater) => updater([{ id: "a-1", role: "assistant", content: "" } as ChatMessage]));
+    const persistAssistant = vi.fn();
+    const responseMessages = [
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: "c1", toolName: "read", input: { file_path: "a.md" } }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId: "c1", toolName: "read", output: { type: "text", value: "内容" } }] },
+      { role: "assistant", content: [{ type: "text", text: "读完了" }] },
+    ];
+
+    await finalizeStreamedChatTurn({
+      text: "读 a.md",
+      assistantMessage: { id: "a-1", role: "assistant", content: "" },
+      assistantId: "a-1",
+      streamingResult: {
+        fullContent: "读完了",
+        lastModelId: "model-1",
+        lastToolCallCount: 1,
+        harnessDirty: false,
+        responseMessages: responseMessages as never,
+      },
+      conversationId: "conv-1",
+      projectId: null,
+      cacheEligible: false,
+      taskRole: "standard",
+      shouldCompleteWorkflowNode: false,
+      workflowSnapshot: null,
+      workflowRunId: null,
+      controllerAborted: false,
+      persistAssistant,
+      setMessages,
+      applyWorkflowSnapshot: vi.fn(),
+    });
+
+    const partsArg = persistAssistant.mock.calls[0]?.[5];
+    expect(typeof partsArg).toBe("string");
+    expect(JSON.parse(partsArg)).toEqual(responseMessages);
+  });
+
+  it("结构化工具历史：toolCallCount=0（纯问答轮）→ parts 传 null，不落结构", async () => {
+    const setMessages = vi.fn((updater) => updater([{ id: "a-2", role: "assistant", content: "" } as ChatMessage]));
+    const persistAssistant = vi.fn();
+
+    await finalizeStreamedChatTurn({
+      text: "你好",
+      assistantMessage: { id: "a-2", role: "assistant", content: "" },
+      assistantId: "a-2",
+      streamingResult: {
+        fullContent: "你好呀",
+        lastModelId: "model-1",
+        lastToolCallCount: 0,
+        harnessDirty: false,
+        responseMessages: [{ role: "assistant", content: [{ type: "text", text: "你好呀" }] }] as never,
+      },
+      conversationId: "conv-1",
+      projectId: null,
+      cacheEligible: false,
+      taskRole: "standard",
+      shouldCompleteWorkflowNode: false,
+      workflowSnapshot: null,
+      workflowRunId: null,
+      controllerAborted: false,
+      persistAssistant,
+      setMessages,
+      applyWorkflowSnapshot: vi.fn(),
+    });
+
+    expect(persistAssistant.mock.calls[0]?.[5]).toBeNull();
   });
 
   it("verifyNodeOutcome 判定 passed（plan 阶段不要求工具证据）时才完成工作流节点", async () => {
@@ -698,6 +769,24 @@ describe("finalizeStreamedChatTurn", () => {
       await vi.waitFor(() => expect(mocks.failCurrentWorkflowNode).toHaveBeenCalled());
       expect(mocks.recordPlaybookEventSafe).not.toHaveBeenCalled();
       expect(mocks.runPlaybookPipeline).not.toHaveBeenCalled();
+    });
+
+    it("2026-07-17 复检 MEDIUM 修复：pipeline settle 后调 onPlaybookMemoryChange 通知 UI refetch（不用等下一轮对话）", async () => {
+      const onPlaybookMemoryChange = vi.fn();
+      mocks.runPlaybookPipeline.mockResolvedValue({ created: 1, candidates: 0, superseded: 0, disputed: 0, archived: 0, skipped: 0 });
+      await finalizeStreamedChatTurn(playbookArgs({ onPlaybookMemoryChange }));
+      await vi.waitFor(() => expect(onPlaybookMemoryChange).toHaveBeenCalled());
+    });
+
+    it("pipeline 失败也要调 onPlaybookMemoryChange（.finally 语义，不管成败都该有机会 refetch 纠正状态）", async () => {
+      const onPlaybookMemoryChange = vi.fn();
+      mocks.runPlaybookPipeline.mockRejectedValue(new Error("db locked"));
+      await finalizeStreamedChatTurn(playbookArgs({ onPlaybookMemoryChange }));
+      await vi.waitFor(() => expect(onPlaybookMemoryChange).toHaveBeenCalled());
+    });
+
+    it("不传 onPlaybookMemoryChange 不报错（可选回调，测试/无 UI 场景兼容）", async () => {
+      await expect(finalizeStreamedChatTurn(playbookArgs())).resolves.toBeDefined();
     });
   });
 });

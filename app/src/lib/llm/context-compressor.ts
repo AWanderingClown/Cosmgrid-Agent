@@ -12,12 +12,20 @@
 //
 // 两者共用 `splitByBudget` 定位 kept/dropped，避免预算逻辑漂移。
 
+import type { ModelMessage } from "ai";
 import type { UserContentPart } from "./attachments";
 import { DEFAULT_COMPRESSION_BUDGET } from "./model-limits";
 
 export interface ChatMsg {
   role: "user" | "assistant" | "system";
   content: string | UserContentPart[];
+  /**
+   * 结构化工具历史（2026-07-17）：这条 assistant 轮真实产出的 ModelMessage 序列
+   * （assistant tool-call / tool 结果 / 文字）。发送边界（splitSystemFromMessages）会把它
+   * 原样展开回放，而不是用 content 散文压平——弱模型才不会照散文编造。content 仍保留（UI 显示、
+   * token 估算、无 parts 时的回放兜底）。压缩按 ChatMsg 原子保留/丢弃，tool-call↔result 天然不拆散。
+   */
+  parts?: ModelMessage[];
 }
 
 /** 粗略 token 估算：CJK 约 1 token/字，拉丁约 1 token/4 字符。取折中 chars/3。

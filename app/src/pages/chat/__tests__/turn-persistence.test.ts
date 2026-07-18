@@ -119,6 +119,7 @@ describe("prepareTurnPersistence", () => {
       outputTokens: 7,
       kind: null,
       toolCallCount: 2,
+      parts: null,
     });
   });
 });

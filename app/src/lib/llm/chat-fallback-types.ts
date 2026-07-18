@@ -3,7 +3,7 @@
 // + 一个无副作用的构造函数，跟 streamWithFallback 主循环没有实现耦合，独立成文件不影响任何调用方
 // ——chat-fallback.ts 继续从这里 re-export，所有现有消费者的 import 路径和符号完全不变。
 
-import type { ToolSet } from "ai";
+import type { ModelMessage, ToolSet } from "ai";
 import type { LlmErrorCategory } from "./error-classifier";
 import type { CliAccessOptions } from "./cli-protocol";
 import type { ModelEndpoint, StreamUsage } from "./chat-fallback-contracts";
@@ -61,6 +61,12 @@ export interface StreamCallbacks {
    * 不传=noop，零侵入。Abort 中断时不调。
    */
   onFinalToolCalls?: (toolCalls: { toolName: string; input?: unknown }[]) => void;
+  /**
+   * 整段对话成功结束时，把本轮真实产出的结构化 ModelMessage（含所有续接批次累积的
+   * assistant tool-call / tool result / 文字消息）一次交给 caller，用于落库到 messages.parts。
+   * 不传=noop。Abort/失败中断时不调。CLI 路径产不出结构 → 传空数组（回放退化回文本）。
+   */
+  onResponseMessages?: (messages: ModelMessage[]) => void;
   /** L1 接入层审计事实：每次模型调用成功/失败/冷却/中断都以统一形态吐出。 */
   onInvocationAudit?: (event: LlmInvocationAuditEvent) => void;
 }

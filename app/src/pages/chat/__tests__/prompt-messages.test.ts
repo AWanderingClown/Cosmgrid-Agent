@@ -30,6 +30,42 @@ describe("buildChatPromptMessages", () => {
     expect(prompt.at(-1)).toEqual({ role: "assistant", content: "上一轮回答" });
   });
 
+  it("结构化工具历史：assistant 带合法 parts JSON → 解析并挂到 ChatMsg.parts（供发送边界展开）", () => {
+    const structured = [
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: "c1", toolName: "read", input: {} }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId: "c1", toolName: "read", output: { type: "text", value: "x" } }] },
+    ];
+    const prompt = buildChatPromptMessages({
+      messages: [
+        { id: "u1", role: "user", content: "读文件" },
+        { id: "a1", role: "assistant", content: "读完了", parts: JSON.stringify(structured) },
+      ],
+      effectiveWorkspace: "/repo",
+      primaryIsCli: false,
+      projectMemoryPreamble: null,
+      crossProjectPreamble: null,
+      workspacePreamble: null,
+      tooLargeNotice: (name) => `${name} 太大`,
+    });
+    const assistantMsg = prompt.at(-1) as { role: string; content: string; parts?: unknown[] };
+    expect(assistantMsg.role).toBe("assistant");
+    expect(assistantMsg.content).toBe("读完了"); // content 保留（token 估算/兜底）
+    expect(assistantMsg.parts).toEqual(structured); // 结构化 parts 已挂上
+  });
+
+  it("结构化工具历史：assistant 的 parts 是坏 JSON → 不挂 parts，退化回纯文本（不炸）", () => {
+    const prompt = buildChatPromptMessages({
+      messages: [{ id: "a1", role: "assistant", content: "回答", parts: "{坏JSON" }],
+      effectiveWorkspace: "/repo",
+      primaryIsCli: false,
+      projectMemoryPreamble: null,
+      crossProjectPreamble: null,
+      workspacePreamble: null,
+      tooLargeNotice: (name) => `${name} 太大`,
+    });
+    expect(prompt.at(-1)).toEqual({ role: "assistant", content: "回答" });
+  });
+
   it("adds workspace guards and omits no-tools guard when a workspace is bound", () => {
     const prompt = buildChatPromptMessages({
       messages: [{ id: "user-1", role: "user", content: "读一下项目" }],

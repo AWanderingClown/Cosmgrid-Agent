@@ -11,6 +11,7 @@ import { classifyLlmError } from "./error-classifier";
 import { isCliProviderType, type CliMessage } from "./cli-protocol";
 import { streamViaCli } from "./cli-engine";
 import { detectDoomLoop, type StepToolCall } from "./harness/doom-loop";
+import { sanitizePseudoToolHistory } from "./harness/sanitize-history";
 import { resolveMaxOutputTokens } from "./model-limits";
 import { isNormalFinishReason, isRecoverableTruncation } from "./finish-reason";
 import type { ChatMsg } from "./context-compressor";
@@ -26,6 +27,11 @@ export interface ModelAttemptResult {
   wasAborted: boolean;
   partialText: string;
   toolCalls: StepToolCall[];
+  /** 本轮真实产出的结构化 ModelMessage（assistant 的 tool-call 部件 + tool 角色的结果消息 + 最终文字）。
+   *  这是「结构化工具历史」修复的真相源：落库到 messages.parts，下一轮原样回放，弱模型就不会
+   *  因为看到「散文压平的历史」而照着编造（对照实验见 harness/sanitize-history.ts 头注释）。
+   *  CLI 路径为 undefined（claude/codex 自带协议，我们只拿到文字，无结构可存 → 回放退化回文本）。 */
+  responseMessages?: ModelMessage[];
   /** 本次调用实际跑了多少个 AI SDK step（含没有工具调用的纯文字 step）。CLI 路径恒为 0
    *  （不走 stepCountIs）。用于判断"是否把 maxToolSteps 步数预算耗尽"——注意 AI SDK 的
    *  stopWhen: stepCountIs(N) 只有边界那一步恰好还在调工具时，finishReason 才会报
@@ -56,7 +62,7 @@ export function splitSystemFromMessages(messages: ChatMsg[]): {
   rest: ModelMessage[];
 } {
   const systemTexts: string[] = [];
-  const rest: ChatMsg[] = [];
+  const rest: ModelMessage[] = [];
   for (const m of messages) {
     if (m.role === "system") {
       // system 的 content 正常是纯字符串；防御性处理数组型 content（跟 CLI 路径同款折叠）。
@@ -65,12 +71,16 @@ export function splitSystemFromMessages(messages: ChatMsg[]): {
           ? m.content
           : m.content.filter((p) => p.type === "text").map((p) => ("text" in p ? p.text : "")).join(""),
       );
+    } else if (m.role === "assistant" && m.parts && m.parts.length > 0) {
+      // 结构化工具历史：展开真实的 assistant(tool-call)/tool(result)/文字序列回放，
+      // 而不是把整轮压平成一条 content 散文——这是弱模型不再照散文编造的关键（探针 C 证明）。
+      rest.push(...m.parts);
     } else {
-      rest.push(m);
+      rest.push({ role: m.role, content: m.content } as ModelMessage);
     }
   }
   const system = systemTexts.length > 0 ? systemTexts.join("\n\n") : undefined;
-  return { system, rest: rest as unknown as ModelMessage[] };
+  return { system, rest };
 }
 
 /**
@@ -90,10 +100,18 @@ export async function runModelAttempt(
 ): Promise<ModelAttemptResult> {
   let partialText = "";
 
+  // 发送前最后一站：清洗历史 assistant 消息里的「文本假工具调用」（弱模型如 MiniMax-M3
+  // 会照抄历史里的假标签并开始编造，见 harness/sanitize-history.ts 的对照实验说明）。
+  // 只清发给模型的副本，UI 显示/存库/防幻觉判定都用外层原始 attemptMessages，不受影响。
+  // realToolNames 取本轮真实注册的工具名，把 <read>/<hashline_edit> 这种「真名被演成文本」
+  // 的情况也一起清掉。对干净历史是恒等（返回同一数组引用），Claude/GPT 等强模型零影响。
+  const realToolNames = options.tools ? Object.keys(options.tools) : [];
+  const sanitizedMessages = sanitizePseudoToolHistory(attemptMessages, realToolNames);
+
   if (isCliProviderType(target.providerType)) {
     // CLI 引擎路径：spawn 本机 claude/codex 吃订阅额度（baseUrl 复用为可执行文件路径）
     // CLI 不支持图片——带图消息的 chain 已在 ChatPage 过滤掉 CLI 端点；这里防御性把数组 content 折叠成纯文本
-    const cliMessages: CliMessage[] = attemptMessages.map((m) => ({
+    const cliMessages: CliMessage[] = sanitizedMessages.map((m) => ({
       role: m.role as "user" | "assistant" | "system",
       content:
         typeof m.content === "string"
@@ -256,7 +274,7 @@ export async function runModelAttempt(
     // 2026-07-16 工程化根因修复：把多条 system 消息从 messages 数组抽出、合并成标准的
     // system 参数（见 splitSystemFromMessages 注释）。修复 MiniMax-M3 等模型收到 system×N
     // 畸形序列时退化吐 <|user_mask|> 特殊 token、连工具都调不了的问题。
-    const { system, rest } = splitSystemFromMessages(attemptMessages);
+    const { system, rest } = splitSystemFromMessages(sanitizedMessages);
     const result = streamText({
       model: lm,
       ...(system ? { system } : {}),
@@ -327,11 +345,22 @@ export async function runModelAttempt(
 
     const usage = await result.usage;
     const finishReason = (await result.finishReason) ?? "stop";
+    // 结构化工具历史真相源：AI SDK 把本轮 agentic 循环里所有真实的 assistant(tool-call) /
+    // tool(result) / assistant(text) 消息按序放在 response.messages（同一份喂回下一轮就是 API
+    // 认的标准结构）。落库到 messages.parts 供下一轮结构化回放。
+    // 防御式：这是增强项，取不到（provider/SDK 未暴露 response）就退化回文本回放，绝不炸本轮回答。
+    let responseMessages: ModelMessage[] = [];
+    try {
+      responseMessages = ((await result.response)?.messages ?? []) as ModelMessage[];
+    } catch {
+      responseMessages = [];
+    }
     return {
       finishReason,
       wasAborted: localAbort.signal.aborted || (options.signal?.aborted ?? false),
       partialText,
       toolCalls: stepToolCalls,
+      responseMessages,
       stepCount,
       streamUsage: {
         inputTokens: usage?.inputTokens ?? 0,

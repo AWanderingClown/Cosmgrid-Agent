@@ -1,4 +1,5 @@
 import type { TFunction } from "i18next";
+import type { ModelMessage } from "ai";
 import type { StreamCallbacks, StreamUsage } from "@/lib/llm/chat-fallback";
 import type { LlmInvocationAuditEvent } from "@/lib/llm/invocation-audit";
 import type { ChatMessage } from "./types";
@@ -11,6 +12,9 @@ export interface StreamingTurnState {
   lastResolvedModelLabel?: string;
   lastToolCallCount: number;
   lastFinishReason: string;
+  /** 本轮真实产出的结构化 ModelMessage（tool-call/tool-result/文字），落库到 messages.parts
+   *  供下一轮结构化回放。undefined = CLI 路径或纯文本轮（回放退化回文本）。 */
+  responseMessages?: ModelMessage[];
   invocationAudits: LlmInvocationAuditEvent[];
   /** Harness 工程实施计划阶段1：本轮最终（重试耗尽后）Harness 是否仍判定编造，
    *  供 stream-finalization.ts 的节点验收门控消费。纯聊天模式（pureMode）恒为 false。 */
@@ -117,6 +121,12 @@ export function createStreamingTurnCallbacks(args: {
             : m,
         ),
       );
+    },
+    // 结构化工具历史：把本轮真实产出的结构化 ModelMessage 收进 state，finalize 时落库到
+    // messages.parts。abort 后不覆盖（跟其余回调一致，避免把上一轮结果写进已切走的会话）。
+    onResponseMessages: (responseMessages) => {
+      if (args.controller.signal.aborted) return;
+      args.state.responseMessages = responseMessages;
     },
   };
 }

@@ -45,6 +45,9 @@ export interface ChatMessage {
   chainDone?: boolean;
   /** 本轮真实工具调用次数；undefined = 未记录，不能据此判断 */
   toolCallCount?: number | null;
+  /** 结构化工具历史：本轮真实产出的 ModelMessage 部件（tool-call/tool-result/文字）的 JSON 串。
+   *  重建 prompt 时解析出来结构化回放，弱模型才不会因散文压平的历史而编造。null/undefined = 纯文本轮。 */
+  parts?: string | null;
 }
 
 export type PendingSend = { text: string; attachments?: Attachment[] };
